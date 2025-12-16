@@ -1,0 +1,32 @@
+FROM ros2
+
+ENV ROS_DISTRO=rolling
+
+# Install ur-client-library 
+RUN apt update
+RUN apt install git python3-colcon-common-extensions python3-vcstool -y
+RUN apt install ros-$ROS_DISTRO-ur-client-library
+RUN apt install python3-rosdep -y
+RUN rosdep init && rosdep update
+
+# Build UR ROS2 Driver from source
+WORKDIR /home/ros2_ws
+# NOTE: main branch used for ROS2 Rolling
+RUN git clone -b main https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git src/Universal_Robots_ROS2_Driver
+RUN vcs import src --skip-existing --input src/Universal_Robots_ROS2_Driver/Universal_Robots_ROS2_Driver.${ROS_DISTRO}.repos
+RUN rosdep install --ignore-src --from-paths src -y
+RUN apt update && apt install -y ros-$ROS_DISTRO-ros-base ros-$ROS_DISTRO-action-msgs ros-$ROS_DISTRO-std-msgs ros-$ROS_DISTRO-geometry-msgs ros-$ROS_DISTRO-sensor-msgs
+# Install GCC-12 and G++-12
+RUN apt update && apt install -y gcc-12 g++-12
+
+# Set GCC-12 and G++-12 as default
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12 --slave /usr/bin/g++ g++ /usr/bin/g++-12 && update-alternatives --config gcc
+
+
+RUN  /bin/bash -c 'export MAKEFLAGS=-j1; source /opt/ros/rolling/setup.bash; colcon build --parallel-workers 1 --cmake-args -DCMAKE_BUILD_TYPE=Release'
+
+
+
+SHELL ["/bin/bash", "-c"]
+WORKDIR /home/ros2_ws
+CMD ["bash"]
