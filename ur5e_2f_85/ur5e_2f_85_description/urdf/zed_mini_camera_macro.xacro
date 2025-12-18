@@ -1,0 +1,99 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro">
+
+  <xacro:macro name="camera_gripper_attach" params="parent prefix">
+
+    <joint name="${prefix}camera_attach_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child link="${prefix}base_link_camera"/>
+      <origin xyz="0.0 0.0 0.005" rpy="0 0 3.18"/>
+    </joint>
+
+    <material name="silver_camera">
+      <color rgba="0.7 0.7 0.7 1.0"/>
+    </material>
+
+    <link name="${prefix}base_link_camera">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/base_link.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver_camera"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/base_link.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="${prefix}upper_block_gripper">
+      <visual>
+        <origin xyz="0.0 -0.0 -0.0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/upper_block_gripper.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver_camera"/>
+      </visual>
+      <collision>
+        <origin xyz="0.0 -0.0 -0.0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/upper_block_gripper.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="${prefix}zed_mini_camera_attach_back_base_with_external_rack">
+      <visual>
+        <origin xyz="-4e-05 -0.08901 -0.0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/zed_mini_camera_attach_back_base_with_external_rack.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver_camera"/>
+      </visual>
+      <collision>
+        <origin xyz="-4e-05 -0.08901 -0.0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/zed_mini_camera_attach_back_base_with_external_rack.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="${prefix}zed_camera">
+      <visual>
+        <origin xyz="-0.00804 -0.100964 0.000301" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/zed_camera.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver_camera"/>
+      </visual>
+      <collision>
+        <origin xyz="-0.00804 -0.100964 0.000301" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/camera_gripper_attach/zed_camera.stl" scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <joint name="${prefix}base_link_camera_attach" type="fixed">
+      <origin xyz="0.0 0.0 0.0" rpy="0 0 0"/>
+      <parent link="${prefix}base_link_camera"/>
+      <child link="${prefix}upper_block_gripper"/>
+    </joint>
+
+    <joint name="${prefix}camera_attach" type="fixed">
+      <origin xyz="4e-05 0.08901 0.0" rpy="0 0 0"/>
+      <parent link="${prefix}upper_block_gripper"/>
+      <child link="${prefix}zed_mini_camera_attach_back_base_with_external_rack"/>
+    </joint>
+
+    <joint name="${prefix}camera_base" type="fixed">
+      <origin xyz="0.008 0.011954 -0.000301" rpy="0 0 0"/>
+      <parent link="${prefix}zed_mini_camera_attach_back_base_with_external_rack"/>
+      <child link="${prefix}zed_camera"/>
+    </joint>
+
+  </xacro:macro>
+</robot>

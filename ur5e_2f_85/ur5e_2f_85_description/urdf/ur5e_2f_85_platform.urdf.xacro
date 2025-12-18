@@ -4,6 +4,7 @@
     <!-- import main macro -->
     <xacro:include filename="$(find ur5e_2f_85_description)/urdf/ur5e_2f_85_macro.xacro"/>
     <xacro:include filename="$(find ur5e_2f_85_description)/urdf/robot_platform_macro.xacro"/>
+    <xacro:include filename="$(find ur5e_2f_85_description)/urdf/zed_mini_camera_macro.xacro"/>
 
     <!-- parameters -->
     <xacro:arg name="name" default="ur"/>
@@ -39,7 +40,11 @@
             visual_params="$(arg visual_params)"
             use_fake_hardware="$(arg use_fake_hardware)"
             com_port="$(arg com_port)"/>
-    </xacro:macro>
-    <xacro:ur5e_2f_85_with_platform/>
 
+        <xacro:camera_gripper_attach
+            parent="$(arg tf_prefix)tool0"
+            prefix="$(arg tf_prefix)"/>
+    </xacro:macro>
+    
+    <xacro:ur5e_2f_85_with_platform/>
 </robot>
