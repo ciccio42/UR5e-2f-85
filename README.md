@@ -44,7 +44,7 @@ docker run -it --rm \
   ur_ros2
 ``` 
 
-## UR5e + Robotiq Gripper
+## UR5e + Robotiq Gripper + Tavolo
 
 **Build**
 ```
@@ -70,4 +70,3 @@ docker run -it --rm \
 [X] Description file
 [] Moveit Config
 
-## UR5e-2f-85 + Table
