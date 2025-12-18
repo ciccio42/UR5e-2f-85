@@ -47,10 +47,27 @@ docker run -it --rm \
 ## UR5e + Robotiq Gripper
 
 **Build**
-``` 
+```
+docker build -t ur_robotiq . -f UR_Robotiq 
 ``` 
 
 
 **Run**
 ```
+xhost +local:docker
+docker run -it --rm \
+  --gpus all \
+  --privileged \
+  --net=host \
+  -e DISPLAY=$DISPLAY \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  ur_robotiq
 ``` 
+
+[X] Description file
+[] Moveit Config
+
+## UR5e-2f-85 + Table

@@ -1,0 +1,15 @@
+FROM ur_ros2
+
+ENV ROS_DISTRO=rolling
+WORKDIR /home/ros2_ws
+
+# Build Robotiq packages
+RUN git clone https://github.com/PickNikRobotics/ros2_robotiq_gripper.git src/ros2_robotiq_gripper
+RUN vcs import src --skip-existing --input src/ros2_robotiq_gripper/ros2_robotiq_gripper-not-released.${ROS_DISTRO}.repos
+RUN rosdep install --ignore-src --from-paths src -y
+RUN  /bin/bash -c 'export MAKEFLAGS=-j10; source /opt/ros/rolling/setup.bash; colcon build --parallel-workers 10 --cmake-args -DCMAKE_BUILD_TYPE=Release'
+
+
+SHELL ["/bin/bash", "-c"]
+WORKDIR /home/ros2_ws
+CMD ["bash"]
