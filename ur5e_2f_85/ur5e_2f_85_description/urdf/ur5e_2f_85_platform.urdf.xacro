@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="ur5e_2f_85">
+
+    <!-- import main macro -->
+    <xacro:include filename="$(find ur5e_2f_85_description)/urdf/ur5e_2f_85_macro.xacro"/>
+    <xacro:include filename="$(find ur5e_2f_85_description)/urdf/robot_platform_macro.xacro"/>
+
+    <!-- parameters -->
+    <xacro:arg name="name" default="ur"/>
+    <xacro:arg name="ur_type" default="ur5e"/>
+    <xacro:arg name="tf_prefix" default="" />
+    <xacro:arg name="joint_limit_params" default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
+    <xacro:arg name="kinematics_params" default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>
+    <xacro:arg name="physical_params" default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
+    <xacro:arg name="visual_params" default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
+    <xacro:arg name="transmission_hw_interface" default=""/>
+    <xacro:arg name="safety_limits" default="false"/>
+    <xacro:arg name="safety_pos_margin" default="0.15"/>
+    <xacro:arg name="safety_k_position" default="20"/>
+    <xacro:arg name="use_fake_hardware" default="true" />
+    <xacro:arg name="com_port" default="/dev/ttyUSB0" />
+    <xacro:arg name="parent" default="world" />
+    <xacro:arg name="force_abs_paths" default="false" />
+
+    <xacro:macro name="ur5e_2f_85_with_platform">
+        <!-- Create world link-->
+        <link name="$(arg parent)"/>
+
+
+        <xacro:robot_platform parent="$(arg parent)"/>
+
+        <xacro:ur5e_2f_85
+            name="$(arg name)"
+            tf_prefix="$(arg tf_prefix)"
+            parent="robot_base_1"
+            joint_limit_params="$(arg joint_limit_params)"
+            kinematics_params="$(arg kinematics_params)"
+            physical_params="$(arg physical_params)"
+            visual_params="$(arg visual_params)"
+            use_fake_hardware="$(arg use_fake_hardware)"
+            com_port="$(arg com_port)"/>
+    </xacro:macro>
+    <xacro:ur5e_2f_85_with_platform/>
+
+</robot>

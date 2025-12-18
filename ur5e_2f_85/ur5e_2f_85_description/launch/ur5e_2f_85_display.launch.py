@@ -40,7 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "description_file",
             default_value=PathJoinSubstitution(
-                [FindPackageShare("ur5e_2f_85_description"), "urdf", "ur5e_2f_85.urdf.xacro"]
+                [FindPackageShare("ur5e_2f_85_description"), "urdf", "ur5e_2f_85_platform.urdf.xacro"]
             ),
             description="URDF/XACRO description file (absolute path) with the robot.",
         )
@@ -77,6 +77,13 @@ def generate_launch_description():
             description="The com port to which the robot is connected.",
         )
     )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "parent",
+            default_value="world",
+            description="The parent frame of the robot.",
+        )
+    )
 
     # Initialize Arguments
     ur_type = LaunchConfiguration("ur_type")
@@ -88,6 +95,7 @@ def generate_launch_description():
     rviz_config_file = LaunchConfiguration("rviz_config_file")
     use_fake_hardware = LaunchConfiguration("use_fake_hardware")
     com_port = LaunchConfiguration("com_port")
+    parent = LaunchConfiguration("parent")
 
     robot_description_content = Command(
         [
@@ -118,6 +126,9 @@ def generate_launch_description():
             " ",
             "com_port:=",
             com_port,
+            " ",
+            "parent:=",
+            parent,
         ]
     )
     robot_description = {
