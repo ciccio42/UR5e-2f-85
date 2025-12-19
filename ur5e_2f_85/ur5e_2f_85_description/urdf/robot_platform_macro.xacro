@@ -16,76 +16,245 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/base_link.stl" scale="0.001 0.001 0.001"/>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/base_link.stl"
+                scale="0.001 0.001 0.001"/>
         </geometry>
         <material name="silver"/>
       </visual>
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/base_link.stl" scale="0.001 0.001 0.001"/>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/base_link.stl"
+                scale="0.001 0.001 0.001"/>
         </geometry>
       </collision>
     </link>
 
+    <!-- TABLE SUPPORTS -->
+
     <link name="table_support_dx_front_1">
       <visual>
-        <origin xyz="-0.0 0.8 -0.0" rpy="0 0 0"/>
+        <origin xyz="0.0 0.8 0.0"/>
         <geometry>
-          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_dx_front_1.stl" scale="0.001 0.001 0.001"/>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_dx_front_1.stl"
+                scale="0.001 0.001 0.001"/>
         </geometry>
         <material name="silver"/>
       </visual>
+      <collision>
+        <origin xyz="0.0 0.8 0.0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_dx_front_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
     </link>
 
     <link name="table_support_sx_front_1">
       <visual>
-        <origin xyz="-0.8 0.8 -0.0" rpy="0 0 0"/>
+        <origin xyz="-0.8 0.8 0.0"/>
         <geometry>
-          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_sx_front_1.stl" scale="0.001 0.001 0.001"/>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_sx_front_1.stl"
+                scale="0.001 0.001 0.001"/>
         </geometry>
         <material name="silver"/>
       </visual>
+      <collision>
+        <origin xyz="-0.8 0.8 0.0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_sx_front_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
     </link>
 
     <link name="table_support_sx_back_1">
       <visual>
-        <origin xyz="-0.8 -0.0 -0.0" rpy="0 0 0"/>
+        <origin xyz="-0.8 0.0 0.0"/>
         <geometry>
-          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_sx_back_1.stl" scale="0.001 0.001 0.001"/>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_sx_back_1.stl"
+                scale="0.001 0.001 0.001"/>
         </geometry>
         <material name="silver"/>
       </visual>
+      <collision>
+        <origin xyz="-0.8 0.0 0.0"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_support_sx_back_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
     </link>
 
-    <link name="vertical_back_dx_1"><visual><origin xyz="0 0 -0.115"/><geometry><mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_back_dx_1.stl" scale="0.001 0.001 0.001"/></geometry><material name="silver"/></visual></link>
-    <link name="vertical_front_dx_1"><visual><origin xyz="0 0.8 -0.115"/><geometry><mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_front_dx_1.stl" scale="0.001 0.001 0.001"/></geometry><material name="silver"/></visual></link>
-    <link name="vertical_front_sx_1"><visual><origin xyz="-0.8 0.8 -0.115"/><geometry><mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_front_sx_1.stl" scale="0.001 0.001 0.001"/></geometry><material name="silver"/></visual></link>
-    <link name="vertical_back_sx_1"><visual><origin xyz="-0.8 0 -0.115"/><geometry><mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_back_sx_1.stl" scale="0.001 0.001 0.001"/></geometry><material name="silver"/></visual></link>
+    <!-- VERTICAL SUPPORTS -->
 
-    <link name="table_1"><visual><origin xyz="-0.4 0.477 -0.74"/><geometry><mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_1.stl" scale="0.001 0.001 0.001"/></geometry><material name="silver"/></visual></link>
-    
+    <link name="vertical_back_dx_1">
+      <visual>
+        <origin xyz="0 0 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_back_dx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_back_dx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="vertical_front_dx_1">
+      <visual>
+        <origin xyz="0 0.8 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_front_dx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0.8 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_front_dx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="vertical_front_sx_1">
+      <visual>
+        <origin xyz="-0.8 0.8 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_front_sx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver"/>
+      </visual>
+      <collision>
+        <origin xyz="-0.8 0.8 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_front_sx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <link name="vertical_back_sx_1">
+      <visual>
+        <origin xyz="-0.8 0 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_back_sx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver"/>
+      </visual>
+      <collision>
+        <origin xyz="-0.8 0 -0.115"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/vertical_back_sx_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- TABLE -->
+
+    <link name="table_1">
+      <visual>
+        <origin xyz="-0.4 0.477 -0.74"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+        <material name="silver"/>
+      </visual>
+      <collision>
+        <origin xyz="-0.4 0.477 -0.74"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/table_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- ROBOT BASE -->
+
     <link name="robot_base_1">
       <visual>
-        <origin xyz="-0.40 -0.165 -0.86" rpy="0 0 0"/>
+        <origin xyz="-0.40 -0.165 -0.86"/>
         <geometry>
-          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/robot_base_1.stl" scale="0.001 0.001 0.001"/>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/robot_base_1.stl"
+                scale="0.001 0.001 0.001"/>
         </geometry>
         <material name="silver"/>
       </visual>
+      <collision>
+        <origin xyz="-0.40 -0.165 -0.86"/>
+        <geometry>
+          <mesh filename="package://ur5e_2f_85_description/meshes/robot_platform/robot_base_1.stl"
+                scale="0.001 0.001 0.001"/>
+        </geometry>
+      </collision>
     </link>
 
-    <joint name="base_link_front_right_support" type="fixed"><origin xyz="0.0 -0.8 0.0"/><parent link="base_link_platform"/><child link="table_support_dx_front_1"/></joint>
-    <joint name="base_link_front_left_support" type="fixed"><origin xyz="0.8 -0.8 0.0"/><parent link="base_link_platform"/><child link="table_support_sx_front_1"/></joint>
-    <joint name="base_link_back_left_support" type="fixed"><origin xyz="0.8 0.0 0.0"/><parent link="base_link_platform"/><child link="table_support_sx_back_1"/></joint>
-    
-    <joint name="vertical_back_right" type="fixed"><origin xyz="0.0 0.0 0.115"/><parent link="base_link_platform"/><child link="vertical_back_dx_1"/></joint>
-    <joint name="vertical_front_right" type="fixed"><origin xyz="0.0 0.0 0.115"/><parent link="table_support_dx_front_1"/><child link="vertical_front_dx_1"/></joint>
-    <joint name="vertical_front_left" type="fixed"><origin xyz="0.0 0.0 0.115"/><parent link="table_support_sx_front_1"/><child link="vertical_front_sx_1"/></joint>
-    <joint name="vertical_back_left" type="fixed"><origin xyz="0.0 0.0 0.115"/><parent link="table_support_sx_back_1"/><child link="vertical_back_sx_1"/></joint>
+    <!-- JOINTS (UNCHANGED) -->
 
-    <joint name="table_joint" type="fixed"><origin xyz="0.400 -0.477 0.74"/><parent link="base_link_platform"/><child link="table_1"/></joint>
-    <joint name="robot_base_joint" type="fixed"><origin xyz="0.38 0.135 0.86"/><parent link="base_link_platform"/><child link="robot_base_1"/></joint>
+    <joint name="base_link_front_right_support" type="fixed">
+      <origin xyz="0.0 -0.8 0.0"/>
+      <parent link="base_link_platform"/>
+      <child link="table_support_dx_front_1"/>
+    </joint>
+
+    <joint name="base_link_front_left_support" type="fixed">
+      <origin xyz="0.8 -0.8 0.0"/>
+      <parent link="base_link_platform"/>
+      <child link="table_support_sx_front_1"/>
+    </joint>
+
+    <joint name="base_link_back_left_support" type="fixed">
+      <origin xyz="0.8 0.0 0.0"/>
+      <parent link="base_link_platform"/>
+      <child link="table_support_sx_back_1"/>
+    </joint>
+
+    <joint name="vertical_back_right" type="fixed">
+      <origin xyz="0.0 0.0 0.115"/>
+      <parent link="base_link_platform"/>
+      <child link="vertical_back_dx_1"/>
+    </joint>
+
+    <joint name="vertical_front_right" type="fixed">
+      <origin xyz="0.0 0.0 0.115"/>
+      <parent link="table_support_dx_front_1"/>
+      <child link="vertical_front_dx_1"/>
+    </joint>
+
+    <joint name="vertical_front_left" type="fixed">
+      <origin xyz="0.0 0.0 0.115"/>
+      <parent link="table_support_sx_front_1"/>
+      <child link="vertical_front_sx_1"/>
+    </joint>
+
+    <joint name="vertical_back_left" type="fixed">
+      <origin xyz="0.0 0.0 0.115"/>
+      <parent link="table_support_sx_back_1"/>
+      <child link="vertical_back_sx_1"/>
+    </joint>
+
+    <joint name="table_joint" type="fixed">
+      <origin xyz="0.400 -0.477 0.74"/>
+      <parent link="base_link_platform"/>
+      <child link="table_1"/>
+    </joint>
+
+    <joint name="robot_base_joint" type="fixed">
+      <origin xyz="0.38 0.135 0.86"/>
+      <parent link="base_link_platform"/>
+      <child link="robot_base_1"/>
+    </joint>
 
   </xacro:macro>
 </robot>

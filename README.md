@@ -51,7 +51,6 @@ docker run -it --rm \
 docker build -t ur_robotiq . -f UR_Robotiq 
 ``` 
 
-
 **Run**
 ```
 xhost +local:docker
@@ -66,6 +65,12 @@ docker run -it --rm \
   -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
   ur_robotiq
 ``` 
+
+```
+colcon build --packages-select ur5e_2f_85_description ur5e_2f_85_moveit_config 
+source install/setup.bash 
+```
+
 
 [X] Description file
 [] Moveit Config
