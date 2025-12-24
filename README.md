@@ -69,6 +69,8 @@ docker run -it --rm \
 ```
 colcon build --packages-select ur5e_2f_85_description ur5e_2f_85_moveit_config 
 source install/setup.bash 
+# test moveit demo
+
 ```
 
 
