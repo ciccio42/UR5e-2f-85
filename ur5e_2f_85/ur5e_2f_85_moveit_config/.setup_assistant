@@ -7,7 +7,7 @@ moveit_setup_assistant_config:
   package_settings:
     author_name: Francesco Rosa
     author_email: frosa@unisa.it
-    generated_timestamp: 1766144004
+    generated_timestamp: 1766659854
   control_xacro:
     command:
       - position

@@ -583,17 +583,13 @@
       <geometry><sphere radius="0.0001"/></geometry>
     </collision>
   </link>
-  <ros2_control name="RobotiqGripperHardwareInterface" type="system">
-    <!-- Plugins -->
+  <!-- <ros2_control name="RobotiqGripperHardwareInterface" type="system">
     <hardware>
-      <!-- Set use_dummy to true to connect to a dummy driver for testing purposes. -->
       <param name="use_dummy">false</param>
       <plugin>mock_components/GenericSystem</plugin>
       <param name="mock_sensor_commands">False</param>
       <param name="state_following_offset">0.0</param>
     </hardware>
-    <!-- Joint interfaces -->
-    <!-- With Gazebo or Hardware, they handle mimic joints, so we only need this command interface activated -->
     <joint name="robotiq_85_left_knuckle_joint">
       <command_interface name="position"/>
       <state_interface name="position">
@@ -625,7 +621,7 @@
       <command_interface name="reactivate_gripper_cmd"/>
       <command_interface name="reactivate_gripper_response"/>
     </gpio>
-  </ros2_control>
+  </ros2_control> -->
   <link name="robotiq_85_base_link">
     <visual>
       <geometry>

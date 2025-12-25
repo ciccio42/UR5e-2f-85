@@ -3,36 +3,37 @@
 moveit_controller_manager: moveit_simple_controller_manager/MoveItSimpleControllerManager
 
 moveit_simple_controller_manager:
-  controller_names:
-    - arm_controller
-    - arm_tcp_controller
-    - scaled_pos_joint_traj_controller
 
-  arm_controller:
-    type: FollowJointTrajectory
-    action_ns: follow_joint_trajectory
-    joints:
-      - shoulder_pan_joint
-      - shoulder_lift_joint
-      - elbow_joint
-      - wrist_1_joint
-      - wrist_2_joint
-      - wrist_3_joint
-  
-  arm_tcp_controller:
-    type: FollowJointTrajectory
-    action_ns: follow_joint_trajectory
-    joints:
-      - shoulder_pan_joint
-      - shoulder_lift_joint
-      - elbow_joint
-      - wrist_1_joint
-      - wrist_2_joint
-      - wrist_3_joint
-  
+  controller_names:
+    # - arm_controller
+    # - arm_tcp_controller
+    - scaled_pos_joint_traj_controller
+    - gripper_controller
+
+  # arm_controller:
+  #   type: FollowJointTrajectory
+  #   joints:
+  #     - shoulder_pan_joint
+  #     - shoulder_lift_joint
+  #     - elbow_joint
+  #     - wrist_1_joint
+  #     - wrist_2_joint
+  #     - wrist_3_joint
+  #   action_ns: follow_joint_trajectory
+
+  # arm_tcp_controller:
+  #   type: FollowJointTrajectory
+  #   joints:
+  #     - shoulder_pan_joint
+  #     - shoulder_lift_joint
+  #     - elbow_joint
+  #     - wrist_1_joint
+  #     - wrist_2_joint
+  #     - wrist_3_joint
+  #   action_ns: follow_joint_trajectory
+
   scaled_pos_joint_traj_controller:
     type: FollowJointTrajectory
-    action_ns: follow_joint_trajectory
     joints:
       - shoulder_pan_joint
       - shoulder_lift_joint
@@ -40,4 +41,18 @@ moveit_simple_controller_manager:
       - wrist_1_joint
       - wrist_2_joint
       - wrist_3_joint
+    action_ns: follow_joint_trajectory
     default: true
+  
+  # gripper_controller:
+  #   type: GripperCommand
+  #   default: true
+  #   joints:
+  #     - robotiq_85_left_knuckle_joint
+  #   action_ns: gripper_cmd
+  gripper_controller:
+    type: FollowJointTrajectory
+    action_ns: follow_joint_trajectory
+    default: true
+    joints:
+      - robotiq_85_left_knuckle_joint

@@ -70,10 +70,21 @@ docker run -it --rm \
 colcon build --packages-select ur5e_2f_85_description ur5e_2f_85_moveit_config 
 source install/setup.bash 
 # test moveit demo
-
+ros2 launch ur5e_2f_85_moveit_config demo.launch.py 
 ```
 
+## Bringup robot
 
+
+# Usefull commands
+```
+docker exec -it <ID_OR_NAME> bash
+```
+
+# ToDo
 [X] Description file
-[] Moveit Config
-
+[X] Moveit Config
+[] Test with simulated UR5e robot
+[] Integrate Teleoperation
+[] Integrate Cameras
+[] Integrate DatasetCollection

@@ -3,51 +3,57 @@ controller_manager:
   ros__parameters:
     update_rate: 100  # Hz
 
-    arm_controller:
-      type: joint_trajectory_controller/JointTrajectoryController
+    # arm_controller:
+    #   type: joint_trajectory_controller/JointTrajectoryController
 
 
-    arm_tcp_controller:
-      type: joint_trajectory_controller/JointTrajectoryController
+    # arm_tcp_controller:
+    #   type: joint_trajectory_controller/JointTrajectoryController
 
 
     scaled_pos_joint_traj_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 
+    gripper_controller:
+      # type: parallel_gripper_action_controller/GripperActionController
+      type: joint_trajectory_controller/JointTrajectoryController
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
-arm_controller:
-  ros__parameters:
-    joints:
-      - shoulder_pan_joint
-      - shoulder_lift_joint
-      - elbow_joint
-      - wrist_1_joint
-      - wrist_2_joint
-      - wrist_3_joint
-    command_interfaces:
-      - position
-    state_interfaces:
-      - position
-      - velocity
-    allow_nonzero_velocity_at_trajectory_end: true
-arm_tcp_controller:
-  ros__parameters:
-    joints:
-      - shoulder_pan_joint
-      - shoulder_lift_joint
-      - elbow_joint
-      - wrist_1_joint
-      - wrist_2_joint
-      - wrist_3_joint
-    command_interfaces:
-      - position
-    state_interfaces:
-      - position
-      - velocity
-    allow_nonzero_velocity_at_trajectory_end: true
+# arm_controller:
+#   ros__parameters:
+#     joints:
+#       - shoulder_pan_joint
+#       - shoulder_lift_joint
+#       - elbow_joint
+#       - wrist_1_joint
+#       - wrist_2_joint
+#       - wrist_3_joint
+#     command_interfaces:
+#       - position
+#     state_interfaces:
+#       - position
+#       - velocity
+#     allow_nonzero_velocity_at_trajectory_end: true
+
+# arm_tcp_controller:
+#   ros__parameters:
+#     joints:
+#       - shoulder_pan_joint
+#       - shoulder_lift_joint
+#       - elbow_joint
+#       - wrist_1_joint
+#       - wrist_2_joint
+#       - wrist_3_joint
+#     command_interfaces:
+#       - position
+#     state_interfaces:
+#       - position
+#       - velocity
+#     allow_nonzero_velocity_at_trajectory_end: true
+
 scaled_pos_joint_traj_controller:
   ros__parameters:
     joints:
@@ -63,3 +69,23 @@ scaled_pos_joint_traj_controller:
       - position
       - velocity
     allow_nonzero_velocity_at_trajectory_end: true
+
+# gripper_controller:
+#   ros__parameters:
+#     joint: robotiq_85_left_knuckle_joint
+#     action_monitor_rate: 20.0
+#     goal_tolerance: 0.05       
+#     max_effort: 0.0            
+#     allow_stalling: true       
+#     stall_velocity_threshold: 0.001
+#     stall_timeout: 1.0
+
+gripper_controller:
+  ros__parameters:
+    joints:
+      - robotiq_85_left_knuckle_joint
+    command_interfaces:
+      - position
+    state_interfaces:
+      - position
+      - velocity
