@@ -3,7 +3,7 @@ FROM nvidia/cuda:13.0.1-runtime-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
-ENV ROS_DISTRO=rolling
+ENV ROS_DISTRO=jazzy
 
 # Locale
 RUN apt update && apt install -y locales \

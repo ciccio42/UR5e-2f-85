@@ -1,15 +1,17 @@
 FROM ur_ros2
 
-ENV ROS_DISTRO=rolling
+ENV ROS_DISTRO=jazzy
 WORKDIR /home/ros2_ws
 
 # Build Robotiq packages
 RUN git clone https://github.com/PickNikRobotics/ros2_robotiq_gripper.git src/ros2_robotiq_gripper
-RUN vcs import src --skip-existing --input src/ros2_robotiq_gripper/ros2_robotiq_gripper-not-released.${ROS_DISTRO}.repos
+RUN vcs import src --skip-existing --input src/ros2_robotiq_gripper/ros2_robotiq_gripper.rolling.repos
 RUN rosdep install --ignore-src --from-paths src -y
-RUN  /bin/bash -c 'export MAKEFLAGS=-j10; source /opt/ros/rolling/setup.bash; colcon build --parallel-workers 10 --cmake-args -DCMAKE_BUILD_TYPE=Release'
+RUN  /bin/bash -c 'export MAKEFLAGS=-j10; source /opt/ros/jazzy/setup.bash; colcon build --parallel-workers 10 --cmake-args -DCMAKE_BUILD_TYPE=Release'
 
 RUN apt install ros-${ROS_DISTRO}-ros2-controllers -y
+
+RUN apt-get install python3-pip -y
 
 SHELL ["/bin/bash", "-c"]
 WORKDIR /home/ros2_ws
