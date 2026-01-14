@@ -1,0 +1,81 @@
+ARG UBUNTU_RELEASE_YEAR="24"
+ARG ZED_SDK_MAJOR="5"
+ARG ZED_SDK_MINOR="1"
+ARG CUDA_MAJOR="13"
+ARG CUDA_MINOR="0"
+
+FROM stereolabs/zed:${ZED_SDK_MAJOR}.${ZED_SDK_MINOR}-devel-cuda${CUDA_MAJOR}.${CUDA_MINOR}-ubuntu${UBUNTU_RELEASE_YEAR}.04
+
+ARG ROS_DISTRO_ARG="jazzy"
+SHELL ["/bin/bash", "-c"]
+
+ENV LOGNAME="root"
+ENV ROS_DISTRO=${ROS_DISTRO_ARG}
+ENV DEBIAN_FRONTEND=noninteractive
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
+ENV ROS_WS=/home/ros2_ws
+ENV LANG=en_US.UTF-8
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV LD_LIBRARY_PATH=/usr/local/zed/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+# Locale and essential utilities
+RUN apt update && apt install -y \
+    locales curl gnupg2 lsb-release software-properties-common \
+    mesa-utils libgl1 libegl1 libglx0 x11-apps git-all \
+    udev libusb-1.0-0 usbutils \
+    && locale-gen en_US.UTF-8 \
+    && update-locale LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+# ROS 2 setup
+RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] http://packages.ros.org/ros2/ubuntu $(lsb_release -cs) main" \
+    > /etc/apt/sources.list.d/ros2.list \
+    && apt update && apt install -y ros-$ROS_DISTRO-desktop \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python 3 ROS build tools from ROS repo
+RUN apt update
+RUN apt install git python3-colcon-common-extensions python3-vcstool -y
+RUN apt install python3-rosdep -y
+
+# Initialize rosdep
+RUN rosdep init && rosdep update
+
+# ROS 2 workspace
+RUN mkdir -p ${ROS_WS}/src
+WORKDIR ${ROS_WS}
+RUN git clone https://github.com/stereolabs/zed-ros2-wrapper.git src/zed-ros2-wrapper
+RUN rosdep install --from-paths src --ignore-src -r -y
+
+# Build workspace
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash \
+    && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+
+# Setup environment
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> /root/.bashrc \
+    && echo "source ${ROS_WS}/install/local_setup.bash" >> /root/.bashrc
+
+WORKDIR /usr/local/zed
+RUN python3 get_python_api.py --force
+
+WORKDIR ${ROS_WS}
+
+# Add root to plugdev
+RUN usermod -a -G plugdev root
+
+# Install examples
+RUN git clone https://github.com/stereolabs/zed-ros2-examples.git src/zed-ros2-examples
+RUN rosdep install --from-paths src/zed-ros2-examples --ignore-src -r -y
+  
+COPY hello_zed.py hello_zed.py
+
+# Add entrypoint
+COPY ./ros_entrypoint.sh /
+ENTRYPOINT ["/ros_entrypoint.sh"]
+
+# Default command
+CMD ["/bin/bash"]

@@ -142,6 +142,33 @@ ros2 launch ur5e_2f_85_moveit_config move_group.launch.py
 
 ```
 
+## ZED Cameras docker
+```bash
+# Build docker
+source zed-build-docker-image.sh
+
+xhost +local:docker
+docker run -it --rm \
+  --gpus all \
+  --privileged \
+  --network ursim_net \
+  --ip 192.168.56.103 \
+  --ipc=host \
+  --pid=host \
+  --device=/dev/bus/usb \
+  -e DISPLAY=$DISPLAY \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e XDG_RUNTIME_DIR=/tmp/runtime-root \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /dev:/dev \
+  5.1-ros2-devel-cuda13.0-ubuntu24.04
+
+
+# Test camera
+ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zedm
+```
+
 
 
 # Usefull commands
