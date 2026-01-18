@@ -162,11 +162,17 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev:/dev \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
+  --name zed_camera_container \
   5.1-ros2-devel-cuda13.0-ubuntu24.04
-
 
 # Test camera
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zedm
+# RVIZ
+ros2 launch zed_display_rviz2 display_zed_cam.launch.py camera_model:=zedm
+
+# Aruco detection
+ros2 launch zed_camera_calibration zed_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml
 ```
 
 
@@ -185,5 +191,6 @@ docker builder prune --all
 [X] Moveit Config
 [X] Test with simulated UR5e robot
 [] Integrate Cameras
+  [] Calibration tool
 [] Integrate Teleoperation
 [] Integrate DatasetCollection
