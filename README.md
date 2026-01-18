@@ -44,7 +44,7 @@ docker run -it --rm \
   ur_ros2
 ``` 
 
-## UR5e + Robotiq Gripper + Tavolo
+## UR5e + Robotiq Gripper + Table
 
 **Build**
 ```bash
@@ -115,6 +115,7 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  --name ur_robotiq_container \
   ur_robotiq
 
 ```
@@ -175,6 +176,59 @@ ros2 launch zed_display_rviz2 display_zed_cam.launch.py camera_model:=zedm
 ros2 launch zed_camera_calibration zed_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml
 ```
 
+## UR5e + Robotiq Gripper + Table + Teleoperation
+
+```bash
+docker build -t ur_robotiq_teleoperation . -f UR_Robotiq_Teleoperation
+
+xhost +local:docker
+docker run -it --rm \
+  --gpus all \
+  --privileged \
+  --cap-add=SYS_NICE \
+  --cpuset-cpus="0-1" \
+  --network ursim_net \
+  --ip 192.168.56.102 \
+  --ipc=host \
+  --pid=host \
+  --ulimit memlock=-1:-1 \
+  --ulimit rtprio=99 \
+  --shm-size=1g \
+  --security-opt seccomp=unconfined \
+  -e DISPLAY=$DISPLAY \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e XDG_RUNTIME_DIR=/tmp/runtime-root \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /dev/input:/dev/input \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  --name ur_robotiq_teleoperation_container \
+  ur_robotiq_teleoperation
+```
+
+```bash
+# Run ur-sim
+docker run --rm -it \
+  -e ROBOT_MODEL=UR5e \
+  --net ursim_net \
+  --ip 192.168.56.101 \
+  --privileged \
+  --cap-add=NET_ADMIN \
+  -p 5900:5900 -p 6080:6080 \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur_programs:/ursim/programs \
+  ursim_e-series
+
+# RUN ur-driver
+ros2 launch ur_robot_driver ur_control.launch.py \
+  ur_type:=ur5e \
+  robot_ip:=192.168.56.101 \
+  kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/sim_calibration.yaml \
+  description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
+  launch_rviz:=false
+
+ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=true
+ros2 launch ur5e_2f_85_teleoperation ur5e_teleoperation.launch.py
+```
 
 
 # Usefull commands
@@ -182,15 +236,21 @@ ros2 launch zed_camera_calibration zed_camera_calibration.launch.py camera_model
 docker exec -it <ID_OR_NAME> bash
 
 # Clean docker build cache
-docker builder prune --all
-
+docker builder prune --all -y
+# Clean dandling image
+docker image prune -f
 ```
 
 # ToDo
-[X] Description file
-[X] Moveit Config
-[X] Test with simulated UR5e robot
-[] Integrate Cameras
-  [] Calibration tool
-[] Integrate Teleoperation
-[] Integrate DatasetCollection
+* [X] Description file 
+
+* [X] Moveit Config
+
+* [X] Test with simulated UR5e robot
+
+* [] Integrate Cameras
+  + [] Calibration tool
+  + [] Multicamera
+
+* [] Integrate Teleoperation
+* [] Integrate DatasetCollection

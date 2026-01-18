@@ -75,8 +75,8 @@ RUN rosdep install --from-paths src --ignore-src -r -y
 COPY hello_zed.py hello_zed.py
 
 # Add entrypoint
-COPY ./ros_entrypoint.sh /
-ENTRYPOINT ["/ros_entrypoint.sh"]
+COPY ./zed_container_entrypoint.sh /
+ENTRYPOINT ["/zed_container_entrypoint.sh"]
 
 # Default command
 CMD ["/bin/bash"]

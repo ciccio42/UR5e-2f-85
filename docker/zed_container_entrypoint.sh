@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Build zed-ros2-examples
+# Build
+apt update && apt install -y iputils-ping
 source /opt/ros/${ROS_DISTRO}/setup.bash
-colcon build --symlink-install --cmake-args \
-    -DCMAKE_BUILD_TYPE=Release
+colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 
 # setup ros environment
 source /root/.bashrc

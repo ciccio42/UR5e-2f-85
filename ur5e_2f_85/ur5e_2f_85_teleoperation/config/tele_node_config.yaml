@@ -1,0 +1,8 @@
+teleoperation:
+  ros__parameters:
+    controller_to_stop: scaled_joint_trajectory_controller
+    controller_to_run: forward_position_controller
+    topic_servo: /servo_node/delta_twist_cmds
+    topic_name: /joy
+    linear_scale: 0.07
+    angular_scale: 0.1
