@@ -4,5 +4,5 @@ teleoperation:
     controller_to_run: forward_position_controller
     topic_servo: /servo_node/delta_twist_cmds
     topic_name: /joy
-    linear_scale: 0.07
-    angular_scale: 0.1
+    linear_scale: 1.0
+    angular_scale: 1.0

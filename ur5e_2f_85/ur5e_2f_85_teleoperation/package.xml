@@ -16,12 +16,18 @@
   <build_depend>std_msgs</build_depend>
   <build_depend>joy</build_depend>
   <build_depend>controller_manager</build_depend>
+  <build_depend>ur5e_2f_85_teleoperation_msg</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+
 
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>controller_manager</exec_depend>
+  <exec_depend>ur5e_2f_85_teleoperation_msg</exec_depend>
+  <exec_depend>ur5e_2f_85_teleoperation_msg</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
 
 
   <export>

@@ -19,6 +19,8 @@ def load_yaml(package_name, file_path):
     """Load a YAML file and return as dict"""
     package_path = get_package_share_directory(package_name)
     absolute_file_path = os.path.join(package_path, file_path)
+    # print absolute path
+    print(f"Loading YAML file from: {absolute_file_path}")    
     try:
         with open(absolute_file_path) as file:
             return yaml.safe_load(file)
@@ -99,7 +101,6 @@ def generate_launch_description():
     servo_node = Node(
         package="moveit_servo",
         executable="servo_node",
-        name="servo_node",
         parameters=[
             moveit_config.to_dict(), 
             servo_params],
@@ -135,7 +136,7 @@ def generate_launch_description():
         RegisterEventHandler(
             OnProcessExit(
                 target_action=wait_robot_description,
-                on_exit=[move_group_node, rviz_node, servo_node],
+                on_exit=[servo_node, move_group_node, rviz_node],
             )
         ),
     )
