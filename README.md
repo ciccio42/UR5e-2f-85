@@ -174,6 +174,15 @@ ros2 launch zed_display_rviz2 display_zed_cam.launch.py camera_model:=zedm
 
 # Aruco detection
 ros2 launch zed_camera_calibration zed_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml
+
+# Launch multi-camera 
+#ros2 launch zed_multi_camera zed_multi_camera.launch.py \
+#      cam_names:='[zed_front,zed_left,zed_right]' \
+#      cam_models:='[zedm,zedm,zedm]' \
+#      cam_serials:='[16450494,11990492,15689351]'
+
+ros2 launch zed_camera_calibration zed_multi_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml rviz:=false
+
 ```
 
 ## UR5e + Robotiq Gripper + Table + Teleoperation
@@ -250,7 +259,7 @@ docker image prune -f
 
 * [] Integrate Cameras
   + [] Calibration tool
-  + [] Multicamera
+  + [X] Multicamera
 
 * [] Integrate Teleoperation
 * [] Integrate DatasetCollection

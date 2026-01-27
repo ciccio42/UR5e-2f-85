@@ -72,7 +72,7 @@ RUN git clone https://github.com/stereolabs/zed-ros2-examples.git src/zed-ros2-e
 COPY ./CMakeLists.txt src/zed-ros2-examples/examples/zed_aruco_localization/CMakeLists.txt
 RUN rosdep install --from-paths src --ignore-src -r -y
   
-COPY hello_zed.py hello_zed.py
+# COPY hello_zed.py hello_zed.py
 
 # Add entrypoint
 COPY ./zed_container_entrypoint.sh /

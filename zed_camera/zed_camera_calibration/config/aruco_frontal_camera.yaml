@@ -13,14 +13,13 @@
         detection_rate: 0.5         # Maximum detection frequency for pose update
         camera_name: 'zed'          # Name of the camera to relocate
         world_frame_id: 'map'       # Frame id of the world frame
-        refine_detection: false     # If enabled the corners of the detected markers will be processed to obtain sub-pixel precision
-
+        refine_detection: true     # If enabled the corners of the detected markers will be processed to obtain sub-pixel precision
+        
       debug:
         active: true               # Enable debug messages
 
       marker_000:
         aruco_id: 19                 # ID of the ArUco tag as retrieved by the ArUco Detector code
         position: [0.0,0.0,0.0] # Pose with respect to the World origin [m]
-        orientation: [0.0,0.0,0.0]   # Orientation with respect to the World origin [rad]
-
+        orientation: [-1.57,-1.57,0.0]   # Orientation with respect to the World origin [rad]
      

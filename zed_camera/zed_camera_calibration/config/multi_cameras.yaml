@@ -1,0 +1,9 @@
+cameras:
+  - camera_name: zed_front
+    serial_number: 16450494
+
+  # - camera_name: zed_left
+  #   serial_number: 11990492
+
+  # - camera_name: zed_right
+  #   serial_number: 15689351

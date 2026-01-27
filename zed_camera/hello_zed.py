@@ -24,16 +24,19 @@ import pyzed.sl as sl
 def main():
     # Create a Camera object
     zed = sl.Camera()
-
+    
     # Create a InitParameters object and set configuration parameters
     init_params = sl.InitParameters()
-    init_params.sdk_verbose = 0
+    init_params.sdk_verbose = 1  # Enable verbose mode
 
     # Open the camera
-    err = zed.open(init_params)
-    if err > sl.ERROR_CODE.SUCCESS:
-        exit(1)
-
+    while True:
+        err = zed.open(init_params)
+        if err > sl.ERROR_CODE.SUCCESS:
+            print("Camera Open failed: {0}".format(err))
+            print("Retrying...")
+        else:
+            break
     # Get camera information (ZED serial number)
     zed_serial = zed.get_camera_information().serial_number
     print("Hello! This is my serial number: {0}".format(zed_serial))
