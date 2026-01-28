@@ -2,6 +2,7 @@
 
 # Build
 apt update && apt install -y iputils-ping
+pip3 uninstall numpy -y --break-system-packages
 source /opt/ros/${ROS_DISTRO}/setup.bash
 colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 

@@ -24,6 +24,11 @@
   <exec_depend>rclcpp_components</exec_depend>
   <exec_depend>rcutils</exec_depend>
   <exec_depend>builtin_interfaces</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>opencv</exec_depend>
+
 
 
   <test_depend>ament_lint_auto</test_depend>

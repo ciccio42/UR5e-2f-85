@@ -63,5 +63,11 @@ install(DIRECTORY launch
 install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}/
 )
+install(
+  PROGRAMS
+    scripts/interactive_aruco_calibration.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 
 ament_package()

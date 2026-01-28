@@ -183,6 +183,11 @@ ros2 launch zed_camera_calibration zed_camera_calibration.launch.py camera_model
 
 ros2 launch zed_camera_calibration zed_multi_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml rviz:=false
 
+# Run interactive calibration
+ros2 launch zed_camera_driver zed_multi_camera.launch.py  camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_driver/config/camera_config.yaml rviz:=true
+
+ros2 run zed_camera_calibration interactive_aruco_calibration.py --ros-args -p cameras_config:=src/zed_camera/zed_camera_calibration/config/multi_cameras.yaml -p aruco_info:=src/zed_camera/zed_camera_calibration/config/aruco_frontal_camera.yaml
+
 ```
 
 ## UR5e + Robotiq Gripper + Table + Teleoperation
@@ -259,7 +264,7 @@ docker image prune -f
 
 * [] Integrate Cameras
   + [] Calibration tool
-  + [X] Multicamera
+  + [] Multicamera
 
 * [] Integrate Teleoperation
 * [] Integrate DatasetCollection
