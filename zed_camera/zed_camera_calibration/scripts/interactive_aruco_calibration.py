@@ -13,6 +13,8 @@ from ament_index_python.packages import get_package_share_directory
 import os
 from PIL import Image as PILImage
 
+RESOLUTION=(640, 360)
+
 
 class InteractiveCameraCalibration(Node):
     def __init__(self):
@@ -126,13 +128,39 @@ class InteractiveCameraCalibration(Node):
             # FIXED WINDOW NAME
             window_name = f'Camera: {camera_name}'
             aruco_window_name = f'ArUco Detection: {camera_name}'
+            overlapped_image_window_name = f'Overlapped Image: {camera_name}'
             cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
             cv2.namedWindow(aruco_window_name, cv2.WINDOW_NORMAL)
+            cv2.namedWindow(overlapped_image_window_name, cv2.WINDOW_NORMAL)
 
             camera_matrix, dist_coeffs = self.get_camera_intrinsics(camera_name)
 
-            for i in range(self.detection_times):
+            if "front" in camera_name.lower():
+                traj_name = "traj000_camera_front_image.png"
+            elif "left" in camera_name.lower():
+                traj_name = "traj000_camera_lateral_left_image.png"
+            elif "right" in camera_name.lower():
+                traj_name = "traj000_camera_lateral_right_image.png"
+            frane_path = f"src/zed_camera/zed_camera_calibration/{traj_name}"
+            # # take the first frame from video
+            # cap = cv2.VideoCapture(video_path)
+            # ret, frame = cap.read()
+            # if not ret:
+            #     self.get_logger().error(f'Failed to read video file: {video_path}')
+            #     exit(1)
+            # load image
+            frame = cv2.imread(frane_path)
 
+            if frame.shape[0] != 360 or frame.shape[1] != 640:
+                # crop the center of the image to 640x360
+                x_center = RESOLUTION[0] // 2
+                y_center = RESOLUTION[1] // 2
+                x_start = (frame.shape[1] // 2) - x_center  
+                y_start = (frame.shape[0] // 2) - y_center
+                frame = frame[y_start:y_start + RESOLUTION[1], x_start:x_start + RESOLUTION[0]]
+
+            for i in range(self.detection_times):
+            #while True:
                 flag, msg = rclpy.wait_for_message.wait_for_message(topic=image_topic,
                                                                     msg_type=Image,
                                                                     node=self,
@@ -144,23 +172,30 @@ class InteractiveCameraCalibration(Node):
                 
                 image_cv = bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
+                # create an overlapped image between image_cv and frame
+                self.get_logger().info(f'Shape current frame from video: {frame.shape}, Shape image from topic: {image_cv.shape}')
+                alpha = 0.5
+                overlapped_image = cv2.addWeighted(image_cv, alpha, frame, 1 - alpha, 0)
+                # show the overlapped image
+                cv2.imshow(overlapped_image_window_name, overlapped_image)
+
+
                 # save image
                 pil_img = PILImage.fromarray(cv2.cvtColor(image_cv, cv2.COLOR_BGR2RGB))
                 os.makedirs(os.path.join('src', 'zed_camera', 'zed_camera_calibration','calibration_images'), exist_ok=True)
-                img_save_path = os.path.join('src', 'zed_camera', 'zed_camera_calibration','calibration_images', f'{camera_name}_image_{i+1}.png')
+                img_save_path = os.path.join('src', 'zed_camera', 'zed_camera_calibration','calibration_images', f'{camera_name}_image.png')
                 pil_img.save(img_save_path)
 
                 cv2.putText(
                     image_cv,
-                    f'Detection {i+1}/{self.detection_times}',
+                    f'Detection', #{i+1}/{self.detection_times}',
                     (20, 40),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     1.0,
                     (0, 255, 0),
                     2
                 )   
-
-                #
+                
                 cv2.imshow(window_name, image_cv)
   
                 # Perform ArUco detection here
@@ -211,8 +246,11 @@ class InteractiveCameraCalibration(Node):
                 # Show the image with detected markers
                 cv2.imshow(aruco_window_name, image_cv)
                 # wait for enter key
-                self.get_logger().info(f'\tPress ENTER to capture image {i+1}/{self.detection_times} for camera {camera_name}...')
-                cv2.waitKey(0)  # Wait indefinitely for a key press
+                # self.get_logger().info(f'\tPress ENTER to capture image {i+1}/{self.detection_times} for camera {camera_name}...')
+                # cv2.waitKey(0)  # Wait indefinitely for a key press
+                # wait for 1 second before next capture
+                self.get_logger().info(f'\tWaiting 1 second before next capture for camera {camera_name}...')
+                key = cv2.waitKey(1000)  # Wait for 1 second
 
             # Average position and orientation
             if self.estimated_position_list and self.estimated_orientation_list:
