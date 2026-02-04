@@ -138,26 +138,27 @@ class InteractiveCameraCalibration(Node):
             if "front" in camera_name.lower():
                 traj_name = "traj000_camera_front_image.png"
             elif "left" in camera_name.lower():
-                traj_name = "traj000_camera_lateral_left_image.png"
+                traj_name = "traj000_camera_lateral_left_image.png" #"traj000_camera_lateral_left_image.png"
             elif "right" in camera_name.lower():
                 traj_name = "traj000_camera_lateral_right_image.png"
-            frane_path = f"src/zed_camera/zed_camera_calibration/{traj_name}"
-            # # take the first frame from video
-            # cap = cv2.VideoCapture(video_path)
-            # ret, frame = cap.read()
-            # if not ret:
-            #     self.get_logger().error(f'Failed to read video file: {video_path}')
-            #     exit(1)
-            # load image
-            frame = cv2.imread(frane_path)
-
-            if frame.shape[0] != 360 or frame.shape[1] != 640:
-                # crop the center of the image to 640x360
-                x_center = RESOLUTION[0] // 2
-                y_center = RESOLUTION[1] // 2
-                x_start = (frame.shape[1] // 2) - x_center  
-                y_start = (frame.shape[0] // 2) - y_center
-                frame = frame[y_start:y_start + RESOLUTION[1], x_start:x_start + RESOLUTION[0]]
+            frame_path = f"src/zed_camera/zed_camera_calibration/{traj_name}"
+            # take the first frame from video
+            if 'mp4' in frame_path:
+                cap = cv2.VideoCapture(frame_path)
+                ret, frame = cap.read()
+                if not ret:
+                    self.get_logger().error(f'Failed to read video file: {frame_path}')
+                    exit(1)
+            else:
+                # load image
+                frame = cv2.imread(frame_path)
+            # if frame.shape[0] != 360 or frame.shape[1] != 640:
+            #     # crop the center of the image to 640x360
+            #     x_center = RESOLUTION[0] // 2
+            #     y_center = RESOLUTION[1] // 2
+            #     x_start = (frame.shape[1] // 2) - x_center  
+            #     y_start = (frame.shape[0] // 2) - y_center
+            #     frame = frame[y_start:y_start + RESOLUTION[1], x_start:x_start + RESOLUTION[0]]
 
             for i in range(self.detection_times):
             #while True:
@@ -246,8 +247,8 @@ class InteractiveCameraCalibration(Node):
                 # Show the image with detected markers
                 cv2.imshow(aruco_window_name, image_cv)
                 # wait for enter key
-                # self.get_logger().info(f'\tPress ENTER to capture image {i+1}/{self.detection_times} for camera {camera_name}...')
-                # cv2.waitKey(0)  # Wait indefinitely for a key press
+                #self.get_logger().info(f'\tPress ENTER to capture image {i+1}/{self.detection_times} for camera {camera_name}...')
+                #cv2.waitKey(0)  # Wait indefinitely for a key press
                 # wait for 1 second before next capture
                 self.get_logger().info(f'\tWaiting 1 second before next capture for camera {camera_name}...')
                 key = cv2.waitKey(1000)  # Wait for 1 second
