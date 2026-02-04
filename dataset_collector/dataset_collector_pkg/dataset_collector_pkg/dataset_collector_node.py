@@ -1,23 +1,19 @@
 import rclpy
 from rclpy.node import Node
-from ur5e_2f_85_teleoperation.teleoperator_node import Teleoperator
-
+from dataset_collector_pkg.dataset_collector import DatasetCollector
 
 def main(args=None):
     rclpy.init(args=args)
     
-    teleoperator = Teleoperator()
+    dataset_collector = DatasetCollector()
 
-    rclpy.spin(teleoperator)
+    rclpy.spin(dataset_collector)
 
     # Destroy the node explicitly
     # (optional - otherwise it will be done automatically
     # when the garbage collector destroys the node object)
-    teleoperator.destroy_node()
+    dataset_collector.destroy_node()
     rclpy.shutdown()
-
-    
-
 
 if __name__ == '__main__':
     main()

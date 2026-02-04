@@ -1,0 +1,27 @@
+camera_names:
+  - zed_front
+  - zed_left
+  - zed_right
+
+show_images:
+  - false # True to show debug cv2 windows with camera images
+
+human_record:
+  - false # True to record human demos, false to record robot demos through teleop
+
+eef_frame_name:
+  - tcp_link
+
+ur_topics_to_record:
+  - /joint_states
+
+teleop_state_topic: /teleop_state
+
+controller_to_run: scaled_joint_trajectory_controller
+controller_to_stop: forward_position_controller
+
+task_name: pick_and_place
+variation_id: 0
+traj_count_id: 0
+
+saving_directory: /home/user/saved_trajectories

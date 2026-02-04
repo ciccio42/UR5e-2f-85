@@ -123,7 +123,10 @@ class Teleoperator(Node):
         future_switch = client_switch.call_async(request_switch) 
         rclpy.spin_until_future_complete(self, future_switch)
         if future_switch.result() is not None:
-            self.get_logger().info(f'Switched controllers: stopped {self.controller_to_stop}, started {self.controller_to_run}')
+            if future_switch.result():
+                self.get_logger().info(f'Switched controllers: stopped {self.controller_to_stop}, started {self.controller_to_run}')
+            else:
+                self.get_logger().error('Failed to switch controllers')
         else:
             self.get_logger().error('Failed to switch controllers')
 
@@ -229,6 +232,7 @@ class Teleoperator(Node):
             self._previous_trajectory_state_button_state = 0
 
         # Publish the trajectory state
+        self._trajectory_state_msg.header.stamp = self.get_clock().now().to_msg()
         self.telop_state.publish(self._trajectory_state_msg)
 
 
