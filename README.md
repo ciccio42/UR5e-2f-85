@@ -387,7 +387,7 @@ docker image prune -f
 
 * [X] Integrate Teleoperation
 * [] Integrate DatasetCollection
-  + [] Moveit home position
+  + [X] Moveit home position
   + [] Save trajectories
 * [] Controllers
   + [] Dataset trajectory reply

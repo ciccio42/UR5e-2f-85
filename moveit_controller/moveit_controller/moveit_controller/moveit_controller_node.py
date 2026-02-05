@@ -23,9 +23,12 @@ def main(args=None):
     executor = MultiThreadedExecutor()
     executor.add_node(node)
 
+    # Add 
+
     try:
         node.get_logger().info('Beginning client, shut down with CTRL-C')
         executor.spin()
+        node.get_logger().info('Shutting down moveit_controller_node.\n')
     except KeyboardInterrupt:
         node.get_logger().info('Keyboard interrupt, shutting down.\n')
     node.destroy_node()

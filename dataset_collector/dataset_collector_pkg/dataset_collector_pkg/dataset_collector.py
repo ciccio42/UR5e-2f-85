@@ -103,29 +103,29 @@ class DatasetCollector(Node):
                 return
             self.get_logger().info('Robot set to home position successfully.')
 
-        # # Create Time Synchronizer
-        # self.list_of_subs = self.camera_subscribers_rgb + self.camera_subscribers_depth + self.ur_topics_record_subscribers + [self.teleop_state_subscriber]
-        # if self.show_images:
-        #     self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
-        #                                         queue_size=10, 
-        #                                         slop=5.0)
-        # else:
-        #     self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
-        #                                         queue_size=10, 
-        #                                         slop=1.0)
+        # Create Time Synchronizer
+        self.list_of_subs = self.camera_subscribers_rgb + self.camera_subscribers_depth + self.ur_topics_record_subscribers + [self.teleop_state_subscriber]
+        if self.show_images:
+            self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
+                                                queue_size=10, 
+                                                slop=5.0)
+        else:
+            self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
+                                                queue_size=10, 
+                                                slop=1.0)
                 
-        # self.ts.registerCallback(self.synced_callback)
+        self.ts.registerCallback(self.synced_callback)
 
-        # self.get_logger().info(f'Configuration: \n'
-        #                        f'Camera Names: {self.camera_names}\n'
-        #                        f'EEF Frame Name: {self.eef_frame_name}\n'
-        #                        f'Show Images: {self.show_images}\n'
-        #                        f'UR Topics to Record: {self.ur_topics_to_record}\n'
-        #                        f'Teleop State Topic: {self.teleop_state_topic}\n'
-        #                        f'Human Demo: {self.human_demo}\n'
-        #                        f'Task Name: {self.task_name}\n'
-        #                        f'Variation ID: {self.variation_id}\n'
-        #                        f'Traj Count ID: {self.traj_count_id}\n')
+        self.get_logger().info(f'Configuration: \n'
+                               f'Camera Names: {self.camera_names}\n'
+                               f'EEF Frame Name: {self.eef_frame_name}\n'
+                               f'Show Images: {self.show_images}\n'
+                               f'UR Topics to Record: {self.ur_topics_to_record}\n'
+                               f'Teleop State Topic: {self.teleop_state_topic}\n'
+                               f'Human Demo: {self.human_demo}\n'
+                               f'Task Name: {self.task_name}\n'
+                               f'Variation ID: {self.variation_id}\n'
+                               f'Traj Count ID: {self.traj_count_id}\n')
     
     def set_robot_to_home_position(self):
         # Implement the logic to set the robot to home position
@@ -156,7 +156,7 @@ class DatasetCollector(Node):
         if teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_IDLE:
             self.get_logger().info('Teleop state is IDLE...')  
         elif teleop_state_msg.trajectory_state != TrajectoryState.TRAJECTORY_END:
-            # self.get_logger().info(f'Teleop state is {teleop_state_msg.trajectory_state}...')
+            self.get_logger().info(f'Teleop state is {teleop_state_msg.trajectory_state}...')
             if self.show_images:
                 bridge = CvBridge()
                 for i in range(num_cameras):
@@ -185,7 +185,12 @@ class DatasetCollector(Node):
             # Close cv2 windows if open
             if self.show_images:
                 cv2.destroyAllWindows()
-            
 
-            # sav trajectory
+            # move robot to home position if not human demo
+            if not self.human_demo:
+                self.get_logger().info('Setting robot to home position after trajectory end...')
+                if not self.set_robot_to_home_position():
+                    self.get_logger().error('Could not set robot to home position after trajectory end.')
+
+            # save trajectory
             raise NotImplementedError('Trajectory saving not implemented yet.')
