@@ -3,13 +3,13 @@ from rclpy.node import Node
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 from sensor_msgs.msg import Image, JointState
 from controller_manager_msgs.srv import LoadController, SwitchController, ListControllers
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from ur5e_2f_85_teleoperation_msg.msg import TrajectoryState
 import cv2
 from cv_bridge import CvBridge 
 from geometry_msgs.msg import Pose
 import time
-from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, JointConstraint
+from moveit_controller_srvs.srv import GoHome
 
 class DatasetCollector(Node):
 
@@ -25,7 +25,7 @@ class DatasetCollector(Node):
         self.camera_names = self.get_parameter('camera_names').get_parameter_value().string_array_value
 
         # Debug cv2 window
-        self.declare_parameter('show_images', True)
+        self.declare_parameter('show_images', False)
         self.show_images = self.get_parameter('show_images').get_parameter_value().bool_value
         if self.show_images:
             # create cv2 windows
@@ -45,13 +45,6 @@ class DatasetCollector(Node):
         # Teleop state topic
         self.declare_parameter('teleop_state_topic', '/teleop_trajectory_state')
         self.teleop_state_topic = self.get_parameter('teleop_state_topic').get_parameter_value().string_value
-
-        # Controller names
-        self.declare_parameter('controller_to_run', 'scaled_joint_trajectory_controller')
-        self.controller_to_run = self.get_parameter('controller_to_run').get_parameter_value().string_value
-        self.declare_parameter('controller_to_stop', 'forward_position_controller')
-        self.controller_to_stop = self.get_parameter('controller_to_stop').get_parameter_value().string_value
-
 
         # Human demos
         self.declare_parameter('human_demo', False)
@@ -94,10 +87,21 @@ class DatasetCollector(Node):
 
 
         # Set the robot to home position if not human demo
-        # if not self.human_demo:
-        #     # Wait for user to press enter
-        #     input('Press Enter to set the robot to home position...')
-        #     self.set_robot_to_home_position()
+        if not self.human_demo:
+            # Wait for user to press enter
+            self.get_logger().info('Setting robot to home position before starting dataset collection...')
+            self.go_home_service_callback_group = ReentrantCallbackGroup()
+            self.go_home_service = self.create_client(GoHome, 
+                                                      'set_robot_to_home',
+                                                      callback_group=self.go_home_service_callback_group)
+            while not self.go_home_service.wait_for_service(timeout_sec=1.0):
+                self.get_logger().info('set_robot_to_home service not available, waiting again...')
+
+            input('Press Enter to set the robot to home position...')
+            if not self.set_robot_to_home_position():
+                self.get_logger().error('Could not set robot to home position. Exiting...')
+                return
+            self.get_logger().info('Robot set to home position successfully.')
 
         # # Create Time Synchronizer
         # self.list_of_subs = self.camera_subscribers_rgb + self.camera_subscribers_depth + self.ur_topics_record_subscribers + [self.teleop_state_subscriber]
@@ -123,101 +127,20 @@ class DatasetCollector(Node):
         #                        f'Variation ID: {self.variation_id}\n'
         #                        f'Traj Count ID: {self.traj_count_id}\n')
     
-    def load_and_start_controller(self, controller_to_run=None, controller_to_stop=None):
-        # check whether the controller is already loaded
-        client_controller_state = self.create_client(ListControllers,
-                                                     '/controller_manager/list_controllers')
-        while not client_controller_state.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service /controller_manager/list_controllers not available, waiting again...')
-        client_controller_state_request = ListControllers.Request()
-        future_controller_state = client_controller_state.call_async(client_controller_state_request)
-        rclpy.spin_until_future_complete(self, future_controller_state)
-        controllers = future_controller_state.result().controller
-        for controller in controllers:
-            self.get_logger().info(f'Found controller: {controller.name} with state {controller.state}')
-            if controller.name == controller_to_run and controller.state == 'active':
-                self.get_logger().info(f'Controller {controller_to_run} is already running.')
-                return True  # No need to load and start
-
-        # Load the controller to run
-        client_switch = self.create_client(SwitchController, '/controller_manager/switch_controller')
-        while not client_switch.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info('service /controller_manager/switch_controller not available, waiting again...')
-        
-        request_switch = SwitchController.Request()
-        request_switch.deactivate_controllers = [str(controller_to_stop)]
-        request_switch.activate_controllers = [str(controller_to_run)]
-        request_switch.strictness = SwitchController.Request.STRICT
-        request_switch.activate_asap = True
-
-        future_switch = client_switch.call_async(request_switch) 
-        rclpy.spin_until_future_complete(self, future_switch)
-        if future_switch.result() is not None:
-            if future_switch.result().success:
-                self.get_logger().info(f'Switched controllers: stopped {controller_to_stop}, started {controller_to_run}')
-                return True
-            else:
-                self.get_logger().error('Failed to switch controllers')
-                return False
-        else:
-            self.get_logger().error('Failed to switch controllers')
-            return False
-    
-    
     def set_robot_to_home_position(self):
         # Implement the logic to set the robot to home position
         self.get_logger().info('Setting robot to home position')
         
-        # Change controller to scaled joint trajectory controller
-        if not self.load_and_start_controller(controller_to_run=self.controller_to_run, 
-                                              controller_to_stop=self.controller_to_stop):
-            self.get_logger().error('Could not start the required controller to set robot to home position.')
-            raise RuntimeError('Could not start the required controller to set robot to home position.')
-        else:
-            # Wait a bit for connection
-            time.sleep(2.0)
-
-            # ---- Check available named targets ----
-            targets = self.move_group.get_named_targets()
-            self.get_logger().info(f"Available named targets: {targets}")
-
-            if "start_scene_arm_tcp" not in targets:
-                self.get_logger().error(
-                    "NO 'start_scene_arm_tcp' named target found in SRDF! "
-                    "Check ur5e_2f_85.srdf group_state definitions."
-                )
-                raise RuntimeError("Missing start_scene_arm_tcp position in MoveIt config")
-
-            # ---- Plan to start_scene_arm_tcp ----
-            self.move_group.set_named_target("start_scene_arm_tcp")
-            self.get_logger().info("Planning motion to start_scene_arm_tcp...")
-            plan = self.move_group.plan()
-
-            # plan() in ROS2 returns tuple (success, plan, planning_time, error_code)
-            if isinstance(plan, tuple):
-                success = plan[0]
+        request = GoHome.Request()
+        future = self.go_home_service.call_async(request)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            if future.result().success:
+                self.get_logger().info(f'{future.result().message}')
+                return True
             else:
-                success = plan
-
-            if not success:
-                self.get_logger().error("MoveIt planning to start_scene_arm_tcp failed")
-                raise RuntimeError("Planning failed")
-
-            # ---- Execute ----
-            self.get_logger().info("Executing motion to start_scene_arm_tcp...")
-            result = self.move_group.go(wait=True)
-
-            # Stop residual motion
-            self.move_group.stop()
-            self.move_group.clear_pose_targets()
-
-            if result:
-                self.get_logger().info("Robot successfully reached start_scene_arm_tcp position")
-            else:
-                self.get_logger().error("Execution to start_scene_arm_tcp failed")
-                raise RuntimeError("Execution failed")
-
-
+                self.get_logger().error('Failed to set robot to home position: ' + future.result().message)
+                return False
 
         
     def synced_callback(self, *args):
@@ -232,7 +155,7 @@ class DatasetCollector(Node):
 
         if teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_IDLE:
             self.get_logger().info('Teleop state is IDLE...')  
-        elif teleop_state_msg.trajectory_state != TrajectoryState.TRAJECTORY_START:
+        elif teleop_state_msg.trajectory_state != TrajectoryState.TRAJECTORY_END:
             # self.get_logger().info(f'Teleop state is {teleop_state_msg.trajectory_state}...')
             if self.show_images:
                 bridge = CvBridge()
@@ -247,8 +170,22 @@ class DatasetCollector(Node):
                     cv2.imshow(f'Depth {self.camera_names[i]}', cv_depth_image)
 
                 cv2.waitKey(1)  # Needed to update the cv2 windows
+
+            # prepare observations
+
+            # prepare actions
+
+            # save step data
                 
         elif teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END:
             # save traj
-            pass
+            self.get_logger().info(f'Teleop state is END\nSaving trajectory data {self.traj_count_id} for task {self.task_name}, variation {self.variation_id}...')
+            self.traj_count_id += 1
+
+            # Close cv2 windows if open
+            if self.show_images:
+                cv2.destroyAllWindows()
             
+
+            # sav trajectory
+            raise NotImplementedError('Trajectory saving not implemented yet.')

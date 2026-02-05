@@ -17,8 +17,7 @@ ur_topics_to_record:
 
 teleop_state_topic: /teleop_state
 
-controller_to_run: scaled_joint_trajectory_controller
-controller_to_stop: forward_position_controller
+set_robot_to_home_service: /set_robot_to_home
 
 task_name: pick_and_place
 variation_id: 0

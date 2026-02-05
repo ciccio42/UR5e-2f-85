@@ -1,6 +1,6 @@
+
 import rclpy
-from rclpy.node import Node
-from dataset_collector_pkg.dataset_collector import DatasetCollector
+from moveit_controller.moveit_controller import MoveItControllerNode
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 
@@ -8,18 +8,18 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 def main(args=None):
     # rclpy.init(args=args)
     
-    # dataset_collector = DatasetCollector()
+    # moveit_controller_node = MoveItControllerNode()
 
-    # rclpy.spin(dataset_collector)
+    # # rclpy.spin(moveit_controller_node)
 
     # # Destroy the node explicitly
     # # (optional - otherwise it will be done automatically
     # # when the garbage collector destroys the node object)
-    # dataset_collector.destroy_node()
+    # moveit_controller_node.destroy_node()
     # rclpy.shutdown()
 
     rclpy.init()
-    node = DatasetCollector()
+    node = MoveItControllerNode()
     executor = MultiThreadedExecutor()
     executor.add_node(node)
 
@@ -30,7 +30,6 @@ def main(args=None):
         node.get_logger().info('Keyboard interrupt, shutting down.\n')
     node.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == '__main__':
     main()

@@ -299,6 +299,7 @@ docker run -it --rm \
   -v /dev/input:/dev/input \
   -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
   -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/dataset_collector:/home/ros2_ws/src/dataset_collector \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/moveit_controller:/home/ros2_ws/src/moveit_controller \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
 ```
@@ -357,6 +358,7 @@ ros2 launch zed_camera_driver zed_multi_camera.launch.py \
 
 **Docker-1: Launch Dataset-Collector**
 ```bash
+docker exec -it ur_robotiq_teleoperation_container  bash
 
 ```
 
@@ -385,5 +387,7 @@ docker image prune -f
 
 * [X] Integrate Teleoperation
 * [] Integrate DatasetCollection
-  * Moveit home position
-  * Save trajectories
+  + [] Moveit home position
+  + [] Save trajectories
+* [] Controllers
+  + [] Dataset trajectory reply
