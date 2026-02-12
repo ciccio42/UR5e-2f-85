@@ -48,7 +48,7 @@
     <group_state name="home" group="arm">
         <joint name="elbow_joint" value="2.62"/>
         <joint name="shoulder_lift_joint" value="-2.35"/>
-        <joint name="shoulder_pan_joint" value="-1.57"/>
+        <joint name="shoulder_pan_joint" value="1.57"/>
         <joint name="wrist_1_joint" value="-2.35"/>
         <joint name="wrist_2_joint" value="-1.57"/>
         <joint name="wrist_3_joint" value="0"/>
@@ -56,7 +56,7 @@
     <group_state name="home_tcp" group="arm_tcp">
         <joint name="elbow_joint" value="2.62"/>
         <joint name="shoulder_lift_joint" value="-2.35"/>
-        <joint name="shoulder_pan_joint" value="-1.57"/>
+        <joint name="shoulder_pan_joint" value="1.57"/>
         <joint name="wrist_1_joint" value="-2.35"/>
         <joint name="wrist_2_joint" value="-1.57"/>
         <joint name="wrist_3_joint" value="0"/>
@@ -64,7 +64,7 @@
     <group_state name="start_scene_arm_tcp" group="arm_tcp">
         <joint name="elbow_joint" value="2.35"/>
         <joint name="shoulder_lift_joint" value="-2.35"/>
-        <joint name="shoulder_pan_joint" value="-1.57"/>
+        <joint name="shoulder_pan_joint" value="1.57"/>
         <joint name="wrist_1_joint" value="-1.57"/>
         <joint name="wrist_2_joint" value="-1.57"/>
         <joint name="wrist_3_joint" value="0"/>

@@ -304,6 +304,42 @@ docker run -it --rm \
   ur_robotiq_teleoperation
 ```
 
+### For real-world robot
+```bash
+docker build -t ur_robotiq_teleoperation . -f UR_Robotiq_Teleoperation
+xhost +local:docker
+docker run -it --rm \
+  --gpus all \
+  --privileged \
+  --cap-add=SYS_NICE \
+  --cpuset-cpus="0-1" \
+  --network host \
+  --ipc=host \
+  --pid=host \
+  --ulimit memlock=-1:-1 \
+  --ulimit rtprio=99 \
+  --shm-size=1g \
+  --security-opt seccomp=unconfined \
+  -e DISPLAY=$DISPLAY \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e XDG_RUNTIME_DIR=/tmp/runtime-root \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /dev/input:/dev/input \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/dataset_collector:/home/ros2_ws/src/dataset_collector \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/moveit_controller:/home/ros2_ws/src/moveit_controller \
+  --name ur_robotiq_teleoperation_container \
+  ur_robotiq_teleoperation
+
+
+# Only the first time
+ros2 launch ur_calibration calibration_correction.launch.py \
+  robot_ip:=192.168.1.100 \
+  target_filename:="/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml"
+
+```
+
 **Zed-Docker**
 ```bash
 source zed-build-docker-image.sh
@@ -330,13 +366,33 @@ docker run -it --rm \
 
 **Docker-1: Launch UR-Driver**
 ```bash
-# Launch external-controller
+# Launch external-controller [SIM]
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
   robot_ip:=192.168.56.101 \
   kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/sim_calibration.yaml \
   description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
   launch_rviz:=false
+
+# Launch external-controller [REAL - With Gripper]
+ros2 launch ur_robot_driver ur_control.launch.py \
+  ur_type:=ur5e \
+  robot_ip:=192.168.1.100 \
+  use_tool_communication:=true \
+  tool_voltage:=24 \
+  tool_parity:=0 \
+  tool_baud_rate:=115200 \
+  tool_stop_bits:=1 \
+  tool_rx_idle_chars:=1.5 \
+  tool_tx_idle_chars:=3.5 \
+  tool_device_name:=/tmp/ttyUR \
+  kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml \
+  controllers_file:=/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/config/ur5e_2f_85_controllers.yaml \
+  description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
+  launch_rviz:=false
+
+# Run Gripper Drivers
+ros2 launch ur5e_2f_85_description robotiq_2f_85.launch.py
 
 # Launch Movegroup
 docker exec -it ur_robotiq_teleoperation_container  bash
@@ -345,6 +401,11 @@ ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=tr
 # Launch Teleoperation Node
 docker exec -it ur_robotiq_teleoperation_container  bash
 ros2 launch ur5e_2f_85_teleoperation ur5e_teleoperation.launch.py
+
+# Run moveit_controller 
+docker exec -it ur_robotiq_teleoperation_container  bash
+ros2 run moveit_controller moveit_controller_node
+
 ```
 
 **Docker-2: Launch Zed-Camera Drivers**
@@ -360,6 +421,7 @@ ros2 launch zed_camera_driver zed_multi_camera.launch.py \
 ```bash
 docker exec -it ur_robotiq_teleoperation_container  bash
 
+ros2 run dataset_collector_pkg dataset_collector_node
 ```
 
 

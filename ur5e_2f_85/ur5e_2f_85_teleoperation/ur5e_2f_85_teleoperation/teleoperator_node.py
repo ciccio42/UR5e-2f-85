@@ -148,7 +148,7 @@ class Teleoperator(Node):
         # R2 → +Z, L2 → -Z
         z_vel = 0.0
         # Triggers usually report 1.0 (released) → -1.0 (pressed)
-        l2_raw = msg.axes[4]
+        l2_raw = msg.axes[2]
         r2_raw = msg.axes[5]
 
         # mainly at the beginning
@@ -173,14 +173,14 @@ class Teleoperator(Node):
         # =========================
 
         # Right joystick
-        command_msg.twist.angular.x = msg.axes[3] * self.angular_scale
-        command_msg.twist.angular.y = msg.axes[2] * self.angular_scale
+        command_msg.twist.angular.x = msg.axes[4] * self.angular_scale
+        command_msg.twist.angular.y = msg.axes[3] * self.angular_scale
 
         # Buttons for Z rotation
         angular_z = 0.0
-        if msg.buttons[9] == 1:
+        if msg.buttons[4] == 1:
             angular_z = +4.0 * self.angular_scale   # CCW
-        elif msg.buttons[10] == 1:
+        elif msg.buttons[5] == 1:
             angular_z = -4.0 * self.angular_scale   # CW
 
         command_msg.twist.angular.z = angular_z

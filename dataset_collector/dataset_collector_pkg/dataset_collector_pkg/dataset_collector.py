@@ -4,13 +4,15 @@ from message_filters import Subscriber, ApproximateTimeSynchronizer
 from sensor_msgs.msg import Image, JointState
 from controller_manager_msgs.srv import LoadController, SwitchController, ListControllers
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+import tf2_ros
 from ur5e_2f_85_teleoperation_msg.msg import TrajectoryState
 import cv2
 from cv_bridge import CvBridge 
 from geometry_msgs.msg import Pose
 import time
 from moveit_controller_srvs.srv import GoHome
-
+from dataset_collector_pkg.utils import *
+import numpy as np
 class DatasetCollector(Node):
 
     def __init__(self):
@@ -35,7 +37,7 @@ class DatasetCollector(Node):
                 cv2.namedWindow(f'Depth {camera_name}', cv2.WINDOW_NORMAL)
 
         # EEF frame name
-        self.declare_parameter('eef_frame_name', '/tcp_link')
+        self.declare_parameter('eef_frame_name', 'tcp_link')
         self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
 
         # Topics to record
@@ -113,7 +115,12 @@ class DatasetCollector(Node):
             self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
                                                 queue_size=10, 
                                                 slop=1.0)
-                
+
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        while not self.wait_for_tf(timeout=10.0):
+            self.get_logger().warn('Waiting for TF between base_link and EEF frame to become available...')
+
         self.ts.registerCallback(self.synced_callback)
 
         self.get_logger().info(f'Configuration: \n'
@@ -126,7 +133,28 @@ class DatasetCollector(Node):
                                f'Task Name: {self.task_name}\n'
                                f'Variation ID: {self.variation_id}\n'
                                f'Traj Count ID: {self.traj_count_id}\n')
-    
+
+    def wait_for_tf(self, timeout=5.0):
+        
+        start = self.get_clock().now()
+
+        while rclpy.ok():
+            # allow callbacks to be processed
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+            if self.tf_buffer.can_transform(
+                'base_link',
+                self.eef_frame_name,
+                rclpy.time.Time()
+            ):
+                self.get_logger().info("TF available!")
+                return True
+
+            if (self.get_clock().now() - start).nanoseconds * 1e-9 > timeout:
+                self.get_logger().error("Timeout waiting for TF")
+                return False
+
+
     def set_robot_to_home_position(self):
         # Implement the logic to set the robot to home position
         self.get_logger().info('Setting robot to home position')
@@ -151,7 +179,10 @@ class DatasetCollector(Node):
         rgb_images = args[0:num_cameras]
         depth_images = args[num_cameras:2*num_cameras]
         ur_msgs = args[2*num_cameras:2*num_cameras + len(self.ur_topics_to_record)]
+        # self.get_logger().info(f'{ur_msgs} UR messages.')
         teleop_state_msg = args[-1]
+
+        obs = dict()
 
         if teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_IDLE:
             self.get_logger().info('Teleop state is IDLE...')  
@@ -172,8 +203,32 @@ class DatasetCollector(Node):
                 cv2.waitKey(1)  # Needed to update the cv2 windows
 
             # prepare observations
+            if len(ur_msgs) == 1 and isinstance(ur_msgs[0], JointState):
+                self.get_logger().info('Recording joint states from /joint_states topic...')
+                obs[JOINT_POS_NAME] = np.array(ur_msgs[0].position) 
+                obs[JOINT_VEL_NAME] = np.array(ur_msgs[0].velocity)
+                self.get_logger().info(f'Joint positions: {obs[JOINT_POS_NAME]}')
+                self.get_logger().info(f'Joint velocities: {obs[JOINT_VEL_NAME]}')
+            else:
+                self.get_logger().warn('No joint states received or multiple UR messages received, skipping joint state recording for this step.')
 
+            # eef pose
+            try:
+                now = rclpy.time.Time()
+                trans = self.tf_buffer.lookup_transform('base_link', self.eef_frame_name, now)
+                obs[EEF_POS_NAME] = [trans.transform.translation.x, 
+                                     trans.transform.translation.y,
+                                     trans.transform.translation.z]
+                obs[EEF_QUAT_NAME] = [trans.transform.rotation.x,
+                                      trans.transform.rotation.y,
+                                      trans.transform.rotation.z,
+                                      trans.transform.rotation.w]
+            except Exception as e:
+                self.get_logger().error(f'Error looking up TF for EEF pose: {e}')
+                
             # prepare actions
+            
+
 
             # save step data
                 
