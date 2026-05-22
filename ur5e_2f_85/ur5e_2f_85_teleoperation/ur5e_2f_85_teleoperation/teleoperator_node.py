@@ -8,6 +8,8 @@ from moveit_msgs.srv import ServoCommandType
 from ur5e_2f_85_teleoperation_msg.msg import TrajectoryState
 from ur5e_2f_85_teleoperation.utils import *
 from sensor_msgs.msg import JoyFeedback
+from control_msgs.action import GripperCommand
+from rclpy.action import ActionClient
 class Teleoperator(Node):
     
     def __init__(self):
@@ -17,6 +19,7 @@ class Teleoperator(Node):
         self.declare_parameter('controller_to_stop', 'scaled_joint_trajectory_controller')
         self.declare_parameter('controller_to_run', 'forward_position_controller')
         self.declare_parameter('topic_servo', '/delta_twist_cmds')
+        self.declare_parameter('gripper_action_topic', '/robotiq_gripper_controller/gripper_cmd')
         self.declare_parameter('topic_name', '/joy')
         self.declare_parameter('linear_scale', 1.0)
         self.declare_parameter('angular_scale', 1.0)
@@ -28,6 +31,7 @@ class Teleoperator(Node):
         self.topic_name = self.get_parameter('topic_name').get_parameter_value().string_value
         self.linear_scale = self.get_parameter('linear_scale').get_parameter_value().double_value
         self.angular_scale = self.get_parameter('angular_scale').get_parameter_value().double_value
+        self.gripper_action_topic = self.get_parameter('gripper_action_topic').get_parameter_value().string_value
 
         self.load_and_start_controller()
 
@@ -82,7 +86,13 @@ class Teleoperator(Node):
             JoyFeedback,
             '/joy/set_feedback',
             10)
-        
+            
+        # create action client for gripper control
+        self._gripper_action_client = ActionClient(self, GripperCommand, self.gripper_action_topic)
+        while not self._gripper_action_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().info(f'service {self.gripper_action_topic} not available, waiting again...')
+        self.gripper_state = 'open'  # Track the state of the gripper
+        self._previous_gripper_toggle_button_state = 0
 
         self.get_logger().info(f"Teleoperator Init ok.Parameters: \
                                 \nStopped Controller Name: {self.controller_to_stop},\
@@ -90,7 +100,7 @@ class Teleoperator(Node):
                                 \ntopic_name: {self.topic_name},\
                                 \nlinear_scale: {self.linear_scale},\
                                 \nangular_scale: {self.angular_scale} \
-                                \nHID Path: {self._hid_path}")
+                                \nHID Path: {self._hid_path}\nGripper Action Topic: {self.gripper_action_topic}")
         
 
     def load_and_start_controller(self):
@@ -141,14 +151,14 @@ class Teleoperator(Node):
         # =========================
 
         # Left joystick
-        command_msg.twist.linear.x = msg.axes[0] * self.linear_scale
-        command_msg.twist.linear.y = -msg.axes[1] * self.linear_scale  # keep your sign convention
+        command_msg.twist.linear.x = -msg.axes[0] * self.linear_scale
+        command_msg.twist.linear.y = msg.axes[1] * self.linear_scale  # keep your sign convention
 
         # Triggers for Z motion
         # R2 → +Z, L2 → -Z
         z_vel = 0.0
         # Triggers usually report 1.0 (released) → -1.0 (pressed)
-        l2_raw = msg.axes[2]
+        l2_raw = msg.axes[4] #msg.axes[2]
         r2_raw = msg.axes[5]
 
         # mainly at the beginning
@@ -173,14 +183,14 @@ class Teleoperator(Node):
         # =========================
 
         # Right joystick
-        command_msg.twist.angular.x = msg.axes[4] * self.angular_scale
-        command_msg.twist.angular.y = msg.axes[3] * self.angular_scale
+        command_msg.twist.angular.x = msg.axes[3] * self.angular_scale #msg.axes[4] * self.angular_scale
+        command_msg.twist.angular.y = msg.axes[2] * self.angular_scale #msg.axes[3] * self.angular_scale
 
         # Buttons for Z rotation
         angular_z = 0.0
-        if msg.buttons[4] == 1:
+        if msg.buttons[10] == 1:#msg.buttons[4] == 1:
             angular_z = +4.0 * self.angular_scale   # CCW
-        elif msg.buttons[5] == 1:
+        elif msg.buttons[9] == 1: #msg.buttons[5] == 1:
             angular_z = -4.0 * self.angular_scale   # CW
 
         command_msg.twist.angular.z = angular_z
@@ -212,6 +222,7 @@ class Teleoperator(Node):
         # Check the Button to Change Trajectory State
         # press circle button to change trajectory state
         # =========================
+        # self.get_logger().info(f"Trajectory State: {self._trajectory_state_msg.trajectory_state}")
         if msg.buttons[1] == 1 and self._previous_trajectory_state_button_state == 0:
             self._previous_trajectory_state_button_state = 1
             if self._trajectory_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_IDLE:
@@ -230,6 +241,26 @@ class Teleoperator(Node):
                 self._trajectory_state_msg.trajectory_state = TrajectoryState.TRAJECTORY_IDLE
         elif msg.buttons[1] == 0 and self._previous_trajectory_state_button_state == 1:
             self._previous_trajectory_state_button_state = 0
+
+        if msg.buttons[3] == 1 and self._previous_gripper_toggle_button_state == 0:
+            self._previous_gripper_toggle_button_state = 1
+            if self.gripper_state == 'open':
+                # self.get_logger().info("Closing gripper")
+                self.gripper_state = 'closed'
+                goal_msg = GripperCommand.Goal()
+                goal_msg.command.position = 0.8  # Closed position
+                goal_msg.command.max_effort = 50.0  # Max effort
+                self._gripper_action_client.send_goal_async(goal_msg)
+            else:
+                # self.get_logger().info("Opening gripper")
+                self.gripper_state = 'open'
+                goal_msg = GripperCommand.Goal()
+                goal_msg.command.position = 0.1  # Open position (adjust as needed)
+                goal_msg.command.max_effort = 50.0  # Max effort
+                self._gripper_action_client.send_goal_async(goal_msg)
+        elif msg.buttons[3] == 0 and self._previous_gripper_toggle_button_state == 1:
+            self._previous_gripper_toggle_button_state = 0
+
 
         # Publish the trajectory state
         self._trajectory_state_msg.header.stamp = self.get_clock().now().to_msg()

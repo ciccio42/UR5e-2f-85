@@ -13,6 +13,9 @@ import time
 from moveit_controller_srvs.srv import GoHome
 from dataset_collector_pkg.utils import *
 import numpy as np
+import math
+from rclpy.executors import SingleThreadedExecutor
+from scripts import Trajectory
 class DatasetCollector(Node):
 
     def __init__(self):
@@ -25,6 +28,21 @@ class DatasetCollector(Node):
                                                 '/zed_left/zed_node', 
                                                 '/zed_right/zed_node'])
         self.camera_names = self.get_parameter('camera_names').get_parameter_value().string_array_value
+        self.camera_names_obs_name_map = dict()
+        for camera_name in self.camera_names:
+            if 'front' in camera_name:
+                self.camera_names_obs_name_map[camera_name] = 'front_camera'
+                self.front_camera_name = camera_name
+            elif 'left' in camera_name:
+                self.camera_names_obs_name_map[camera_name] = 'left_camera'
+            elif 'right' in camera_name:
+                self.camera_names_obs_name_map[camera_name] = 'right_camera'
+        self.cv_bridge = CvBridge()
+
+
+        # Internal executor for handling async calls
+        self.internal_executer = SingleThreadedExecutor()
+        self.internal_executer.add_node(self)
 
         # Debug cv2 window
         self.declare_parameter('show_images', False)
@@ -35,6 +53,14 @@ class DatasetCollector(Node):
             for camera_name in self.camera_names:
                 cv2.namedWindow(f'RGB {camera_name}', cv2.WINDOW_NORMAL)
                 cv2.namedWindow(f'Depth {camera_name}', cv2.WINDOW_NORMAL)
+
+        # Joint robot names
+        self.declare_parameter('joint_robot_names', ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'])
+        self.joint_robot_names = self.get_parameter('joint_robot_names').get_parameter_value().string_array_value
+
+        # Gripper robot names
+        self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
+        self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
 
         # EEF frame name
         self.declare_parameter('eef_frame_name', 'tcp_link')
@@ -53,7 +79,7 @@ class DatasetCollector(Node):
         self.human_demo = self.get_parameter('human_demo').get_parameter_value().bool_value
 
         # Task name
-        self.declare_parameter('task_name', 'pick_and_place')
+        self.declare_parameter('task_name', 'pick_place')
         self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
 
         # Variation id
@@ -63,7 +89,6 @@ class DatasetCollector(Node):
         # Traj count id
         self.declare_parameter('traj_count_id', 0)
         self.traj_count_id = self.get_parameter('traj_count_id').get_parameter_value().integer_value
-
 
         # Create subscribers
         self.camera_subscribers_rgb = []
@@ -86,10 +111,12 @@ class DatasetCollector(Node):
             self.ur_topics_record_subscribers.append(sub_ur)
 
         self.teleop_state_subscriber = Subscriber(self, TrajectoryState, self.teleop_state_topic)  
-
+        self.current_t = 0
 
         # Set the robot to home position if not human demo
         if not self.human_demo:
+            # Ignore everything while robot is moving home
+            self.is_moving_home = False
             # Wait for user to press enter
             self.get_logger().info('Setting robot to home position before starting dataset collection...')
             self.go_home_service_callback_group = ReentrantCallbackGroup()
@@ -100,21 +127,22 @@ class DatasetCollector(Node):
                 self.get_logger().info('set_robot_to_home service not available, waiting again...')
 
             input('Press Enter to set the robot to home position...')
-            if not self.set_robot_to_home_position():
-                self.get_logger().error('Could not set robot to home position. Exiting...')
-                return
-            self.get_logger().info('Robot set to home position successfully.')
+            self.set_robot_to_home_position()
+            # if not self.set_robot_to_home_position():
+            #     self.get_logger().error('Could not set robot to home position. Exiting...')
+            #     return
+            # self.get_logger().info('Robot set to home position successfully.')
 
         # Create Time Synchronizer
         self.list_of_subs = self.camera_subscribers_rgb + self.camera_subscribers_depth + self.ur_topics_record_subscribers + [self.teleop_state_subscriber]
         if self.show_images:
             self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
-                                                queue_size=10, 
+                                                queue_size=1, 
                                                 slop=5.0)
         else:
             self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
-                                                queue_size=10, 
-                                                slop=1.0)
+                                                queue_size=1, 
+                                                slop=5.0)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -154,25 +182,85 @@ class DatasetCollector(Node):
                 self.get_logger().error("Timeout waiting for TF")
                 return False
 
+    def _quat2axisangle(self, quat):
+        """
+        Converts quaternion to axis-angle format.
+        Returns a unit vector direction scaled by its angle in radians.
+        Args:
+            quat (np.array): (x,y,z,w) vec4 float angles
+        Returns:
+            np.array: (ax,ay,az) axis-angle exponential coordinates
+        """
+        # clip quaternion
+        if quat[3] > 1.0:
+            quat[3] = 1.0
+        elif quat[3] < -1.0:
+            quat[3] = -1.0
 
-    def set_robot_to_home_position(self):
-        # Implement the logic to set the robot to home position
-        self.get_logger().info('Setting robot to home position')
+        den = np.sqrt(1.0 - quat[3] * quat[3])
+        if math.isclose(den, 0.0):
+            # This is (close to) a zero degree rotation, immediately return
+            return np.zeros(3)
+
+        return (quat[:3] * 2.0 * math.acos(quat[3])) / den
+       
+    def _home_position_response_callback(self, future):
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'Robot returned home: {response.message}')
+            else:
+                self.get_logger().error(
+                    f'Failed to set robot to home position: {response.message}'
+                )
+        except Exception as e:
+            self.get_logger().error(f'Service call failed: {e}')
+
+        # Important: allow callbacks to resume normal behavior
+        self.is_moving_home = False
+
+    # def set_robot_to_home_position(self):
+    #     # Implement the logic to set the robot to home position
+    #     self.get_logger().info('Setting robot to home position')
         
+    #     request = GoHome.Request()
+    #     future = self.go_home_service.call_async(request)
+    #     rclpy.spin_until_future_complete(self, future)
+    #     if future.result() is not None:
+    #         if future.result().success:
+    #             self.get_logger().info(f'{future.result().message}')
+    #             return True
+    #         else:
+    #             self.get_logger().error('Failed to set robot to home position: ' + future.result().message)
+    #             return False
+    def set_robot_to_home_position(self):
+        self.get_logger().info('Setting robot to home position')
+
+        if self.is_moving_home:
+            self.get_logger().warn('Already moving home, skipping request.')
+            return
+
+        # self.is_moving_home = True
+
         request = GoHome.Request()
         future = self.go_home_service.call_async(request)
-        rclpy.spin_until_future_complete(self, future)
+        self.internal_executer.spin_until_future_complete(future)
         if future.result() is not None:
             if future.result().success:
                 self.get_logger().info(f'{future.result().message}')
-                return True
             else:
                 self.get_logger().error('Failed to set robot to home position: ' + future.result().message)
-                return False
-
+        else:
+            self.get_logger().error('Service call failed while setting robot to home position.')
         
+        # future = self.go_home_service.call_async(request)
+        # future.add_done_callback(self._home_position_response_callback)
+ 
     def synced_callback(self, *args):
-        # self.get_logger().info('Synchronized messages received.')
+        # self.get_logge    r().info('Synchronized messages received.')
+        if self.is_moving_home:
+            self.get_logger().info('Currently moving to home position, ignoring synchronized messages...')
+            return
 
         # Get the messages
         num_cameras = len(self.camera_names)
@@ -186,8 +274,31 @@ class DatasetCollector(Node):
 
         if teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_IDLE:
             self.get_logger().info('Teleop state is IDLE...')  
+        
         elif teleop_state_msg.trajectory_state != TrajectoryState.TRAJECTORY_END:
-            self.get_logger().info(f'Teleop state is {teleop_state_msg.trajectory_state}...')
+            self.get_logger().info(f'Teleop state is {teleop_state_msg.trajectory_state} - recording data...')
+            # self.get_logger().info(f'Teleop state is {teleop_state_msg.trajectory_state}...')
+            # save in obs images
+            for i in range(num_cameras):
+                obs[f'{self.camera_names_obs_name_map[self.camera_names[i]]}_image'] = self.cv_bridge.imgmsg_to_cv2(rgb_images[i], desired_encoding='bgr8')
+                obs[f'{self.camera_names_obs_name_map[self.camera_names[i]]}_depth'] = self.cv_bridge.imgmsg_to_cv2(depth_images[i], desired_encoding='passthrough')
+
+            if self.current_t == 0:
+                self._trajectory = Trajectory()
+                # get the object centers in the first frame of the trajectory and save them in the obs for future use
+                self.get_logger().info('Recording object centers in the first frame of the trajectory...')
+                # get the index of the camera front image
+                front_img = obs[f'{self.camera_names_obs_name_map[self.front_camera_name]}_image']
+                front_depth = obs[f'{self.camera_names_obs_name_map[self.front_camera_name]}_depth']
+                obj_bb = get_object_centers(node=self,
+                                                    task_name=self.task_name,
+                                                    variation_id=self.variation_id, 
+                                                    camera_name='front_camera',
+                                                    rgb_image=front_img, 
+                                                    depth_image=front_depth)
+                # save object centers in obs
+                obs['obj_bb'] = obj_bb
+
             if self.show_images:
                 bridge = CvBridge()
                 for i in range(num_cameras):
@@ -204,11 +315,19 @@ class DatasetCollector(Node):
 
             # prepare observations
             if len(ur_msgs) == 1 and isinstance(ur_msgs[0], JointState):
-                self.get_logger().info('Recording joint states from /joint_states topic...')
-                obs[JOINT_POS_NAME] = np.array(ur_msgs[0].position) 
-                obs[JOINT_VEL_NAME] = np.array(ur_msgs[0].velocity)
-                self.get_logger().info(f'Joint positions: {obs[JOINT_POS_NAME]}')
-                self.get_logger().info(f'Joint velocities: {obs[JOINT_VEL_NAME]}')
+                # self.get_logger().info('Recording joint states from /joint_states topic...')
+                # self.get_logger().info(f'Joint names: {ur_msgs[0].name}')
+                
+                # Create a mapping from joint names to their indices in the message
+                joint_name_to_index = {name: idx for idx, name in enumerate(ur_msgs[0].name)}
+                # Extract the joint positions and velocities for the specified robot joints
+                obs[JOINT_POS_NAME] = np.array([ur_msgs[0].position[joint_name_to_index[joint]] for joint in self.joint_robot_names])
+                obs[JOINT_VEL_NAME] = np.array([ur_msgs[0].velocity[joint_name_to_index[joint]] for joint in self.joint_robot_names])
+                
+                # Get gripper states
+                obs[GRIPPER_QPOS_NAME] = np.array([ur_msgs[0].position[joint_name_to_index[joint]] for joint in self.gripper_robot_names])
+                obs[GRIPPER_QVEL_NAME] = np.array([ur_msgs[0].velocity[joint_name_to_index[joint]] for joint in self.gripper_robot_names])                
+
             else:
                 self.get_logger().warn('No joint states received or multiple UR messages received, skipping joint state recording for this step.')
 
@@ -227,12 +346,32 @@ class DatasetCollector(Node):
                 self.get_logger().error(f'Error looking up TF for EEF pose: {e}')
                 
             # prepare actions
+            if not self.human_demo:
+                action = np.zeros(8)  # placeholder action, replace with actual action if available
+                action[0:3] = obs[EEF_POS_NAME]
+                action[3:7] = obs[EEF_QUAT_NAME]
+                if obs.get(GRIPPER_QPOS_NAME) is not None:
+                    if obs[GRIPPER_QPOS_NAME].shape[0] < 0.01:
+                        action[7] = 0.0 # gripper open
+                    else:
+                        action[7] = 1.0 # gripper closed
+
+                # convert to axis-angle representation
+                obs[EE_AA_NAME] = self._quat2axisangle(np.array(obs[EEF_QUAT_NAME]))     
+
+            # Compute the done signal
+            done = teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END
+
+            # Compute reward
+            reward = 1 if teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END else 0
             
-
-
             # save step data
-                
-        elif teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END:
+            
+            
+            self.current_t += 1
+
+        elif self.current_t != 0 and teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END:
+            
             # save traj
             self.get_logger().info(f'Teleop state is END\nSaving trajectory data {self.traj_count_id} for task {self.task_name}, variation {self.variation_id}...')
             self.traj_count_id += 1
@@ -241,11 +380,30 @@ class DatasetCollector(Node):
             if self.show_images:
                 cv2.destroyAllWindows()
 
+            # save trajectory
+            # raise NotImplementedError('Trajectory saving not implemented yet.')
+            self.get_logger().info('Trajectory saving not implemented yet.')
+            self.current_t = 0
+
+            # Wait for user input before moving to home position
+            self.get_logger().info('Trajectory ended. Press Enter to continue to home position...')
+            char = input()
+            while char != '':
+                self.get_logger().info('Invalid input. Please press Enter to continue to home position...')
+                char = input()
+        
             # move robot to home position if not human demo
             if not self.human_demo:
                 self.get_logger().info('Setting robot to home position after trajectory end...')
-                if not self.set_robot_to_home_position():
-                    self.get_logger().error('Could not set robot to home position after trajectory end.')
+                # if not self.set_robot_to_home_position():
+                #     self.get_logger().error('Could not set robot to home position after trajectory end.')
+                self.set_robot_to_home_position()
+        
+        elif self.current_t == 0 and teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END:
+            self.get_logger().info('Teleop state is END but current_t is 0, put the trajectory to IDLE')
 
-            # save trajectory
-            raise NotImplementedError('Trajectory saving not implemented yet.')
+
+            
+
+
+        

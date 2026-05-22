@@ -8,6 +8,7 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 if(BUILD_TESTING)
@@ -25,7 +26,8 @@ endif()
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GoHome.srv"
-  DEPENDENCIES std_msgs
+  "srv/GoToPose.srv"
+  DEPENDENCIES std_msgs geometry_msgs
 )
 
 

@@ -59,8 +59,14 @@ def generate_launch_description():
 
     # Load custom MoveIt config
     moveit_config = MoveItConfigsBuilder(
-        robot_name="ur5e_2f_85", package_name="ur5e_2f_85_moveit_config"
+        robot_name="ur5e_2f_85", 
+        package_name="ur5e_2f_85_moveit_config"
     ).to_moveit_configs()
+
+    trajectory_execution_yaml = load_yaml(
+        "ur5e_2f_85_moveit_config",
+        "config/trajectory_execution.yaml"
+    )
 
     # Warehouse config
     warehouse_ros_config = {
@@ -88,6 +94,7 @@ def generate_launch_description():
         output="screen",
         parameters=[
             moveit_config.to_dict(),
+            trajectory_execution_yaml, 
             warehouse_ros_config,
             {
                 "use_sim_time": use_sim_time,

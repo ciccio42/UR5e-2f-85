@@ -362,6 +362,26 @@ docker run -it --rm \
   -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
   --name zed_camera_container \
   5.1-ros2-devel-cuda13.0-ubuntu24.04
+
+xhost +local:docker
+docker run -it --rm \
+  --gpus all \
+  --privileged \
+  --cap-add=SYS_NICE \
+  --cpuset-cpus="0-1" \
+  --network host \
+  --ipc=host \
+  --pid=host \
+  --device=/dev/bus/usb \
+  -e DISPLAY=$DISPLAY \
+  -e NVIDIA_VISIBLE_DEVICES=all \
+  -e NVIDIA_DRIVER_CAPABILITIES=all \
+  -e XDG_RUNTIME_DIR=/tmp/runtime-root \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /dev:/dev \
+  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
+  --name zed_camera_container \
+  5.1-ros2-devel-cuda13.0-ubuntu24.04
 ```
 
 **Docker-1: Launch UR-Driver**
@@ -391,21 +411,20 @@ ros2 launch ur_robot_driver ur_control.launch.py \
   description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
   launch_rviz:=false
 
-# Run Gripper Drivers
-ros2 launch ur5e_2f_85_description robotiq_2f_85.launch.py
-
 # Launch Movegroup
 docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
 ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=true
 
 # Launch Teleoperation Node
 docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
 ros2 launch ur5e_2f_85_teleoperation ur5e_teleoperation.launch.py
 
 # Run moveit_controller 
 docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
 ros2 run moveit_controller moveit_controller_node
-
 ```
 
 **Docker-2: Launch Zed-Camera Drivers**
@@ -420,7 +439,7 @@ ros2 launch zed_camera_driver zed_multi_camera.launch.py \
 **Docker-1: Launch Dataset-Collector**
 ```bash
 docker exec -it ur_robotiq_teleoperation_container  bash
-
+source install/setup.bash
 ros2 run dataset_collector_pkg dataset_collector_node
 ```
 
@@ -450,6 +469,7 @@ docker image prune -f
 * [X] Integrate Teleoperation
 * [] Integrate DatasetCollection
   + [X] Moveit home position
+  + [] Test set-pose service
   + [] Save trajectories
 * [] Controllers
   + [] Dataset trajectory reply

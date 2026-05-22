@@ -8,7 +8,6 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
-
     teleop_pkg = get_package_share_directory('ur5e_2f_85_teleoperation')
 
     teleop_conf_file_default = os.path.join(
@@ -30,6 +29,7 @@ def generate_launch_description():
         package='joy',
         executable='joy_node',
         name='joy_node',
+        parameters=[teleop_conf_file],
         output='screen'
     )
 

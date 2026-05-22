@@ -1,0 +1,4 @@
+trajectory_execution:
+  execution_duration_monitoring: true
+  allowed_execution_duration_scaling: 15.0
+  allowed_goal_duration_margin: 10.0

@@ -3,6 +3,11 @@ teleoperation:
     controller_to_stop: scaled_joint_trajectory_controller
     controller_to_run: forward_position_controller
     topic_servo: /servo_node/delta_twist_cmds
+    gripper_action_topic: /robotiq_gripper_controller/gripper_cmd
     topic_name: /joy
     linear_scale: 1.0
     angular_scale: 1.0
+
+joy_node:
+  ros__parameters:
+    dev: /dev/input/by-id/usb-Sony_Interactive_Entertainment_Wireless_Controller-if03-event-joystick
