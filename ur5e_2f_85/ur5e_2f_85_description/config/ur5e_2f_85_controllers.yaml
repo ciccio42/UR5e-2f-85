@@ -1,6 +1,9 @@
 controller_manager:
   ros__parameters:
-  
+
+    friction_model_controller:
+      type: ur_controllers/FrictionModelController
+
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
 
@@ -43,6 +46,9 @@ controller_manager:
     ur_configuration_controller:
       type: ur_controllers/URConfigurationController
 
+    friction_model_controller:
+       type: ur_controllers/FrictionModelController
+
     tool_contact_controller:
       type: ur_controllers/ToolContactController
 
@@ -75,6 +81,11 @@ io_and_status_controller:
 ur_configuration_controller:
   ros__parameters:
     tf_prefix: "$(var tf_prefix)"
+
+  friction_model_controller:
+    ros__parameters:
+      tf_prefix: "$(var tf_prefix)"
+
 
 force_torque_sensor_broadcaster:
   ros__parameters:

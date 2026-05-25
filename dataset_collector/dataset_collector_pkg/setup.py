@@ -31,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'dataset_collector_node = dataset_collector_pkg.dataset_collector_node:main',
+            'replicate_trajectory = dataset_collector_pkg.replicate_trajectory:main',
         ],
     },
 )

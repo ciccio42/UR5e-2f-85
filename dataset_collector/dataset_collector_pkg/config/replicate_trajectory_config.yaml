@@ -1,0 +1,10 @@
+replicate_trajectory:
+  ros__parameters:
+    trajectory_path: "/traj_tmp/task_01/traj000.pkl"
+    set_home_service: "set_robot_to_home"
+    set_pose_service: "set_robot_to_pose"
+    frame_id: "base_link"
+    execute_on_start: true
+    move_home_before_start: true
+    step_delay_sec: 0.0
+    service_timeout_sec: 10.0

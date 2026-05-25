@@ -20,11 +20,10 @@ def main(args=None):
 
     rclpy.init()
     node = MoveItControllerNode()
-    executor = MultiThreadedExecutor()
+    executor = MultiThreadedExecutor(num_threads=4)
     executor.add_node(node)
 
     # Add 
-
     try:
         node.get_logger().info('Beginning client, shut down with CTRL-C')
         executor.spin()

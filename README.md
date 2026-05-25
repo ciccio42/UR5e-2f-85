@@ -1,5 +1,12 @@
 # Docker for UR-ROS2
 
+**Preliminaries**
+```bash
+export UR5e_2f_85_PATH=/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85
+# Start vnc-server
+vncserver -geometry 1920x1080 -localhost no
+``` 
+
 ## ROS2 docker
 
 **Build**
@@ -62,7 +69,7 @@ docker run -it --rm \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
   ur_robotiq
 ``` 
 
@@ -92,7 +99,7 @@ docker run --rm -it \
   --privileged \
   --cap-add=NET_ADMIN \
   -p 5900:5900 -p 6080:6080 \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur_programs:/ursim/programs \
+  -v ${UR5e_2f_85_PATH}/ur_programs:/ursim/programs \
   ursim_e-series
 
 xhost +local:docker
@@ -114,10 +121,9 @@ docker run -it --rm \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
   --name ur_robotiq_container \
   ur_robotiq
-
 ```
 
 ```bash
@@ -140,7 +146,6 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 
 # Launch movegroup
 ros2 launch ur5e_2f_85_moveit_config move_group.launch.py
-
 ```
 
 ## ZED Cameras docker
@@ -163,7 +168,7 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev:/dev \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
+  -v ${UR5e_2f_85_PATH}/zed_camera:/home/ros2_ws/src/zed_camera \
   --name zed_camera_container \
   5.1-ros2-devel-cuda13.0-ubuntu24.04
 
@@ -209,8 +214,6 @@ docker run -it --rm \
   --privileged \
   --cap-add=SYS_NICE \
   --cpuset-cpus="0-1" \
-  --network ursim_net \
-  --ip 192.168.56.102 \
   --ipc=host \
   --pid=host \
   --ulimit memlock=-1:-1 \
@@ -223,7 +226,10 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev/input:/dev/input \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
+  -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
+  -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
 ```
@@ -237,14 +243,14 @@ docker run --rm -it \
   --privileged \
   --cap-add=NET_ADMIN \
   -p 5900:5900 -p 6080:6080 \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur_programs:/ursim/programs \
+  -v ${UR5e_2f_85_PATH}/ur_programs:/ursim/programs \
   ursim_e-series
 
 # RUN ur-driver
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=192.168.56.101 \
-  kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/sim_calibration.yaml \
+  robot_ip:=172.16.174.49 \
+  kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml \
   description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
   launch_rviz:=false
 
@@ -273,7 +279,7 @@ docker run --rm -it \
   --privileged \
   --cap-add=NET_ADMIN \
   -p 5900:5900 -p 6080:6080 \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur_programs:/ursim/programs \
+  -v ${UR5e_2f_85_PATH}/ur_programs:/ursim/programs \
   ursim_e-series
 
 
@@ -297,9 +303,9 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev/input:/dev/input \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/dataset_collector:/home/ros2_ws/src/dataset_collector \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/moveit_controller:/home/ros2_ws/src/moveit_controller \
+  -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
+  -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
 ```
@@ -326,16 +332,17 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev/input:/dev/input \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/dataset_collector:/home/ros2_ws/src/dataset_collector \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/moveit_controller:/home/ros2_ws/src/moveit_controller \
+  -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
+  -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
+  -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
+  -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
 
 
 # Only the first time
 ros2 launch ur_calibration calibration_correction.launch.py \
-  robot_ip:=192.168.1.100 \
+  robot_ip:=172.16.174.49 \
   target_filename:="/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml"
 
 ```
@@ -359,7 +366,7 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev:/dev \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
+  -v ${UR5e_2f_85_PATH}/zed_camera:/home/ros2_ws/src/zed_camera \
   --name zed_camera_container \
   5.1-ros2-devel-cuda13.0-ubuntu24.04
 
@@ -397,7 +404,7 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 # Launch external-controller [REAL - With Gripper]
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=192.168.1.100 \
+  robot_ip:=172.16.174.49 \
   use_tool_communication:=true \
   tool_voltage:=24 \
   tool_parity:=0 \
@@ -444,6 +451,12 @@ ros2 run dataset_collector_pkg dataset_collector_node
 ```
 
 
+# Reply Trajectories
+```bash
+docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
+ros2 run dataset_collector_pkg dataset_collector_node
+```
 
 # Usefull commands
 ```bash
@@ -469,7 +482,8 @@ docker image prune -f
 * [X] Integrate Teleoperation
 * [] Integrate DatasetCollection
   + [X] Moveit home position
-  + [] Test set-pose service
+  + [X] Test set-pose service
   + [] Save trajectories
 * [] Controllers
   + [] Dataset trajectory reply
+  + [] AI-node controllers

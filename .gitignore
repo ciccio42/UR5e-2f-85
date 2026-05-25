@@ -2,3 +2,6 @@
 build/
 install/
 *mp4
+*.pyc
+traj_tmp/
+*.pkl
