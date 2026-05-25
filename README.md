@@ -483,6 +483,7 @@ docker image prune -f
 * [] Integrate DatasetCollection
   + [X] Moveit home position
   + [X] Test set-pose service
+  + [] Gripper action
   + [] Save trajectories
 * [] Controllers
   + [] Dataset trajectory reply

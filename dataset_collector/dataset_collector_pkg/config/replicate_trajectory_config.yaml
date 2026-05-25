@@ -1,6 +1,6 @@
 replicate_trajectory:
   ros__parameters:
-    trajectory_path: "/traj_tmp/task_01/traj000.pkl"
+    trajectory_path: "/traj_tmp/task_00/traj000.pkl"
     set_home_service: "set_robot_to_home"
     set_pose_service: "set_robot_to_pose"
     frame_id: "base_link"
@@ -8,3 +8,12 @@ replicate_trajectory:
     move_home_before_start: true
     step_delay_sec: 0.0
     service_timeout_sec: 10.0
+    replay_gripper: true
+    gripper_action_topic: "/robotiq_gripper_controller/gripper_cmd"
+    gripper_open_position: 0.0
+    gripper_closed_position: 1.0
+    gripper_closed_threshold: 0.4
+    gripper_raw_open_value: 0.0
+    gripper_raw_closed_value: 255.0
+    gripper_max_effort: 50.0
+    gripper_result_timeout_sec: 10.0

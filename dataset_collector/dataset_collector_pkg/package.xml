@@ -19,6 +19,8 @@
   <build_depend>moveit_py</build_depend>
   <build_depend>geometry_msgs</build_depend>
   <build_depend>moveit_controller_srvs</build_depend>
+  <build_depend>control_msgs</build_depend>
+  <build_depend>action_msgs</build_depend>
 
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
@@ -27,6 +29,8 @@
   <exec_depend>moveit_py</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>moveit_controller_srvs</exec_depend>
+  <exec_depend>control_msgs</exec_depend>
+  <exec_depend>action_msgs</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
