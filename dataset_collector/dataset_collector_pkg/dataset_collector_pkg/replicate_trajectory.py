@@ -11,6 +11,10 @@ from geometry_msgs.msg import PoseStamped
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
+from sensor_msgs.msg import CompressedImage
+
+import cv2
+import numpy as np
 
 
 
@@ -76,6 +80,24 @@ class ReplicateTrajectory(Node):
         self.gripper_max_effort = float(self.get_parameter('gripper_max_effort').value)
         self.gripper_result_timeout_sec = float(self.get_parameter('gripper_result_timeout_sec').value)
         self.last_gripper_closed = None
+        self.front_camera_topic = '/zed_front/zed_node/left/color/rect/image/compressed'
+        self.front_camera_window_name = 'Front Camera Preview'
+        self.latest_front_camera_frame = None
+
+        self.front_camera_subscription = self.create_subscription(
+            CompressedImage,
+            self.front_camera_topic,
+            self._front_camera_callback,
+            10,
+        )
+
+        try:
+            cv2.namedWindow(self.front_camera_window_name, cv2.WINDOW_NORMAL)
+            cv2.resizeWindow(self.front_camera_window_name, 1280, 360)
+            cv2.moveWindow(self.front_camera_window_name, 0, 0)
+        except cv2.error as exc:
+            self.get_logger().warning(f'Could not create front camera preview window: {exc}')
+            self.front_camera_window_name = None
 
         self.get_logger().info(f'Parameters:\n'
                                f'  trajectory_path: {self.trajectory_path}\n'
@@ -136,7 +158,10 @@ class ReplicateTrajectory(Node):
         if self.move_home_before_start and not self.call_go_home():
             return False
 
+        self._update_front_camera_preview()
+
         for index, step in enumerate(self.steps):
+            self._update_front_camera_preview(step)
             pose = self._step_to_pose_stamped(step)
             self.get_logger().info(f'Step action: {step["gripper_qpos"]}')
             if pose is None:
@@ -155,8 +180,101 @@ class ReplicateTrajectory(Node):
             if self.step_delay_sec > 0.0:
                 time.sleep(self.step_delay_sec)
 
+            self._update_front_camera_preview(step)
+
         self.get_logger().info('Trajectory replication completed.')
         return True
+
+    def _front_camera_callback(self, msg):
+        try:
+            frame = np.frombuffer(msg.data, dtype=np.uint8)
+            decoded = cv2.imdecode(frame, cv2.IMREAD_COLOR)
+            if decoded is not None:
+                self.latest_front_camera_frame = decoded
+        except Exception as exc:
+            self.get_logger().warning(f'Failed to decode front camera preview frame: {exc}')
+
+    @staticmethod
+    def _ensure_bgr_image(image):
+        if image is None:
+            return None
+
+        if isinstance(image, np.ndarray):
+            if image.ndim == 2:
+                return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            if image.ndim == 3 and image.shape[2] == 3:
+                return image
+            if image.ndim == 3 and image.shape[2] == 4:
+                return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+
+        if isinstance(image, (bytes, bytearray, memoryview, np.ndarray)):
+            buffer = np.frombuffer(image, dtype=np.uint8) if not isinstance(image, np.ndarray) else image.astype(np.uint8, copy=False)
+            decoded = cv2.imdecode(buffer, cv2.IMREAD_COLOR)
+            return decoded
+
+        return None
+
+    def _extract_step_front_image(self, step):
+        if not isinstance(step, dict):
+            return None
+
+        front_image = step.get('camera_front_image')
+        if front_image is None:
+            obs = step.get('obs', step)
+            if isinstance(obs, dict):
+                front_image = obs.get('camera_front_image')
+
+        return self._ensure_bgr_image(front_image)
+
+    def _update_front_camera_preview(self, step=None):
+        try:
+            rclpy.spin_once(self, timeout_sec=0.0)
+        except Exception:
+            pass
+
+        if self.front_camera_window_name is None or self.latest_front_camera_frame is None:
+            return
+
+        trajectory_frame = self._extract_step_front_image(step)
+        live_frame = self.latest_front_camera_frame
+
+        if trajectory_frame is None:
+            trajectory_frame = np.zeros_like(live_frame)
+
+        target_height = min(live_frame.shape[0], trajectory_frame.shape[0])
+        live_frame_resized = cv2.resize(live_frame, (int(live_frame.shape[1] * target_height / live_frame.shape[0]), target_height))
+        trajectory_frame_resized = cv2.resize(
+            trajectory_frame,
+            (int(trajectory_frame.shape[1] * target_height / trajectory_frame.shape[0]), target_height),
+        )
+
+        cv2.putText(
+            live_frame_resized,
+            'Live /zed_front/zed_node/left/color/rect/image/compressed',
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 255, 0),
+            2,
+        )
+        cv2.putText(
+            trajectory_frame_resized,
+            "Trajectory step['camera_front_image']",
+            (20, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 255, 0),
+            2,
+        )
+
+        combined = np.hstack([live_frame_resized, trajectory_frame_resized])
+
+        try:
+            cv2.imshow(self.front_camera_window_name, combined)
+            cv2.waitKey(1)
+        except cv2.error as exc:
+            self.get_logger().warning(f'Front camera preview display failed: {exc}')
+            self.front_camera_window_name = None
 
     def call_go_home(self):
         request = GoHome.Request()

@@ -382,27 +382,6 @@ docker run -it --rm \
   --name zed_camera_container \
   5.3-ros2-devel-l4t-r38.4
 
-xhost +local:docker
-docker run -it --rm \
-  --gpus all \
-  --privileged \
-  --cap-add=SYS_NICE \
-  --cpuset-cpus="0-1" \
-  --network host \
-  --ipc=host \
-  --pid=host \
-  --device=/dev/bus/usb \
-  -v /sys:/sys:ro \
-  -v /run/udev:/run/udev:ro \
-  -e DISPLAY=$DISPLAY \
-  -e NVIDIA_VISIBLE_DEVICES=all \
-  -e NVIDIA_DRIVER_CAPABILITIES=all \
-  -e XDG_RUNTIME_DIR=/tmp/runtime-root \
-  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v /dev:/dev \
-  -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
-  --name zed_camera_container \
-  5.3-ros2-devel-l4t-r38.4
 ```
 
 **Docker-1: Launch UR-Driver**
@@ -446,6 +425,11 @@ ros2 launch ur5e_2f_85_teleoperation ur5e_teleoperation.launch.py
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run moveit_controller moveit_controller_node
+
+# if you want to replicate a trajectory 
+docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
+ros2 datar
 ```
 
 **Docker-2: Launch Zed-Camera Drivers**
