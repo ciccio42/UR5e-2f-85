@@ -208,7 +208,7 @@ ros2 run zed_camera_calibration interactive_aruco_calibration.py \
 
 ros2 run zed_camera_calibration interactive_aruco_calibration_until_pose.py \
   --ros-args \
-  -p cameras_config:=src/zed_camera/zed_camera_calibration/config/multi_cameras.yaml \
+  -p cameras_config:=src/zed_camera/zed_camera_calibration/config/exig.yaml \
   -p aruco_info:=src/zed_camera/zed_camera_calibration/config/aruco_frontal_camera.yaml
 
 ```
@@ -346,6 +346,7 @@ docker run -it --rm \
   -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
   -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
+  -v /home/asus-mivia/Desktop/saved_trajectories:/home/saved_trajectories \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
 
@@ -397,7 +398,7 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 # Launch external-controller [REAL - With Gripper]
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=172.16.174.49 \
+  robot_ip:=172.16.174.11 \
   use_tool_communication:=true \
   tool_voltage:=24 \
   tool_parity:=0 \
@@ -429,7 +430,7 @@ ros2 run moveit_controller moveit_controller_node
 # if you want to replicate a trajectory 
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
-ros2 datar
+ros2 launch dataset_collector_pkg  replicate_trajectory.launch.py
 ```
 
 **Docker-2: Launch Zed-Camera Drivers**
@@ -448,13 +449,6 @@ source install/setup.bash
 ros2 run dataset_collector_pkg dataset_collector_node
 ```
 
-
-# Reply Trajectories
-```bash
-docker exec -it ur_robotiq_teleoperation_container  bash
-source install/setup.bash
-ros2 run dataset_collector_pkg dataset_collector_node
-```
 
 # Usefull commands
 ```bash
@@ -482,7 +476,8 @@ docker image prune -f
   + [X] Moveit home position
   + [X] Test set-pose service
   + [X] Gripper action
-  + [] Save trajectories
+  + [X] Save trajectories
+  + [] Add bounding boxes generation procedure
 * [] Controllers
-  + [] Dataset trajectory reply
+  + [X] Dataset trajectory reply
   + [] AI-node controllers

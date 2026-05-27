@@ -15,7 +15,8 @@ from dataset_collector_pkg.utils import *
 import numpy as np
 import math
 from rclpy.executors import SingleThreadedExecutor
-from scripts import Trajectory
+from scripts.savers import Trajectory
+from pathlib import Path
 class DatasetCollector(Node):
 
     def __init__(self):
@@ -26,7 +27,8 @@ class DatasetCollector(Node):
         # Camera names
         self.declare_parameter('camera_names', ['/zed_front/zed_node', 
                                                 '/zed_left/zed_node', 
-                                                '/zed_right/zed_node'])
+                                                '/zed_right/zed_node', 
+                                                '/zed_gripper/zed_node'])
         self.camera_names = self.get_parameter('camera_names').get_parameter_value().string_array_value
         self.camera_names_obs_name_map = dict()
         for camera_name in self.camera_names:
@@ -37,6 +39,8 @@ class DatasetCollector(Node):
                 self.camera_names_obs_name_map[camera_name] = 'left_camera'
             elif 'right' in camera_name:
                 self.camera_names_obs_name_map[camera_name] = 'right_camera'
+            elif 'gripper' in camera_name:
+                self.camera_names_obs_name_map[camera_name] = 'gripper_camera'
         self.cv_bridge = CvBridge()
 
 
@@ -45,7 +49,7 @@ class DatasetCollector(Node):
         self.internal_executer.add_node(self)
 
         # Debug cv2 window
-        self.declare_parameter('show_images', False)
+        self.declare_parameter('show_images',  False)
         self.show_images = self.get_parameter('show_images').get_parameter_value().bool_value
         if self.show_images:
             # create cv2 windows
@@ -90,12 +94,16 @@ class DatasetCollector(Node):
         self.declare_parameter('traj_count_id', 0)
         self.traj_count_id = self.get_parameter('traj_count_id').get_parameter_value().integer_value
 
+        # Saving directory
+        self.declare_parameter('saving_directory', '/home/saved_trajectories')
+        self.saving_directory = self.get_parameter('saving_directory').get_parameter_value().string_value
+
         # Create subscribers
         self.camera_subscribers_rgb = []
         self.camera_subscribers_depth = []
         for camera_name in self.camera_names:
             # RGB Image Subscriber
-            sub = Subscriber(self, Image, f'{camera_name}/left/color/rect/image')
+            sub = Subscriber(self, Image, f'{camera_name}/rgb/color/rect/image')
             self.camera_subscribers_rgb.append(sub)
 
             # Depth Image Subscriber
@@ -138,11 +146,11 @@ class DatasetCollector(Node):
         if self.show_images:
             self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
                                                 queue_size=1, 
-                                                slop=5.0)
+                                                slop=20.0)
         else:
             self.ts = ApproximateTimeSynchronizer(self.list_of_subs, 
                                                 queue_size=1, 
-                                                slop=5.0)
+                                                slop=20.0)
 
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -160,7 +168,8 @@ class DatasetCollector(Node):
                                f'Human Demo: {self.human_demo}\n'
                                f'Task Name: {self.task_name}\n'
                                f'Variation ID: {self.variation_id}\n'
-                               f'Traj Count ID: {self.traj_count_id}\n')
+                               f'Traj Count ID: {self.traj_count_id}\n'
+                               f'Saving Directory: {self.saving_directory}\n')
 
     def wait_for_tf(self, timeout=5.0):
         
@@ -257,6 +266,7 @@ class DatasetCollector(Node):
         # future.add_done_callback(self._home_position_response_callback)
  
     def synced_callback(self, *args):
+        self.get_logger().info('Synchronized messages received, processing data...')
         # self.get_logge    r().info('Synchronized messages received.')
         if self.is_moving_home:
             self.get_logger().info('Currently moving to home position, ignoring synchronized messages...')
@@ -351,7 +361,7 @@ class DatasetCollector(Node):
                 action[0:3] = obs[EEF_POS_NAME]
                 action[3:7] = obs[EEF_QUAT_NAME]
                 if obs.get(GRIPPER_QPOS_NAME) is not None:
-                    if obs[GRIPPER_QPOS_NAME].shape[0] < 0.01:
+                    if obs[GRIPPER_QPOS_NAME][0] < 0.01:
                         action[7] = 0.0 # gripper open
                     else:
                         action[7] = 1.0 # gripper closed
@@ -366,6 +376,17 @@ class DatasetCollector(Node):
             reward = 1 if teleop_state_msg.trajectory_state == TrajectoryState.TRAJECTORY_END else 0
             
             # save step data
+            self._trajectory.append(
+                obs=obs,
+                reward=reward,
+                done=done,
+                info=None,
+                action=action if not self.human_demo else None,
+                raw_state={
+                    'teleop_state': teleop_state_msg.trajectory_state,
+                    'trajectory_id': self.traj_count_id,
+                },
+            )
             
             
             self.current_t += 1
@@ -381,8 +402,22 @@ class DatasetCollector(Node):
                 cv2.destroyAllWindows()
 
             # save trajectory
-            # raise NotImplementedError('Trajectory saving not implemented yet.')
-            self.get_logger().info('Trajectory saving not implemented yet.')
+            trajectory_type = 'human' if self.human_demo else 'robot'
+            trajectory_path = (
+                Path(self.saving_directory).expanduser()
+                / trajectory_type
+                / self.task_name
+                / f'task_{self.variation_id:02d}'
+                / f'traj{self.traj_count_id:03d}.pkl'
+            )
+            self._trajectory.save(
+                trajectory_path,
+                task_name=self.task_name,
+                variation_id=self.variation_id,
+                traj_count_id=self.traj_count_id,
+                human_demo=self.human_demo,
+            )
+            self.get_logger().info(f'Saved trajectory to {trajectory_path}')
             self.current_t = 0
 
             # Wait for user input before moving to home position
