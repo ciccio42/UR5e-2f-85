@@ -12,6 +12,7 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 import os
 from PIL import Image as PILImage
+import math
 
 RESOLUTION=(640, 360)
 
@@ -107,6 +108,59 @@ class InteractiveCameraCalibration(Node):
         t_cm = R_am @ t_ac + t_am
         rvec_cm, _ = cv2.Rodrigues(R_cm)
         return t_cm.flatten(), rvec_cm.flatten()
+
+    @staticmethod
+    def rotation_matrix_to_quaternion(rotation):
+        trace = np.trace(rotation)
+        if trace > 0.0:
+            s = math.sqrt(trace + 1.0) * 2.0
+            w = 0.25 * s
+            x = (rotation[2, 1] - rotation[1, 2]) / s
+            y = (rotation[0, 2] - rotation[2, 0]) / s
+            z = (rotation[1, 0] - rotation[0, 1]) / s
+        else:
+            diag = np.diag(rotation)
+            idx = int(np.argmax(diag))
+            if idx == 0:
+                s = math.sqrt(1.0 + rotation[0, 0] - rotation[1, 1] - rotation[2, 2]) * 2.0
+                w = (rotation[2, 1] - rotation[1, 2]) / s
+                x = 0.25 * s
+                y = (rotation[0, 1] + rotation[1, 0]) / s
+                z = (rotation[0, 2] + rotation[2, 0]) / s
+            elif idx == 1:
+                s = math.sqrt(1.0 + rotation[1, 1] - rotation[0, 0] - rotation[2, 2]) * 2.0
+                w = (rotation[0, 2] - rotation[2, 0]) / s
+                x = (rotation[0, 1] + rotation[1, 0]) / s
+                y = 0.25 * s
+                z = (rotation[1, 2] + rotation[2, 1]) / s
+            else:
+                s = math.sqrt(1.0 + rotation[2, 2] - rotation[0, 0] - rotation[1, 1]) * 2.0
+                w = (rotation[1, 0] - rotation[0, 1]) / s
+                x = (rotation[0, 2] + rotation[2, 0]) / s
+                y = (rotation[1, 2] + rotation[2, 1]) / s
+                z = 0.25 * s
+        quat = np.array([w, x, y, z], dtype=np.float64)
+        return quat / np.linalg.norm(quat)
+
+    @staticmethod
+    def quaternion_to_rotation_matrix(quat):
+        quat = quat / np.linalg.norm(quat)
+        w, x, y, z = quat
+        return np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ], dtype=np.float64)
+
+    @staticmethod
+    def average_rotation(rotations):
+        quat_outer = np.zeros((4, 4), dtype=np.float64)
+        for rotation in rotations:
+            quat = InteractiveCameraCalibration.rotation_matrix_to_quaternion(rotation)
+            quat_outer += np.outer(quat, quat)
+        eigvals, eigvecs = np.linalg.eigh(quat_outer)
+        quat = eigvecs[:, np.argmax(eigvals)]
+        return InteractiveCameraCalibration.quaternion_to_rotation_matrix(quat)
 
     def run(self):
         self.get_logger().info('Interactive ArUco Calibration Node is running.')
@@ -250,17 +304,29 @@ class InteractiveCameraCalibration(Node):
                 #self.get_logger().info(f'\tPress ENTER to capture image {i+1}/{self.detection_times} for camera {camera_name}...')
                 #cv2.waitKey(0)  # Wait indefinitely for a key press
                 # wait for 1 second before next capture
-                self.get_logger().info(f'\tWaiting 1 second before next capture for camera {camera_name}...')
-                key = cv2.waitKey(1000)  # Wait for 1 second
+                # capture_count += 1
+                # self.get_logger().info(
+                #     f'\tCaptured {capture_count} frame(s) for camera {camera_name}. '
+                #     'Press Enter to capture another frame, or any other key to stop.')
+                key = cv2.waitKey(1000)
+                if key in (13, 10):
+                    self.get_logger().info(
+                        f'\tStopping capture loop for camera {camera_name} (key={key}).')
+                    break
 
             # Average position and orientation
             if self.estimated_position_list and self.estimated_orientation_list:
                 avg_position = np.mean(self.estimated_position_list, axis=0)
-                avg_orientation = np.mean(self.estimated_orientation_list, axis=0)
+                avg_orientation_matrix = self.average_rotation([
+                    cv2.Rodrigues(np.asarray(rvec, dtype=np.float64).reshape(3, 1))[0]
+                    for rvec in self.estimated_orientation_list
+                ])
+                avg_orientation, _ = cv2.Rodrigues(avg_orientation_matrix)
+                avg_orientation = avg_orientation.flatten()
 
                 self.estimated_pos_dict[camera_name]['position'] = avg_position.tolist()
                 self.estimated_pos_dict[camera_name]['orientation'] = avg_orientation.tolist()
-                self.estimated_pos_dict[camera_name]['orientation_matrix'] = cv2.Rodrigues(avg_orientation)[0].tolist()
+                self.estimated_pos_dict[camera_name]['orientation_matrix'] = avg_orientation_matrix.tolist()
 
                 self.get_logger().info(f'Estimated position for camera {camera_name}: {avg_position}')
                 self.get_logger().info(f'Estimated orientation for camera {camera_name}: {avg_orientation}')

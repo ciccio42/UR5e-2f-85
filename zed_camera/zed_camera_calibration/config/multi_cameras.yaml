@@ -7,3 +7,7 @@ cameras:
 
   - camera_name: zed_right
     serial_number: 15689351
+
+  
+  # - camera_name: zed_gripper
+  #   serial_number: 16702584

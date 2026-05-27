@@ -66,6 +66,7 @@ install(DIRECTORY config
 install(
   PROGRAMS
     scripts/interactive_aruco_calibration.py
+    scripts/interactive_aruco_calibration_until_pose.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

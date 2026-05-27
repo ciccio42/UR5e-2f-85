@@ -157,11 +157,11 @@ xhost +local:docker
 docker run -it --rm \
   --gpus all \
   --privileged \
-  --network ursim_net \
-  --ip 192.168.56.103 \
   --ipc=host \
   --pid=host \
   --device=/dev/bus/usb \
+  -v /sys:/sys:ro \
+  -v /run/udev:/run/udev:ro \
   -e DISPLAY=$DISPLAY \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -170,7 +170,7 @@ docker run -it --rm \
   -v /dev:/dev \
   -v ${UR5e_2f_85_PATH}/zed_camera:/home/ros2_ws/src/zed_camera \
   --name zed_camera_container \
-  5.1-ros2-devel-cuda13.0-ubuntu24.04
+  5.3-ros2-devel-l4t-r38.4
 
 # Test camera
 ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zedm
@@ -178,15 +178,20 @@ ros2 launch zed_wrapper zed_camera.launch.py camera_model:=zedm
 ros2 launch zed_display_rviz2 display_zed_cam.launch.py camera_model:=zedm
 
 # Aruco detection
-ros2 launch zed_camera_calibration zed_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml
+ros2 launch zed_camera_calibration zed_camera_calibration.launch.py \
+            camera_model:=zedm \
+            config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml
 
 # Launch multi-camera 
 #ros2 launch zed_multi_camera zed_multi_camera.launch.py \
 #      cam_names:='[zed_front,zed_left,zed_right]' \
-#      cam_models:='[zedm,zedm,zedm]' \
-#      cam_serials:='[16450494,11990492,15689351]'
+#      cam_models:='[zedm,zedm,zedm,zedm]' \
+#      cam_serials:='[16450494,11990492,15689351,16702584]'
 
-ros2 launch zed_camera_calibration zed_multi_camera_calibration.launch.py camera_model:=zedm config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml rviz:=false
+ros2 launch zed_camera_calibration zed_multi_camera_calibration.launch.py \
+            camera_model:=zedm \
+            config_camera_path:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml \
+            rviz:=false
 
 # Run interactive calibration
 ros2 launch zed_camera_driver zed_multi_camera.launch.py \
@@ -200,6 +205,11 @@ ros2 run zed_camera_calibration interactive_aruco_calibration.py \
     -p cameras_config:=src/zed_camera/zed_camera_calibration/config/multi_cameras.yaml \
     -p cameras_yaml:=src/zed_camera/zed_camera_calibration/config/camera_config.yaml \
     -p aruco_info:=src/zed_camera/zed_camera_calibration/config/aruco_frontal_camera.yaml
+
+ros2 run zed_camera_calibration interactive_aruco_calibration_until_pose.py \
+  --ros-args \
+  -p cameras_config:=src/zed_camera/zed_camera_calibration/config/multi_cameras.yaml \
+  -p aruco_info:=src/zed_camera/zed_camera_calibration/config/aruco_frontal_camera.yaml
 
 ```
 
@@ -360,6 +370,8 @@ docker run -it --rm \
   --ipc=host \
   --pid=host \
   --device=/dev/bus/usb \
+  -v /sys:/sys:ro \
+  -v /run/udev:/run/udev:ro \
   -e DISPLAY=$DISPLAY \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -368,7 +380,7 @@ docker run -it --rm \
   -v /dev:/dev \
   -v ${UR5e_2f_85_PATH}/zed_camera:/home/ros2_ws/src/zed_camera \
   --name zed_camera_container \
-  5.1-ros2-devel-cuda13.0-ubuntu24.04
+  5.3-ros2-devel-l4t-r38.4
 
 xhost +local:docker
 docker run -it --rm \
@@ -380,6 +392,8 @@ docker run -it --rm \
   --ipc=host \
   --pid=host \
   --device=/dev/bus/usb \
+  -v /sys:/sys:ro \
+  -v /run/udev:/run/udev:ro \
   -e DISPLAY=$DISPLAY \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -388,7 +402,7 @@ docker run -it --rm \
   -v /dev:/dev \
   -v /home/mivia/Scrivania/Ur5e/ros2/ur_ros2/UR5e-2f-85/zed_camera:/home/ros2_ws/src/zed_camera \
   --name zed_camera_container \
-  5.1-ros2-devel-cuda13.0-ubuntu24.04
+  5.3-ros2-devel-l4t-r38.4
 ```
 
 **Docker-1: Launch UR-Driver**
@@ -483,7 +497,7 @@ docker image prune -f
 * [] Integrate DatasetCollection
   + [X] Moveit home position
   + [X] Test set-pose service
-  + [] Gripper action
+  + [X] Gripper action
   + [] Save trajectories
 * [] Controllers
   + [] Dataset trajectory reply
