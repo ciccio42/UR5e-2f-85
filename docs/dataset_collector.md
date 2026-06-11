@@ -14,7 +14,7 @@ docker network create --subnet=192.168.56.0/24 ursim_net
 docker run --rm -it \
   -e ROBOT_MODEL=UR5e \
   --net ursim_net \
-  --ip 192.168.56.101 \
+  --ip ${ROBOT_IP} \
   --privileged \
   --cap-add=NET_ADMIN \
   -p 5900:5900 -p 6080:6080 \
@@ -29,7 +29,7 @@ docker run -it --rm \
   --cap-add=SYS_NICE \
   --cpuset-cpus="0-1" \
   --network ursim_net \
-  --ip 192.168.56.102 \
+  --ip ${HOST_IP} \
   --ipc=host \
   --pid=host \
   --ulimit memlock=-1:-1 \
@@ -82,7 +82,7 @@ docker run -it --rm \
 
 # Only the first time
 ros2 launch ur_calibration calibration_correction.launch.py \
-  robot_ip:=172.16.174.49 \
+  robot_ip:=${ROBOT_IP} \
   target_filename:="/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml"
 
 ```
@@ -95,8 +95,7 @@ xhost +local:docker
 docker run -it --rm \
   --gpus all \
   --privileged \
-  --network ursim_net \
-  --ip 192.168.56.103 \
+  --network host \
   --ipc=host \
   --pid=host \
   --device=/dev/bus/usb \
@@ -119,7 +118,7 @@ docker run -it --rm \
 # Launch external-controller [SIM]
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=192.168.56.101 \
+  robot_ip:=${ROBOT_IP} \
   kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/sim_calibration.yaml \
   description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
   launch_rviz:=false
@@ -127,7 +126,7 @@ ros2 launch ur_robot_driver ur_control.launch.py \
 # Launch external-controller [REAL - With Gripper]
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=172.16.174.11 \
+  robot_ip:=${ROBOT_IP} \
   use_tool_communication:=true \
   tool_voltage:=24 \
   tool_parity:=0 \

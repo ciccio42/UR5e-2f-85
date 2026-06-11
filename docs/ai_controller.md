@@ -1,16 +1,14 @@
-# Teleoperation
-
-## UR5e + Robotiq Gripper + Table + Teleoperation
+# AI-Controller
 
 ```bash
 docker build -t ur_robotiq_teleoperation . -f UR_Robotiq_Teleoperation
-
 xhost +local:docker
 docker run -it --rm \
   --gpus all \
   --privileged \
   --cap-add=SYS_NICE \
   --cpuset-cpus="0-1" \
+  --network host \
   --ipc=host \
   --pid=host \
   --ulimit memlock=-1:-1 \
@@ -25,32 +23,23 @@ docker run -it --rm \
   -v /dev/input:/dev/input \
   -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
   -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
+  -v ${UR5e_2f_85_PATH}/ai_controller:/home/ros2_ws/src/ai_controller \
   -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
+  -v /home/asus-mivia/Desktop/saved_trajectories:/home/saved_trajectories \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
+
+
+# Only the first time
+ros2 launch ur_calibration calibration_correction.launch.py \
+  robot_ip:=${ROBOT_IP} \
+  target_filename:="/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml"
+
 ```
 
+## Dependencies to bring in docker
 ```bash
-# Run ur-sim
-docker run --rm -it \
-  -e ROBOT_MODEL=UR5e \
-  --net ursim_net \
-  --ip ${ROBOT_IP} \
-  --privileged \
-  --cap-add=NET_ADMIN \
-  -p 5900:5900 -p 6080:6080 \
-  -v ${UR5e_2f_85_PATH}/ur_programs:/ursim/programs \
-  ursim_e-series
-
-# RUN ur-driver
-ros2 launch ur_robot_driver ur_control.launch.py \
-  ur_type:=ur5e \
-  robot_ip:=${ROBOT_IP} \
-  kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml \
-  description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
-  launch_rviz:=false
-
-ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=true
-ros2 launch ur5e_2f_85_teleoperation ur5e_teleoperation.launch.py
+python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 --break-system-packages
+python3 -m pip install hydra-core omegaconf einops torchsummary tqdm --break-system-packages
 ```

@@ -34,7 +34,7 @@ docker run -it --rm \
 docker run --rm -it \
   -e ROBOT_MODEL=UR5e \
   --net ursim_net \
-  --ip 192.168.56.101 \
+  --ip ${ROBOT_IP} \
   --privileged \
   --cap-add=NET_ADMIN \
   -p 5900:5900 -p 6080:6080 \
@@ -44,7 +44,7 @@ docker run --rm -it \
 # RUN ur-driver
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=172.16.174.49 \
+  robot_ip:=${ROBOT_IP} \
   kinematics_params_file:=/home/ros2_ws/src/ur5e_2f_85/real_robot_calibration.yaml \
   description_launchfile:="/home/ros2_ws/src/ur5e_2f_85/ur5e_2f_85_description/launch/ur5e_2f_85_display_control.launch.py" \
   launch_rviz:=false
