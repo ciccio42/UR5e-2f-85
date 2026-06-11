@@ -2,9 +2,8 @@ import sys, os
 import argparse
 if __name__ == "__main__":
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
-from cond_target_obj_detector import CondTargetObjectDetector
+from ai_controller.models.cod_controller.cond_target_obj_detector import CondTargetObjectDetector
 from ai_controller.utils.ai_controller import AIController
-import cond_target_obj_detector 
 import hydra
 from omegaconf import OmegaConf
 
@@ -23,8 +22,8 @@ class CODController(AIController):
         Args:
             model_config: The configuration for the model.
         """
-        
-        return hydra.utils.instantiate(self.model_config.policy)
+        self.model_config_omega = OmegaConf.load(model_config)
+        return hydra.utils.instantiate(self.model_config_omega.policy)
 
     def reset(self):
         """Reset the controller to its initial state."""
@@ -62,10 +61,10 @@ if __name__ == "__main__":
     args = args.parse_args()
     
     
-    # 1. Load the model configuration
-    print(f"Loading model configuration from {args.model_config}...")
-    config = OmegaConf.load(args.model_config)
-    print("Model configuration loaded:")
+    # # 1. Load the model configuration
+    # print(f"Loading model configuration from {args.model_config}...")
+    # config = OmegaConf.load(args.model_config)
+    # print("Model configuration loaded:")
     
     # 2. Initialize the CODController with the loaded configuration
     print("Initializing CODController...")

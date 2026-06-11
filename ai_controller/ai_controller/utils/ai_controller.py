@@ -17,8 +17,8 @@ class AIController(ABC):
         Args:
             model_config (str): The configuration for the model.
         """
-        self.model_config = model_config
-        self.model = self.load_model(model_config)
+        self.model_config_path = model_config
+        self.model = self.load_model(self.model_config_path)
 
     @abstractmethod
     def load_model(self, model_config: str):

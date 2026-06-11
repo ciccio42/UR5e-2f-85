@@ -9,7 +9,7 @@ import os
 import hydra
 # mmdet moduls
 from torchsummary import summary
-from utils import *
+from .utils import *
 import torch
 from torch.autograd import Variable
 from torchvision import ops

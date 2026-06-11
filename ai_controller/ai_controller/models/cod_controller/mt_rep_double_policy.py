@@ -3,9 +3,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-from utils import get_model, TemporalPositionalEncoding, project_bboxes
-from discrete_logistic import DiscreteMixLogistic
-from rep_modules import BYOLModule, ContrastiveModule
+from ai_controller.models.cod_controller.utils import get_model, TemporalPositionalEncoding, project_bboxes
+from ai_controller.models.cod_controller.discrete_logistic import DiscreteMixLogistic
+from ai_controller.models.cod_controller.rep_modules import BYOLModule, ContrastiveModule
 from einops import rearrange, repeat, parse_shape
 from collections import OrderedDict
 import os

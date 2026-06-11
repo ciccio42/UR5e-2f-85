@@ -11,6 +11,12 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
     ],
+    package_data={
+        'ai_controller':[
+            'models/*',
+            'utils/*',
+            ]    
+    },
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='root',
@@ -24,6 +30,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'ai_controller_node = ai_controller.ai_controller_node:main',
         ],
     },
 )
