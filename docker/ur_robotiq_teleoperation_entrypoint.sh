@@ -4,6 +4,7 @@
 source "/opt/ros/$ROS_DISTRO/setup.bash" 
 apt install -y ros-$ROS_DISTRO-moveit-py
 source "/opt/ros/$ROS_DISTRO/setup.bash" 
+ros2 daemon stop && ros2 daemon start
 colcon build --packages-select ur5e_2f_85_description \
                                 ur5e_2f_85_moveit_config \
                                 ur5e_2f_85_teleoperation_msg \

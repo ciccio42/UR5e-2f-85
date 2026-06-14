@@ -19,4 +19,5 @@
   + [] Add bounding boxes generation procedure
 * [] Controllers
   + [X] Dataset trajectory reply
-  + [] AI-node controllers
+  + [X] AI-node controllers
+  + [] Test AI-Controller with hardware

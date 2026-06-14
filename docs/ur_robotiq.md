@@ -9,6 +9,7 @@ docker run -it --rm \
   --privileged \
   --cap-add=SYS_NICE \
   --cpuset-cpus="0-1" \
+  --network=host \
   --ipc=host \
   --pid=host \
   --ulimit memlock=-1:-1 \
