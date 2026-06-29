@@ -8,3 +8,5 @@ traj_tmp/
 resource/
 test/
 checkpoint_folder/
+*png
+save_images/

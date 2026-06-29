@@ -8,7 +8,6 @@ import numpy as np
 from einops import rearrange, reduce, repeat
 from torchsummary import summary
 import xml.etree.ElementTree as ET
-import numpy as np
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -635,7 +634,6 @@ def get_class_activation_map(feature_map: np.array, input_image: np.array):
     return cam_img, output_image
 
 
-
 def build_tvf_formatter(config, env_name):
     """Use this for torchvision.transforms in multi-task dataset,
     note eval_fn always feeds in traj['obs']['images'], i.e. shape (h,w,3)
@@ -671,3 +669,32 @@ def build_tvf_formatter(config, env_name):
         return img
         
     return resize_crop
+
+def move_to_device(img, states, context, device):
+    
+    # print(f"\n \
+    #         Img shape: {[i.shape for i in img]}, \n \
+    #         States shape: {[s.shape for s in states] if states is not None else 'None'}, \n \
+    #         Context shape: {[c.shape for c in context] if context is not None else 'None'}"
+    #         )
+    if states is not None:
+        s_t = torch.from_numpy(np.concatenate(states, 0).astype(np.float32))[None]
+    else:
+        s_t = torch.zeros((1, 1, 1)).float().cuda(device)
+        
+    i_t = img[None][None]
+        
+    s_t, i_t = s_t.float().cuda(device), i_t.float().cuda(device)
+    
+    # Move context to device
+    # Context is a list of tensors
+    if context is not None:
+        # Shape must be (1, 4, C, H, W) for 4 context images
+        # Context is a list of tensors C,H,W
+        context = torch.stack(context, dim=0).unsqueeze(0).float().cuda(device)
+
+
+    print(f"i_t shape: {i_t.shape}, s_t shape: {s_t.shape}, context shape: {context.shape if context is not None else 'None'}")
+    return i_t, s_t, context
+
+    

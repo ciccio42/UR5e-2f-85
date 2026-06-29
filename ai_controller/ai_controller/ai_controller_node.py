@@ -1,8 +1,15 @@
-import rclpy
-from rclpy.node import Node
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.action import ActionClient
+import threading
 
+import message_filters
+import rclpy
+from cv_bridge import CvBridge
+from rclpy.action import ActionClient
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import Image as RosImage
+from PIL import Image
+import os
 
 class AIControllerNode(Node):
     
@@ -24,9 +31,9 @@ class AIControllerNode(Node):
         self.declare_parameter('gripper_action_topic', 
                                                     '/robotiq_gripper_controller/gripper_cmd')
         self.declare_parameter('camera_topic', 
-                                            ['zed_front/rgb/color/rect/image', 
-                                            'zed_left/rgb/color/rect/image',
-                                            'zed_right/rgb/color/rect/image'])
+                                            ['/zed_front/zed_node/rgb/color/rect/image', 
+                                            '/zed_left/zed_node/rgb/color/rect/image',
+                                            '/zed_right/zed_node/rgb/color/rect/image'])
         self.declare_parameter('task_name', 
                                             "pick_place")
         self.declare_parameter('demo_path', 
@@ -74,16 +81,73 @@ class AIControllerNode(Node):
         # )
         # self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
         
+        # 3. Wait for camera topics to be available
+        self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
+        for camera_topic in self.camera_topic:
+            self.get_logger().info(f'Waiting for camera topic: {camera_topic}')
+            # wait for the topic to be available
+            find = False
+            while not find:
+                topics_info = self.get_topic_names_and_types()
+                for topic_info in topics_info:
+                    topic_name = topic_info[0]
+                    if topic_name == camera_topic:
+                        self.get_logger().info(f'Camera topic {camera_topic} is available.')
+                        find = True
+                        break
+                
+                if not find:
+                    self.get_logger().info(f'Camera topic {camera_topic} not available yet. Waiting...')
+                    rclpy.spin_once(self, timeout_sec=1.0)
+           
+            self.get_logger().info(f'Camera topic {camera_topic} is available.')
+
+        # 4. Set up synchronized camera subscribers
+        self.bridge = CvBridge()
+        self.latest_synced_images = None
+        self.synced_images_event = threading.Event()
+
+        self.camera_subs = [
+            message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
+            for topic in self.camera_topic
+        ]
+        self.camera_sync = message_filters.ApproximateTimeSynchronizer(
+            self.camera_subs, queue_size=10, slop=10
+        )
+        self.camera_sync.registerCallback(self.synced_images_callback)
+
         self.traj_cnt = 0
         self.max_step = 90
-        
+
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
         self.control_loop()
+
+    def synced_images_callback(self, *image_msgs):
+        """Called once per cycle when all camera topics have a message within the sync window."""
+        self.latest_synced_images = [
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8') for msg in image_msgs
+        ]
+        self.synced_images_event.set()
+
+    def get_synced_images(self, timeout_sec=5.0):
+        """Block (while spinning callbacks) until a fresh synchronized set of camera images arrives."""
+        self.synced_images_event.clear()
+        start = self.get_clock().now()
+        while not self.synced_images_event.is_set():
+            rclpy.spin_once(self, timeout_sec=0.1)
+            elapsed = (self.get_clock().now() - start).nanoseconds / 1e9
+            if elapsed > timeout_sec:
+                self.get_logger().error('Timed out waiting for synchronized camera images.')
+                return None
+        return self.latest_synced_images
         
     def control_loop(self):
         """Main control loop for the AI controller."""
         
         self.get_logger().info('Starting control loop...')
+        # create a directory to save the images
+        save_path = f'/home/ros2_ws/src/ai_controller/saved_images/task_{self.task_name}'
+        os.makedirs(save_path, exist_ok=True)
         
         while rclpy.ok():
         
@@ -113,12 +177,29 @@ class AIControllerNode(Node):
                     self.controller.load_demo_dataset(self.demo_path, enter_task_id)
                 
             
-            # 1. Get sensor data (e.g., camera images)
-            # 2. Pre-process the sensor data
-            # 3. Perform inference using the AI controller
-            # 4. Post-process the output from the AI controller
-            # 5. Send commands to the robot (e.g., set pose, control gripper)
-            # pass
+                # 1. Get sensor data (e.g., camera images)
+                images = self.get_synced_images()
+                if images is None:
+                    self.get_logger().error('Skipping step: failed to get synchronized camera images.')
+                    continue
+                # images is a list of cv2/numpy arrays in the same order as self.camera_topic
+                # save the images with PIL format for debugging
+                for i, image in enumerate(images):
+                    img = Image.fromarray(image)
+                    img.save(f'{save_path}/camera_image_{i}.png')
+
+                # 2. Get joint-states or other relevant robot states (if needed for inference)
+                states = None
+                
+                # 3. Perform inference using the AI controller
+                action = self.controller.inference(
+                                                    input_data=[images, states],
+                                                   t=step,
+                                                   save_path=f'{save_path}/step_{step}')
+                
+                # 4. Post-process the output from the AI controller
+                # 5. Send commands to the robot (e.g., set pose, control gripper)
+                # pass
         
 
 def main(args=None):
