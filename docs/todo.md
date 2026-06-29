@@ -21,3 +21,6 @@
   + [X] Dataset trajectory reply
   + [X] AI-node controllers
   + [] Test AI-Controller with hardware
+    * [X] Test load demo
+    * [] Test camera
+    * [] Move Human-Demo on spark

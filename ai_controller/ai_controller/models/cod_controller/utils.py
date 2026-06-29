@@ -19,6 +19,10 @@ from torchvision import ops
 import torch.nn.functional as F
 import torch.optim as optim
 from einops import *
+from collections import OrderedDict 
+from torchvision import transforms
+from torchvision.transforms.functional import resized_crop
+
 
 class ResNetFeats(nn.Module):
     def __init__(self, out_dim=256, output_raw=False, drop_dim=1, use_resnet18=False, pretrained=False):
@@ -629,3 +633,41 @@ def get_class_activation_map(feature_map: np.array, input_image: np.array):
     cv2.imwrite("cam.png", output_image)
 
     return cam_img, output_image
+
+
+
+def build_tvf_formatter(config, env_name):
+    """Use this for torchvision.transforms in multi-task dataset,
+    note eval_fn always feeds in traj['obs']['images'], i.e. shape (h,w,3)
+    """
+
+    def resize_crop(img, bb=None, agent=False):
+        """applies to every timestep's RGB obs['camera_front_image']"""
+        task_spec = config.tasks_cfgs.get(env_name, dict())
+        img_height, img_width = img.shape[:2]
+        """applies to every timestep's RGB obs['camera_front_image']"""
+        if len(getattr(task_spec, "demo_crop", OrderedDict())) != 0 and not agent:
+            crop_params = task_spec.get(
+                "demo_crop", [0, 0, 0, 0])
+        if len(getattr(task_spec, "agent_crop", OrderedDict())) != 0 and agent:
+            crop_params = task_spec.get(
+                "agent_crop", [0, 0, 0, 0])
+        if len(getattr(task_spec, "task_crops", OrderedDict())) != 0:
+            crop_params = task_spec.get(
+                "task_crops", [0, 0, 0, 0])
+        if len(getattr(task_spec, "crop", OrderedDict())) != 0:
+            crop_params = task_spec.get(
+                "crop", [0, 0, 0, 0])
+
+        top, left = crop_params[0], crop_params[2]
+        img_height, img_width = img.shape[0], img.shape[1]
+        box_h, box_w = img_height - top - \
+            crop_params[1], img_width - left - crop_params[3]
+
+        img = transforms.ToTensor()(img.copy())
+        # ---- Resized crop ----#
+        img = resized_crop(img, top=top, left=left, height=box_h,
+                            width=box_w, size=(config.dataset_cfg.height, config.dataset_cfg.width))
+        return img
+        
+    return resize_crop
