@@ -3,7 +3,7 @@ import argparse
 if __name__ == "__main__":
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
 from ai_controller.models.cod_controller.cond_target_obj_detector import CondTargetObjectDetector
-from ai_controller.models.cod_controller.utils import build_tvf_formatter, move_to_device
+from ai_controller.models.cod_controller.utils import build_tvf_formatter, move_to_device, seed_everything
 from ai_controller.utils.ai_controller import AIController
 import hydra
 from omegaconf import OmegaConf
@@ -31,8 +31,14 @@ class CODController(AIController):
         super().__init__(model_config)
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
         self.img_formatter = build_tvf_formatter(self.model_config_omega, env_name)
+        
+        self.move_model_to_device(self.device)
+        # set model to eval mode
+        self.model.eval()
+        
+        # set random seed for reproducibility
+        seed_everything(42)
         
     def load_model(self, model_config):
         """Load the COD model from the given configuration.
@@ -42,6 +48,14 @@ class CODController(AIController):
         """
         self.model_config_omega = OmegaConf.load(model_config)
         return hydra.utils.instantiate(self.model_config_omega.policy)
+    
+    def move_model_to_device(self, device):
+        """Move the model to the specified device.
+        
+        Args:
+            device: The device to move the model to.
+        """
+        self.model.to(device)   
     
     def select_random_frames(self, frames, n_select=4, sample_sides=True, random_frames=True):
         """Select a specified number of random frames from the given frames.
@@ -188,13 +202,28 @@ class CODController(AIController):
         
         return [formatted_imgs, formatted_states]
     
+    def post_process_bb(self, predicted_bb, target_obj_prediction):
+        """Post-process the predicted bounding box from the model.
+        
+        Args:
+            predicted_bb: The predicted bounding box from the model.
+            target_obj_prediction: The target object prediction from the model.
+        """
+        pass
+        
+        
+    
     def post_process(self, output_data):
         """Post-process the output data from the model before sending it to the robot.
         
         Args:
             output_data: The output data from the model to be post-processed.
-        """
-        pass
+        """ 
+        action = output_data[0]
+        predicted_bb = output_data[1]
+        target_obj_prediction = output_data[2]
+        
+        return action, predicted_bb, target_obj_prediction
     
     def inference(self, input_data, t, save_path=None):
         """Perform inference using the model.
@@ -233,14 +262,32 @@ class CODController(AIController):
                         states=pre_processed_states,
                         images=pre_processed_imgs,
                         context=context,
-                        bb=torch.zeros((2, 2), dtype=torch.float, device=self.device), # create a tensor of zeros with shape (2,2)
-                        gt_classes=torch.zeros((2, 2), dtype=torch.float, device=self.device), # create a tensor of zeros with the same shape as bb
+                        bb=torch.zeros((1, 1, 2, 2), dtype=torch.float, device=self.device), # create a tensor of zeros with shape (2,2)
+                        gt_classes=torch.zeros((1, 1, 2), dtype=torch.float, device=self.device), # create a tensor of zeros with the same shape as bb
                         predict_gt_bb=False,
                         eval=True,
                         target_obj_embedding=None,
                         compute_activation_map=True,
                         t=t)
-            print(f"Inference output at time step {t}: {out}")
+            
+            action = out['bc_distrib'].sample()[0, -1].cpu().numpy()
+            predicted_bb = out.get('predicted_bb', None)
+            target_obj_prediction = out.get('target_obj_prediction', None)
+            # print(f"Inference output at time step {t}: 'action: {action}, predicted_bb: {predicted_bb}, target_obj_prediction: {target_obj_prediction}")
+            
+            # plot predictred_bb on the pre-processed image and save it to a folder for visualization
+            if save_path is not None and predicted_bb is not None:
+                # Implementation for plotting and saving the image
+                img_np = pre_processed_imgs[0][0].permute(1, 2, 0).cpu().numpy()
+                img_np = np.ascontiguousarray((img_np * 255).astype(np.uint8))
+                # Convert predicted_bb to numpy array and scale to image dimensions
+                for bb in predicted_bb[0][0].cpu().numpy():
+                    x1, y1, x2, y2 = bb
+                    cv2.rectangle(img_np, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+                pil_img = PIL.Image.fromarray(img_np)
+                pil_img.save(os.path.join(save_path, f"predicted_bb_img_{t}.png"))
+                
+            return self.post_process([action, predicted_bb, target_obj_prediction])
         
         
         

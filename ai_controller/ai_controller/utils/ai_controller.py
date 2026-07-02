@@ -31,6 +31,16 @@ class AIController(ABC):
         raise NotImplementedError("The method load_model() is not implemented.")
     
     @abstractmethod
+    def move_model_to_device(self, device):
+        """Move the model to the specified device.
+        
+        Args:
+            device: The device to move the model to.
+        """
+        
+        raise NotImplementedError("The method move_model_to_device() is not implemented.")
+    
+    @abstractmethod
     def reset(self):        
         """Reset the controller to its initial state."""
         raise NotImplementedError("The method reset() is not implemented.")

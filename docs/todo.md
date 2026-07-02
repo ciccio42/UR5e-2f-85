@@ -24,6 +24,6 @@
     * [X] Test load demo
     * [X] Test camera
     * [] Move Human-Demo on spark
-    * [] Perform inference
+    * [X] Perform inference
     * [] Move Robot based on Inference
     * [] Save rollout

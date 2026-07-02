@@ -21,7 +21,7 @@ from einops import *
 from collections import OrderedDict 
 from torchvision import transforms
 from torchvision.transforms.functional import resized_crop
-
+import random
 
 class ResNetFeats(nn.Module):
     def __init__(self, out_dim=256, output_raw=False, drop_dim=1, use_resnet18=False, pretrained=False):
@@ -669,6 +669,15 @@ def build_tvf_formatter(config, env_name):
         return img
         
     return resize_crop
+
+def seed_everything(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def move_to_device(img, states, context, device):
     
