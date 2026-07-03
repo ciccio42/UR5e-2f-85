@@ -27,3 +27,5 @@
     * [X] Perform inference
     * [] Move Robot based on Inference
     * [] Save rollout
+  + [] VLA
+    * [] Add class for open-vla

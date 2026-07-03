@@ -10,6 +10,9 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image as RosImage
 from PIL import Image
 import os
+from moveit_controller_srvs.srv import GoHome, GoToPose
+from control_msgs.action import GripperCommand
+
 
 class AIControllerNode(Node):
     
@@ -57,29 +60,32 @@ class AIControllerNode(Node):
         if self.ai_controller_target == 'cod_controller':
             from ai_controller.models.cod_controller.cod_controller import CODController
             self.controller = CODController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'openvla_controller':
+            from ai_controller.models.openvla_controller.openvla_controller import OpenVLAController
+            self.controller = OpenVLAController(self.model_config_path, self.task_name)
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
         
         
         # 2. Set up ROS2 interfaces (publishers, subscribers, services)
-        # self.get_logger().info(f'Waiting for service {self.set_home_service}...')
-        # self.set_home_client = self.create_client(SetHome, self.set_home_service)
-        # self.set_home_client.wait_for_service()
-        # self.get_logger().info(f'Service {self.set_home_service} is available.')
+        self.get_logger().info(f'Waiting for service {self.set_home_service}...')
+        self.set_home_client = self.create_client(GoHome, self.set_home_service)
+        self.set_home_client.wait_for_service()
+        self.get_logger().info(f'Service {self.set_home_service} is available.')
         
-        # self.get_logger().info(f'Waiting for service {self.set_pose_service}...')
-        # self.set_pose_client = self.create_client(SetPose, self.set_pose_service)
-        # self.set_pose_client.wait_for_service()
-        # self.get_logger().info(f'Service {self.set_pose_service} is available.')
+        self.get_logger().info(f'Waiting for service {self.set_pose_service}...')
+        self.set_pose_client = self.create_client(GoToPose, self.set_pose_service)
+        self.set_pose_client.wait_for_service()
+        self.get_logger().info(f'Service {self.set_pose_service} is available.')
         
-        # self.get_logger().info(f"Creating publisher for gripper action on topic {self.gripper_action_topic}...")
-        # self.gripper_action_client = ActionClient(
-        #     self,
-        #     GripperCommand,
-        #     self.gripper_action_topic,
-        # )
-        # self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
+        self.get_logger().info(f"Creating publisher for gripper action on topic {self.gripper_action_topic}...")
+        self.gripper_action_client = ActionClient(
+            self,
+            GripperCommand,
+            self.gripper_action_topic,
+        )
+        self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
         
         # 3. Wait for camera topics to be available
         self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
@@ -161,16 +167,16 @@ class AIControllerNode(Node):
             for step in range(self.max_step):
                 
                 if step == 0:
-                    # self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
-                    # # call service to set robot to home position
-                    # # wait for the service to complete
-                    # future = self.set_home_client.call_async(SetHome.Request())
-                    # rclpy.spin_until_future_complete(self, self.set_home_client.response)
-                    # if future.result() is not None:
-                    #     self.get_logger().info(f'Robot set to home position for task ID: {enter_task_id}')
-                    # else:
-                    #     self.get_logger().error(f'Service call failed for setting robot to home position: {future.exception()}')
-                    #     return                
+                    self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
+                    # call service to set robot to home position
+                    # wait for the service to complete
+                    future = self.set_home_client.call_async(GoHome.Request())
+                    rclpy.spin_until_future_complete(self, future)
+                    if future.result() is not None:
+                        self.get_logger().info(f'Robot set to home position for task ID: {enter_task_id}')
+                    else:
+                        self.get_logger().error(f'Service call failed for setting robot to home position: {future.exception()}')
+                        return                
                     
                     # load the demo data for the given task_id
                     self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
@@ -192,14 +198,49 @@ class AIControllerNode(Node):
                 states = None
                 
                 # 3. Perform inference using the AI controller
-                action = self.controller.inference(
+                out = self.controller.inference(
                                                     input_data=[images, states],
                                                    t=step,
                                                    save_path=f'{save_path}/step_{step}')
+                if len(out) > 1:
+                    action, predicted_bb, target_obj_prediction = out
+                else:
+                    action = out[0]                
+                self.get_logger().info(f'Computed Action at step {step}: {action}')
                 
-                # 4. Post-process the output from the AI controller
                 # 5. Send commands to the robot (e.g., set pose, control gripper)
-                # pass
+                # call service to set robot to the desired pose
+                self.get_logger().info(f'Setting robot to desired pose at step {step}')
+                pose_request = GoToPose.Request()
+                pose_request.pose.pose.position.x = action[0]
+                pose_request.pose.pose.position.y = action[1]
+                pose_request.pose.pose.position.z = action[2]
+                pose_request.pose.pose.orientation.x = action[3]
+                pose_request.pose.pose.orientation.y = action[4]
+                pose_request.pose.pose.orientation.z = action[5]
+                pose_request.pose.pose.orientation.w = action[6]
+                future = self.set_pose_client.call_async(pose_request)
+                rclpy.spin_until_future_complete(self, future)
+                if future.result() is not None:
+                    self.get_logger().info(f'Robot set to desired pose at step {step}')
+                else:
+                    self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                    raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                
+                # 6. Control the gripper based on the predicted action
+                self.get_logger().info(f'Controlling gripper at step {step}')   
+                gripper_goal = GripperCommand.Goal()
+                gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                gripper_goal.command.max_effort = 50.0
+                future = self.gripper_action_client.send_goal_async(gripper_goal)
+                rclpy.spin_until_future_complete(self, future)
+                if future.result() is not None:
+                    self.get_logger().info(f'Gripper command sent at step {step}')
+                else:
+                    self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
+                    raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
+                
+                
         
 
 def main(args=None):

@@ -2,6 +2,8 @@
 
 ## UR-Container
 ```bash
+export ROBOT_IP=172.16.174.59
+
 docker build -t ur_robotiq_teleoperation . -f UR_Robotiq_Teleoperation
 xhost +local:docker
 docker run -it --rm \
@@ -17,6 +19,7 @@ docker run -it --rm \
   --shm-size=1g \
   --security-opt seccomp=unconfined \
   -e DISPLAY=$DISPLAY \
+  -e ROBOT_IP=${ROBOT_IP} \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
@@ -70,7 +73,7 @@ docker run -it --rm \
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
   robot_ip:=${ROBOT_IP} \
-  use_tool_communication:=false \
+  use_tool_communication:=true \
   tool_voltage:=24 \
   tool_parity:=0 \
   tool_baud_rate:=115200 \
@@ -98,6 +101,11 @@ ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=tr
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run moveit_controller moveit_controller_node
+
+# Run AI-Controller
+docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
+ros2 run ai_controller ai_controller_node
 ``` 
 
 **Docker-2: Launch Zed-Camera Drivers**
@@ -109,6 +117,61 @@ ros2 launch zed_camera_driver zed_multi_camera.launch.py \
     rviz:=false
 ```
 
+## OpenVLA Dependencies
+
+Install the following inside the container (`docker exec -it ur_robotiq_teleoperation_container bash`).
+
+### Required
+```bash
+# Core model loading (AutoModelForVision2Seq + AutoProcessor with trust_remote_code)
+pip install "transformers>=4.40.0" --break-system-packages
+
+# LoRA adapter merging (needed when using fine-tuned checkpoints)
+pip install peft --break-system-packages
+
+# Efficient model loading / device placement
+pip install accelerate --break-system-packages
+
+# LLaMA tokenizer dependency
+pip install sentencepiece --break-system-packages
+
+# Vision backbone (DINOv2 / SigLIP)
+pip install timm --break-system-packages
+
+# YAML config parsing (used by openvla_controller)
+pip install pyyaml --break-system-packages
+```
+
+### Optional – quantization (reduces GPU memory from ~14 GB to ~8 / ~4 GB)
+```bash
+pip install bitsandbytes --break-system-packages
+```
+
+### Optional – full VLA-Bench pipeline (L1 regression / diffusion action head / proprioception)
+The `openvla_utils.py` file from the VLA-Bench repo provides `get_vla_action`, `get_action_head`,
+`get_proprio_projector`, etc.  To use them:
+
+1. Add a bind-mount to the `docker run` command:
+   ```bash
+   -v /home/asus-mivia/Desktop/Multi-Task-LFD/repo/VLA-Bench:/home/vla_bench
+   ```
+2. Set `openvla_utils_path: "/home/vla_bench"` in `openvla_config.yaml`.
+3. Install the additional requirements from VLA-Bench inside the container:
+   ```bash
+   pip install draccus einops --break-system-packages
+   # tensorflow is needed only if using the tf-based image preprocessing in openvla_utils
+   pip install tensorflow --break-system-packages
+   ```
+
+### Configuration
+Set the ROS parameters to use OpenVLA:
+```bash
+ros2 run ai_controller ai_controller_node \
+  --ros-args \
+  -p ai_controller_target:=openvla_controller \
+  -p model_config_path:=/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml \
+  -p task_name:=pick_place
+```
 
 ## Dependencies to bring in docker
 ```bash

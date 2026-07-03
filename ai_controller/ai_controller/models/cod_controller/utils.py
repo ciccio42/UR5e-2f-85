@@ -703,7 +703,41 @@ def move_to_device(img, states, context, device):
         context = torch.stack(context, dim=0).unsqueeze(0).float().cuda(device)
 
 
-    print(f"i_t shape: {i_t.shape}, s_t shape: {s_t.shape}, context shape: {context.shape if context is not None else 'None'}")
+    # print(f"i_t shape: {i_t.shape}, s_t shape: {s_t.shape}, context shape: {context.shape if context is not None else 'None'}")
     return i_t, s_t, context
 
     
+def denormalize_action(norm_action, action_ranges):
+    action = np.clip(norm_action.copy(), -1, 1)
+    if action_ranges is None:
+        raise ValueError("action_ranges must be provided for denormalization.")
+   
+    action_ranges = np.array(action_ranges)
+    for d in range(action_ranges.shape[0]):
+        action[d] = (0.5 * (action[d] + 1) *
+                     (action_ranges[d, 1] - action_ranges[d, 0])) + action_ranges[d, 0]
+    return action
+
+
+def axisangle2quat(vec):
+    """
+    Converts scaled axis-angle to quat.
+    Args:
+        vec (np.array): (ax,ay,az) axis-angle exponential coordinates
+    Returns:
+        np.array: (x,y,z,w) vec4 float angles
+    """
+    # Grab angle
+    angle = np.linalg.norm(vec)
+
+    # handle zero-rotation case
+    if math.isclose(angle, 0.0):
+        return np.array([0.0, 0.0, 0.0, 1.0])
+
+    # make sure that axis is a unit vector
+    axis = vec / angle
+
+    q = np.zeros(4)
+    q[3] = np.cos(angle / 2.0)
+    q[:3] = axis * np.sin(angle / 2.0)
+    return q

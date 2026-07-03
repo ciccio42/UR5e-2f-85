@@ -3,7 +3,7 @@ import argparse
 if __name__ == "__main__":
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../.."))
 from ai_controller.models.cod_controller.cond_target_obj_detector import CondTargetObjectDetector
-from ai_controller.models.cod_controller.utils import build_tvf_formatter, move_to_device, seed_everything
+from ai_controller.models.cod_controller.utils import build_tvf_formatter, move_to_device, seed_everything, denormalize_action, axisangle2quat
 from ai_controller.utils.ai_controller import AIController
 import hydra
 from omegaconf import OmegaConf
@@ -32,6 +32,10 @@ class CODController(AIController):
         
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.img_formatter = build_tvf_formatter(self.model_config_omega, env_name)
+        
+        # get normalization ranges for the action space from the model configuration
+        self.action_ranges = self.model_config_omega.dataset_cfg.normalization_ranges
+        print(f"Action normalization ranges: {self.action_ranges}")
         
         self.move_model_to_device(self.device)
         # set model to eval mode
@@ -210,7 +214,34 @@ class CODController(AIController):
             target_obj_prediction: The target object prediction from the model.
         """
         pass
+    
+    def _post_process_action(self, action):
+        """Post-process the predicted action from the model.
         
+        Args:
+            action: The predicted action from the model.
+        """
+        # print(f"Post-processing action: {action}")
+        if len(action.shape) != 1:
+            action_list = list()
+            for t in range(action.shape[0]):
+                # print(f"Post-processing action at time step {t}: {action[t]}")
+                action_list.append(denormalize_action(action[t], self.action_ranges))
+            action = action_list
+        else:
+            action = denormalize_action(action, self.action_ranges)
+        
+        desired_position = action[:3]
+        desired_orientation = axisangle2quat(vec=action[3:6])
+        predicted_gripper = action[-1]
+        if predicted_gripper > 0.75:
+            gripper_finger_pos = 255
+        else:
+            gripper_finger_pos = 0
+            
+        action = np.concatenate([desired_position, desired_orientation, [gripper_finger_pos]])
+        
+        return action    
         
     
     def post_process(self, output_data):
@@ -223,6 +254,8 @@ class CODController(AIController):
         predicted_bb = output_data[1]
         target_obj_prediction = output_data[2]
         
+        # post-process the predicted action
+        action = self._post_process_action(action)
         return action, predicted_bb, target_obj_prediction
     
     def inference(self, input_data, t, save_path=None):
@@ -234,6 +267,8 @@ class CODController(AIController):
             save_path: The path to save the inference results.
         """
 
+        print(f"Performing inference at time step {t}...")
+        
         # pre-process the input data
         pre_processed_data = self.pre_process(input_data)
         pre_processed_imgs = pre_processed_data[0]
@@ -287,6 +322,10 @@ class CODController(AIController):
                 pil_img = PIL.Image.fromarray(img_np)
                 pil_img.save(os.path.join(save_path, f"predicted_bb_img_{t}.png"))
                 
+                # show the image with predicted bounding boxes using OpenCV
+                cv2.imshow(f"Predicted BB at step {t}", img_np[:, :, ::-1])  # Convert RGB to BGR for OpenCVclear
+                cv2.waitKey(1000)  # Display the image for 1 s
+
             return self.post_process([action, predicted_bb, target_obj_prediction])
         
         
