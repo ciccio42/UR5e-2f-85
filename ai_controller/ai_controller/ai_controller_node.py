@@ -41,6 +41,13 @@ class AIControllerNode(Node):
                                             "pick_place")
         self.declare_parameter('demo_path', 
                                             "/dataset/pick_place/human_rgb_pick_place")
+        self.declare_parameter('pose_before_first_inference', [-0.15552094619366708,
+                                                               0.34869994018501943,
+                                                               0.1532803451753288,
+                                                               0.9994452044624775,
+                                                               0.03161651380119412,
+                                                               0.0021438049655468088,
+                                                               0.010251021036213035])
         
         
 
@@ -54,6 +61,7 @@ class AIControllerNode(Node):
         self.camera_topic = self.get_parameter('camera_topic').get_parameter_value().string_array_value
         self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
         self.demo_path = self.get_parameter('demo_path').get_parameter_value().string_value
+        self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
         
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
@@ -146,7 +154,48 @@ class AIControllerNode(Node):
                 self.get_logger().error('Timed out waiting for synchronized camera images.')
                 return None
         return self.latest_synced_images
+    
+    def move_to_initial_pose(self):
+        """Move the robot to the initial pose before starting the control loop."""
+        self.get_logger().info('Moving robot to initial pose before first inference...')
+        input("Press Enter to move the robot to the initial pose. Make sure the robot is in a safe position.")
+        pose_request = GoToPose.Request()
+        pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+        pose_request.pose.header.frame_id = self.frame_id
+        pose_request.pose.pose.position.x = self.pose_before_first_inference[0]
+        pose_request.pose.pose.position.y = self.pose_before_first_inference[1]
+        pose_request.pose.pose.position.z = self.pose_before_first_inference[2]
+        pose_request.pose.pose.orientation.x = self.pose_before_first_inference[3]
+        pose_request.pose.pose.orientation.y = self.pose_before_first_inference[4]
+        pose_request.pose.pose.orientation.z = self.pose_before_first_inference[5]
+        pose_request.pose.pose.orientation.w = self.pose_before_first_inference[6]
         
+        future = self.set_pose_client.call_async(pose_request)
+        rclpy.spin_until_future_complete(self, future)
+        response = future.result()
+        if response is None:
+            self.get_logger().error('set_pose_client service call failed.')
+            raise RuntimeError('set_pose_client service call failed.')
+
+        if response.success:
+            self.get_logger().info(response.message)
+        else:
+            self.get_logger().error(response.message)
+            raise RuntimeError(f'Failed to move robot to initial pose: {response.message}')
+        
+        # Open the gripper to a known position (e.g., fully open) before starting
+        self.get_logger().info('Opening gripper to a known position before first inference...')
+        gripper_goal = GripperCommand.Goal()
+        gripper_goal.command.position = 0.1  # Fully open position (adjust as needed)
+        gripper_goal.command.max_effort = 50.0
+        future = self.gripper_action_client.send_goal_async(gripper_goal)
+        rclpy.spin_until_future_complete(self, future)
+        if future.result() is not None:
+            self.get_logger().info('Gripper opened successfully before first inference.')
+        else:
+            self.get_logger().error(f'Failed to open gripper before first inference: {future.exception()}')
+            raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
+    
     def control_loop(self):
         """Main control loop for the AI controller."""
         
@@ -172,11 +221,19 @@ class AIControllerNode(Node):
                     # wait for the service to complete
                     future = self.set_home_client.call_async(GoHome.Request())
                     rclpy.spin_until_future_complete(self, future)
-                    if future.result() is not None:
-                        self.get_logger().info(f'Robot set to home position for task ID: {enter_task_id}')
+                    response = future.result()
+                    if response is None:
+                        self.get_logger().error('set_home_client service call failed.')
+                        raise RuntimeError('set_home_client service call failed.')
+
+                    if response.success:
+                        self.get_logger().info(response.message)
+                        
                     else:
-                        self.get_logger().error(f'Service call failed for setting robot to home position: {future.exception()}')
-                        return                
+                        self.get_logger().error(response.message)
+                        raise RuntimeError(f'Failed to set robot to home position: {response.message}')      
+                    
+                    self.move_to_initial_pose()
                     
                     # load the demo data for the given task_id
                     self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
@@ -199,9 +256,10 @@ class AIControllerNode(Node):
                 
                 # 3. Perform inference using the AI controller
                 out = self.controller.inference(
-                                                    input_data=[images, states],
-                                                   t=step,
-                                                   save_path=f'{save_path}/step_{step}')
+                                                input_data=[images, states],
+                                                t=step,
+                                                save_path=f'{save_path}/step_{step}')
+                
                 if len(out) > 1:
                     action, predicted_bb, target_obj_prediction = out
                 else:
@@ -210,8 +268,11 @@ class AIControllerNode(Node):
                 
                 # 5. Send commands to the robot (e.g., set pose, control gripper)
                 # call service to set robot to the desired pose
-                self.get_logger().info(f'Setting robot to desired pose at step {step}')
+                self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
+                input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
                 pose_request = GoToPose.Request()
+                pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+                pose_request.pose.header.frame_id = self.frame_id
                 pose_request.pose.pose.position.x = action[0]
                 pose_request.pose.pose.position.y = action[1]
                 pose_request.pose.pose.position.z = action[2]

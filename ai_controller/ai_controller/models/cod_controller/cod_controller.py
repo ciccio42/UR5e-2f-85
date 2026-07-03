@@ -14,6 +14,7 @@ import numpy as np
 import PIL
 import cv2
 import torch
+import copy
 
 class TrajectoryUnpickler(pickle.Unpickler):
     def find_class(self, module, name):
@@ -28,19 +29,15 @@ class CODController(AIController):
     def __init__(self, model_config, env_name):
         """Initialize the CODController.
         """
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         super().__init__(model_config)
         
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.img_formatter = build_tvf_formatter(self.model_config_omega, env_name)
-        
         # get normalization ranges for the action space from the model configuration
         self.action_ranges = self.model_config_omega.dataset_cfg.normalization_ranges
         print(f"Action normalization ranges: {self.action_ranges}")
         
-        self.move_model_to_device(self.device)
-        # set model to eval mode
-        self.model.eval()
-        
+        self.move_model_to_device(self.device) 
         # set random seed for reproducibility
         seed_everything(42)
         
@@ -51,7 +48,35 @@ class CODController(AIController):
             model_config: The configuration for the model.
         """
         self.model_config_omega = OmegaConf.load(model_config)
-        return hydra.utils.instantiate(self.model_config_omega.policy)
+        model = hydra.utils.instantiate(self.model_config_omega.policy)
+        
+        # load the model weights from the specified checkpoint
+        model_folder = os.path.dirname(model_config)
+        models = glob.glob(os.path.join(model_folder, "model_save-*.pt"))
+        # order the models by step number and select the latest one
+        models = sorted(models, key=lambda x: int(x.split('-')[-1].split('.')[0]))
+        if not models:
+            raise FileNotFoundError(f"No model checkpoints found in {model_folder}.")
+        model_path = models[-1]
+        print(f"Loading model weights from {model_path}...")
+         
+        weights = torch.load(model_path, map_location=self.device)
+        weights_copy = copy.deepcopy(weights)
+        for key in weights_copy.keys():
+            if 'object_detector' in key:
+                del weights[key]
+        model.load_state_dict(weights, strict=False)
+        model.load_target_obj_detector(
+                                        target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,
+                                        target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step
+                                    )
+        model._object_detector.eval()
+        model.eval()    
+        print("Model weights loaded successfully.")
+        
+        return model
+        
+
     
     def move_model_to_device(self, device):
         """Move the model to the specified device.
@@ -325,6 +350,8 @@ class CODController(AIController):
                 # show the image with predicted bounding boxes using OpenCV
                 cv2.imshow(f"Predicted BB at step {t}", img_np[:, :, ::-1])  # Convert RGB to BGR for OpenCVclear
                 cv2.waitKey(1000)  # Display the image for 1 s
+                # close the OpenCV window
+                cv2.destroyAllWindows()
 
             return self.post_process([action, predicted_bb, target_obj_prediction])
         
