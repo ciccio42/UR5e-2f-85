@@ -163,6 +163,9 @@ class ReplicateTrajectory(Node):
         for index, step in enumerate(self.steps):
             self._update_front_camera_preview(step)
             pose = self._step_to_pose_stamped(step)
+            if index == 0:
+                self.get_logger().info(f'Initial step pose: {pose}')
+                raise RuntimeError('Initial step pose is not None; ensure the robot is in the correct starting position before executing the trajectory.')
             self.get_logger().info(f'Step action: {step["gripper_qpos"]}')
             if pose is None:
                 self.get_logger().warn(f'Step {index} has no supported pose/action data, skipping.')

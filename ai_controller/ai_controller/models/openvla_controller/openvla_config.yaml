@@ -1,0 +1,51 @@
+# OpenVLA controller configuration
+# Pass the path to this file via the 'model_config_path' ROS parameter.
+
+# HuggingFace model ID or absolute local path to the base checkpoint.
+# Examples:
+#   model_path: "openvla/openvla-7b"
+#   model_path: "/dataset/checkpoints/openvla-7b-finetuned"
+model_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/openvla-7b-ur5e-pick-place-165k"
+
+# ── Action head ─────────────────────────────────────────────────────────────
+# Set use_l1_regression: true for fine-tuned models trained with a continuous
+# L1 regression head.
+use_l1_regression: true
+use_diffusion: false
+num_diffusion_steps: 50
+use_film: false
+
+# ── Input images ─────────────────────────────────────────────────────────────
+# 1 = front camera only (camera_topic[0])
+# 2 = front + second camera (camera_topic[1] used as wrist/gripper view)
+num_images_in_input: 2
+center_crop: true
+resize_size: 224
+
+# ── Proprioception ───────────────────────────────────────────────────────────
+use_proprio: true
+proprio_dim: 8   # [eef_x, eef_y, eef_z, roll, pitch, yaw, gripper_open, gripper_closed]
+
+# ── Inference ────────────────────────────────────────────────────────────────
+# Steps to execute open-loop before re-querying the model.
+num_open_loop_steps: 8
+chunk_size: 8
+
+# Action un-normalization key – must match a key in the model's norm_stats
+# dict (dataset_statistics.json inside the checkpoint). Leave empty to have
+# it auto-resolved from task_suite_name at load time (see check_unnorm_key).
+unnorm_key: ""
+
+# Dataset key used to look up action/proprio normalization stats in the
+# checkpoint's dataset_statistics.json (must match a top-level key there).
+task_suite_name: "real_ur5e_pick_place_delta_removed_0_5_10_15"
+
+# ── Quantization ─────────────────────────────────────────────────────────────
+# 8-bit or 4-bit quantization reduces GPU memory from ~14 GB to ~8 GB / ~4 GB.
+# Requires bitsandbytes to be installed in the container.
+load_in_8bit: false
+load_in_4bit: false
+
+# ── Language prompt ───────────────────────────────────────────────────────────
+# Free-form description of the task sent to the model as the language goal.
+task_description: "pick up the object and place it in the target location"

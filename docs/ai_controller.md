@@ -10,7 +10,7 @@ docker run -it --rm \
   --gpus all \
   --privileged \
   --cap-add=SYS_NICE \
-  --cpuset-cpus="0-1" \
+  --cpuset-cpus="0-19" \
   --network host \
   --ipc=host \
   --pid=host \
@@ -123,45 +123,21 @@ Install the following inside the container (`docker exec -it ur_robotiq_teleoper
 
 ### Required
 ```bash
-# Core model loading (AutoModelForVision2Seq + AutoProcessor with trust_remote_code)
-pip install "transformers>=4.40.0" --break-system-packages
+cd  /home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller
+git clone https://github.com/ciccio42/openvla-oft.git
+source /home/ros2_ws/src/ai_controller/ai_controller/models/requirements/openvla_oft_installation.sh
+cd openvla-oft
+pip install -e . --break-system-packages
 
-# LoRA adapter merging (needed when using fine-tuned checkpoints)
-pip install peft --break-system-packages
-
-# Efficient model loading / device placement
-pip install accelerate --break-system-packages
-
-# LLaMA tokenizer dependency
-pip install sentencepiece --break-system-packages
-
-# Vision backbone (DINOv2 / SigLIP)
-pip install timm --break-system-packages
-
-# YAML config parsing (used by openvla_controller)
-pip install pyyaml --break-system-packages
+# unit test
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller
+python3 test.py 
 ```
 
 ### Optional – quantization (reduces GPU memory from ~14 GB to ~8 / ~4 GB)
 ```bash
 pip install bitsandbytes --break-system-packages
 ```
-
-### Optional – full VLA-Bench pipeline (L1 regression / diffusion action head / proprioception)
-The `openvla_utils.py` file from the VLA-Bench repo provides `get_vla_action`, `get_action_head`,
-`get_proprio_projector`, etc.  To use them:
-
-1. Add a bind-mount to the `docker run` command:
-   ```bash
-   -v /home/asus-mivia/Desktop/Multi-Task-LFD/repo/VLA-Bench:/home/vla_bench
-   ```
-2. Set `openvla_utils_path: "/home/vla_bench"` in `openvla_config.yaml`.
-3. Install the additional requirements from VLA-Bench inside the container:
-   ```bash
-   pip install draccus einops --break-system-packages
-   # tensorflow is needed only if using the tf-based image preprocessing in openvla_utils
-   pip install tensorflow --break-system-packages
-   ```
 
 ### Configuration
 Set the ROS parameters to use OpenVLA:
