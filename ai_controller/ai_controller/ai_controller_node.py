@@ -66,6 +66,7 @@ class AIControllerNode(Node):
         # a saved trajectory .pkl file instead of the live camera topics.
         self.declare_parameter('debug_mode', False)
         self.declare_parameter('debug_trajectory_path', '')
+        self.declare_parameter('save_rollout_path', '/home/ros2_ws/src/ai_controller/saved_rollouts')
 
 
 
@@ -82,6 +83,7 @@ class AIControllerNode(Node):
         self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
         self.debug_mode = self.get_parameter('debug_mode').get_parameter_value().bool_value
         self.debug_trajectory_path = self.get_parameter('debug_trajectory_path').get_parameter_value().string_value
+        self.save_rollout_path = self.get_parameter('save_rollout_path').get_parameter_value().string_value
         self.debug_steps = None
         self.debug_step_index = 0
 
@@ -90,6 +92,7 @@ class AIControllerNode(Node):
         if self.ai_controller_target == 'cod_controller':
             from ai_controller.models.cod_controller.cod_controller import CODController
             self.controller = CODController(self.model_config_path, self.task_name)
+            
         elif self.ai_controller_target == 'openvla_controller':
             from ai_controller.models.openvla_controller.openvla_controller import OpenVLAController
             self.controller = OpenVLAController(self.model_config_path, self.task_name)
@@ -97,6 +100,9 @@ class AIControllerNode(Node):
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
         
+        # add controller  name to save_rollout_path
+        self.save_rollout_path = os.path.join(self.save_rollout_path, self.ai_controller_target, self.task_name)
+        os.makedirs(self.save_rollout_path, exist_ok=True)
         
         # 2. Set up ROS2 interfaces (publishers, subscribers, services)
         self.get_logger().info(f'Waiting for service {self.set_home_service}...')
@@ -285,6 +291,48 @@ class AIControllerNode(Node):
             self.get_logger().error(f'Failed to open gripper before first inference: {future.exception()}')
             raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
     
+    def save_rollout(self, save_path=None, task_id=None, traj_number=None):
+        """Save the current rollout to a .pkl file."""
+        complete_save_path = os.path.join(save_path, f'task_{task_id}')
+        os.makedirs(complete_save_path, 
+                    exist_ok=True)
+        
+        traj_name = 'traj_{:03d}'.format(traj_number)
+        
+        res_dict = dict()
+        # 1. Ask for object reached
+        object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
+        res_dict['object_reached'] = int(object_reached)
+        
+        # 2. Ask for object picked
+        object_picked = input("Did the robot successfully pick the target object? [1,0]: ")
+        res_dict['object_picked'] = int(object_picked)
+        
+        # 3. Ask for object placed
+        object_placed = input("Did the robot successfully place the target object? [1,0]: ")
+        res_dict['object_placed'] = int(object_placed)
+        
+        res_dict['reached_wrong'] = 0
+        res_dict['picked_wrong'] = 0
+        res_dict['place_wrong_correct_bin'] = 0
+        res_dict['place_wrong_wrong_bin'] = 0
+        if res_dict['object_reached'] != 1:
+            reached_wrong = input("Did the robot reach the wrong object? [1,0]: ")
+            res_dict['reached_wrong'] = int(reached_wrong)
+            
+            picked_wrong = input("Did the robot pick the wrong object? [1,0]: ")
+            res_dict['picked_wrong'] = int(picked_wrong)
+            
+            place_wrong_correct_bin = input("Did the robot place the wrong object in correct bin? [1,0]: ")
+            res_dict['place_wrong_correct_bin'] = int(place_wrong_correct_bin)
+            
+            place_wrong_wrong_bin = input("Did the robot place the wrong object in wrong bin? [1,0]: ")
+            res_dict['place_wrong_wrong_bin'] = int(place_wrong_wrong_bin)
+            
+        
+        with open(os.path.join(complete_save_path, traj_name + '.json'), 'wb') as f:
+            json.dump(res_dict, f)
+
     def control_loop(self):
         """Main control loop for the AI controller."""
         
@@ -404,7 +452,12 @@ class AIControllerNode(Node):
                     self.gripper_closed = False
                     break  # exit the loop if the gripper has opened after being closed 
                 
-                
+            self.save_rollout(  
+                              save_path=self.save_rollout_path,
+                              task_id=enter_task_id, 
+                              traj_number=self.traj_cnt
+                              )
+                    
         
 
 def main(args=None):
