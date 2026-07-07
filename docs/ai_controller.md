@@ -106,6 +106,12 @@ ros2 run moveit_controller moveit_controller_node
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run ai_controller ai_controller_node
+
+# Replicate saved trajectories
+# add -p dry_run:=false to actually execute it once you trust the check
+ros2 run ai_controller replicate_rollout --ros-args \
+    -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/traj_000.pkl
+  
 ``` 
 
 **Docker-2: Launch Zed-Camera Drivers**

@@ -156,7 +156,7 @@ class CODController(AIController):
 
         return selected_frames
         
-    def load_demo_dataset(self, demo_path, task_id):
+    def load_command(self, demo_path, task_id):
         """Load the demo dataset for the given task ID.
         
         Args:

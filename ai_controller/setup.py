@@ -31,6 +31,7 @@ setup(
     entry_points={
         'console_scripts': [
             'ai_controller_node = ai_controller.ai_controller_node:main',
+            'replicate_rollout = ai_controller.replicate_rollout:main',
         ],
     },
 )

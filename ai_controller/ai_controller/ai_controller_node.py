@@ -1,22 +1,46 @@
 import importlib
+import json
 import pickle
 import sys
 import threading
 from pathlib import Path
 
 import message_filters
+import numpy as np
 import rclpy
 import cv2
+import tf2_ros
 from cv_bridge import CvBridge
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image as RosImage
+from sensor_msgs.msg import Image as RosImage, JointState
 from PIL import Image
 import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from control_msgs.action import GripperCommand
+
+# Mirrors dataset_collector_pkg/utils.py field names so rollouts saved here
+# share the same obs schema as recorded demonstration trajectories.
+EEF_POS_NAME = 'eef_pos'
+EEF_QUAT_NAME = 'eef_quat'
+JOINT_POS_NAME = 'joint_pos'
+JOINT_VEL_NAME = 'joint_vel'
+GRIPPER_QPOS_NAME = 'gripper_qpos'
+GRIPPER_QVEL_NAME = 'gripper_qvel'
+
+_trajectory_cls = None
+
+
+def _get_trajectory_cls(node):
+    """Lazily resolve dataset_collector_pkg's savers.Trajectory class."""
+    global _trajectory_cls
+    if _trajectory_cls is None:
+        node._add_dataset_collector_scripts_to_path()
+        from savers import Trajectory as TrajectoryClass
+        _trajectory_cls = TrajectoryClass
+    return _trajectory_cls
 
 
 class DebugTrajectoryUnpickler(pickle.Unpickler):
@@ -67,6 +91,12 @@ class AIControllerNode(Node):
         self.declare_parameter('debug_mode', False)
         self.declare_parameter('debug_trajectory_path', '')
         self.declare_parameter('save_rollout_path', '/home/ros2_ws/src/ai_controller/saved_rollouts')
+        # Robot-state capture (for recording the executed rollout as a Trajectory)
+        self.declare_parameter('joint_states_topic', '/joint_states')
+        self.declare_parameter('joint_robot_names', ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint',
+                                                       'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'])
+        self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
+        self.declare_parameter('eef_frame_name', 'tcp_link')
 
 
 
@@ -84,8 +114,13 @@ class AIControllerNode(Node):
         self.debug_mode = self.get_parameter('debug_mode').get_parameter_value().bool_value
         self.debug_trajectory_path = self.get_parameter('debug_trajectory_path').get_parameter_value().string_value
         self.save_rollout_path = self.get_parameter('save_rollout_path').get_parameter_value().string_value
+        self.joint_states_topic = self.get_parameter('joint_states_topic').get_parameter_value().string_value
+        self.joint_robot_names = self.get_parameter('joint_robot_names').get_parameter_value().string_array_value
+        self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
+        self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
         self.debug_steps = None
         self.debug_step_index = 0
+        self.latest_joint_state = None
 
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
@@ -122,7 +157,13 @@ class AIControllerNode(Node):
             self.gripper_action_topic,
         )
         self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
-        
+
+        # Robot-state capture: joint states + TF (base_link -> eef_frame_name), used to
+        # record the actually-executed rollout as a Trajectory (see save_rollout()).
+        self.create_subscription(JointState, self.joint_states_topic, self._joint_state_callback, 10)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         if self.debug_mode:
             self.get_logger().warning(
                 'DEBUG MODE ENABLED: camera topics will NOT be used. '
@@ -249,7 +290,57 @@ class AIControllerNode(Node):
         )
         self.debug_step_index += 1
         return [front_image]
-    
+
+    def _joint_state_callback(self, msg):
+        self.latest_joint_state = msg
+
+    def _capture_robot_state(self, timeout_sec=1.0):
+        """Spin briefly to receive a fresh /joint_states + TF, then build a robot-state obs dict.
+
+        Field names mirror dataset_collector_pkg/utils.py so rollouts saved here are
+        readable by the same tooling (replicate_trajectory.py, cod_controller.py) as
+        recorded demonstrations.
+        """
+        start = self.get_clock().now()
+        while self.latest_joint_state is None:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if (self.get_clock().now() - start).nanoseconds / 1e9 > timeout_sec:
+                self.get_logger().warning('Timed out waiting for /joint_states message.')
+                break
+
+        state = {}
+        joint_state = self.latest_joint_state
+        if joint_state is not None:
+            joint_name_to_index = {name: idx for idx, name in enumerate(joint_state.name)}
+            try:
+                state[JOINT_POS_NAME] = np.array(
+                    [joint_state.position[joint_name_to_index[j]] for j in self.joint_robot_names])
+                state[JOINT_VEL_NAME] = np.array(
+                    [joint_state.velocity[joint_name_to_index[j]] for j in self.joint_robot_names])
+                state[GRIPPER_QPOS_NAME] = np.array(
+                    [joint_state.position[joint_name_to_index[j]] for j in self.gripper_robot_names])
+                state[GRIPPER_QVEL_NAME] = np.array(
+                    [joint_state.velocity[joint_name_to_index[j]] for j in self.gripper_robot_names])
+            except KeyError as exc:
+                self.get_logger().warning(f'Joint name missing from /joint_states: {exc}')
+        else:
+            self.get_logger().warning('No /joint_states message received; skipping joint/gripper state fields.')
+
+        try:
+            trans = self.tf_buffer.lookup_transform(self.frame_id, self.eef_frame_name, rclpy.time.Time())
+            state[EEF_POS_NAME] = np.array([trans.transform.translation.x,
+                                            trans.transform.translation.y,
+                                            trans.transform.translation.z])
+            state[EEF_QUAT_NAME] = np.array([trans.transform.rotation.x,
+                                             trans.transform.rotation.y,
+                                             trans.transform.rotation.z,
+                                             trans.transform.rotation.w])
+        except Exception as exc:
+            self.get_logger().warning(
+                f'Could not look up EEF pose via TF ({self.frame_id} -> {self.eef_frame_name}): {exc}')
+
+        return state
+
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
         self.get_logger().info('Moving robot to initial pose before first inference...')
@@ -291,14 +382,25 @@ class AIControllerNode(Node):
             self.get_logger().error(f'Failed to open gripper before first inference: {future.exception()}')
             raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
     
-    def save_rollout(self, save_path=None, task_id=None, traj_number=None):
-        """Save the current rollout to a .pkl file."""
+    def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None):
+        """Save the current rollout Trajectory to a .pkl file, plus outcome metadata to a .json file."""
         complete_save_path = os.path.join(save_path, f'task_{task_id}')
-        os.makedirs(complete_save_path, 
+        os.makedirs(complete_save_path,
                     exist_ok=True)
-        
+
         traj_name = 'traj_{:03d}'.format(traj_number)
-        
+
+        if traj is not None:
+            trajectory_path = os.path.join(complete_save_path, traj_name + '.pkl')
+            traj.save(
+                trajectory_path,
+                task_id=task_id,
+                traj_number=traj_number,
+                ai_controller_target=self.ai_controller_target,
+                task_name=self.task_name,
+            )
+            self.get_logger().info(f'Saved rollout trajectory to {trajectory_path}')
+
         res_dict = dict()
         # 1. Ask for object reached
         object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
@@ -330,7 +432,7 @@ class AIControllerNode(Node):
             res_dict['place_wrong_wrong_bin'] = int(place_wrong_wrong_bin)
             
         
-        with open(os.path.join(complete_save_path, traj_name + '.json'), 'wb') as f:
+        with open(os.path.join(complete_save_path, traj_name + '.json'), 'w') as f:
             json.dump(res_dict, f)
 
     def control_loop(self):
@@ -340,6 +442,8 @@ class AIControllerNode(Node):
         # create a directory to save the images
         save_path = f'/home/ros2_ws/src/ai_controller/saved_images/task_{self.task_name}'
         os.makedirs(save_path, exist_ok=True)
+
+        Trajectory = _get_trajectory_cls(self)
         
         while rclpy.ok():
         
@@ -349,6 +453,9 @@ class AIControllerNode(Node):
             self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
+            
+            # create a new trajectory
+            traj = Trajectory()
             
             for step in range(self.max_step):
                 
@@ -374,7 +481,8 @@ class AIControllerNode(Node):
                     
                     # load the demo data for the given task_id
                     self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
-                    self.controller.load_demo_dataset(self.demo_path, enter_task_id)
+                    self.controller.load_command(self.demo_path, 
+                                                 enter_task_id)
                 
             
                 # 1. Get sensor data (e.g., camera images)
@@ -388,19 +496,26 @@ class AIControllerNode(Node):
                     img = Image.fromarray(image)
                     img.save(f'{save_path}/camera_image_{i}.png')
 
+                # capture the robot state (eef pose, joint pos/vel, gripper qpos/qvel) paired
+                # with the observation image used for this step's inference
+                robot_state = self._capture_robot_state()
+
                 # 2. Get joint-states or other relevant robot states (if needed for inference)
                 states = None
-                
+
                 # 3. Perform inference using the AI controller
+                step_save_path = f'{save_path}/step_{step}'
                 out = self.controller.inference(
                                                 input_data=[images, states],
                                                 t=step,
-                                                save_path=f'{save_path}/step_{step}')
-                
+                                                save_path=step_save_path)
+
+                predicted_bb = None
+                target_obj_prediction = None
                 if len(out) > 1:
                     action, predicted_bb, target_obj_prediction = out
                 else:
-                    action = out[0]                
+                    action = out[0]
                 self.get_logger().info(f'Computed Action at step {step}: {action}')
                 
                 # 5. Send commands to the robot (e.g., set pose, control gripper)
@@ -445,18 +560,46 @@ class AIControllerNode(Node):
                 if not self.gripper_closed and gripper_goal.command.position == 255.0:
                     self.get_logger().info(f'Gripper is closing at step {step}')
                     self.gripper_closed = True
-                    
+
                 # check if a transiction close->open has been made
+                episode_done = False
                 if self.gripper_closed and gripper_goal.command.position == 0.0:
                     self.get_logger().info(f'Gripper is opening at step {step}')
                     self.gripper_closed = False
-                    break  # exit the loop if the gripper has opened after being closed 
-                
-            self.save_rollout(  
+                    episode_done = True
+
+                # 7. Record this step (observation image, cropped model input, predicted
+                # bounding boxes, computed action and robot state) into the rollout Trajectory
+                step_obs = dict(robot_state)
+                step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+
+                cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
+                if os.path.isfile(cropped_image_path):
+                    step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                else:
+                    self.get_logger().warning(
+                        f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+
+                if predicted_bb is not None:
+                    step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
+
+                traj.append(
+                    obs=step_obs,
+                    action=action,
+                    done=episode_done,
+                    reward=1 if episode_done else 0,
+                )
+
+                if episode_done:
+                    break  # exit the loop if the gripper has opened after being closed
+
+            self.save_rollout(
+                              traj=traj,
                               save_path=self.save_rollout_path,
-                              task_id=enter_task_id, 
+                              task_id=enter_task_id,
                               traj_number=self.traj_cnt
                               )
+            self.traj_cnt += 1
                     
         
 
