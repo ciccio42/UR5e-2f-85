@@ -28,4 +28,6 @@
     * [X] Move Robot based on Inference
     * [] Save rollout
   + [] VLA
-    * [] Add class for open-vla
+    * [X] Add class for open-vla
+    * [X] Test Inference OpenVLA
+    * [] Test Inference on real-hardware 

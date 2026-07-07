@@ -165,13 +165,18 @@ class ReplicateTrajectory(Node):
             pose = self._step_to_pose_stamped(step)
             if index == 0:
                 self.get_logger().info(f'Initial step pose: {pose}')
-                raise RuntimeError('Initial step pose is not None; ensure the robot is in the correct starting position before executing the trajectory.')
             self.get_logger().info(f'Step action: {step["gripper_qpos"]}')
             if pose is None:
                 self.get_logger().warn(f'Step {index} has no supported pose/action data, skipping.')
                 continue
 
             self.get_logger().info(f'Sending trajectory step {index + 1}/{len(self.steps)}')
+            self.get_logger().info(f'Pose: {pose.pose.position.x:.3f}, {pose.pose.position.y:.3f}, {pose.pose.position.z:.3f}, ' f'{pose.pose.orientation.x:.3f}, {pose.pose.orientation.y:.3f}, ' f'{pose.pose.orientation.z:.3f}, {pose.pose.orientation.w:.3f}')
+
+            # self._wait_for_enter(f'Press Enter to send step {index + 1}/{len(self.steps)}...')
+            # wait for 3 seconds before sending the next step
+            time.sleep(3.0)
+            
             if not self.call_go_to_pose(pose):
                 self.get_logger().error(f'Failed while executing trajectory step {index}.')
                 return False

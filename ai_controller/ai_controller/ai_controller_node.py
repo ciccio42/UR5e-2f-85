@@ -1,7 +1,12 @@
+import importlib
+import pickle
+import sys
 import threading
+from pathlib import Path
 
 import message_filters
 import rclpy
+import cv2
 from cv_bridge import CvBridge
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
@@ -12,6 +17,15 @@ from PIL import Image
 import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from control_msgs.action import GripperCommand
+
+
+class DebugTrajectoryUnpickler(pickle.Unpickler):
+    """Resolves the 'Trajectory' class saved by dataset_collector_pkg's savers.py."""
+
+    def find_class(self, module, name):
+        if module.startswith('multi_task_il') and name == 'Trajectory':
+            return importlib.import_module('savers').Trajectory
+        return super().find_class(module, name)
 
 
 class AIControllerNode(Node):
@@ -48,8 +62,12 @@ class AIControllerNode(Node):
                                                                0.03161651380119412,
                                                                0.0021438049655468088,
                                                                0.010251021036213035])
-        
-        
+        # DEBUG TEST ONLY: when enabled, camera_front_image frames are read from
+        # a saved trajectory .pkl file instead of the live camera topics.
+        self.declare_parameter('debug_mode', False)
+        self.declare_parameter('debug_trajectory_path', '')
+
+
 
         # get parameters
         self.ai_controller_target = self.get_parameter('ai_controller_target').get_parameter_value().string_value
@@ -62,7 +80,11 @@ class AIControllerNode(Node):
         self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
         self.demo_path = self.get_parameter('demo_path').get_parameter_value().string_value
         self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
-        
+        self.debug_mode = self.get_parameter('debug_mode').get_parameter_value().bool_value
+        self.debug_trajectory_path = self.get_parameter('debug_trajectory_path').get_parameter_value().string_value
+        self.debug_steps = None
+        self.debug_step_index = 0
+
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
         if self.ai_controller_target == 'cod_controller':
@@ -95,43 +117,52 @@ class AIControllerNode(Node):
         )
         self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
         
-        # 3. Wait for camera topics to be available
-        self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
-        for camera_topic in self.camera_topic:
-            self.get_logger().info(f'Waiting for camera topic: {camera_topic}')
-            # wait for the topic to be available
-            find = False
-            while not find:
-                topics_info = self.get_topic_names_and_types()
-                for topic_info in topics_info:
-                    topic_name = topic_info[0]
-                    if topic_name == camera_topic:
-                        self.get_logger().info(f'Camera topic {camera_topic} is available.')
-                        find = True
-                        break
-                
-                if not find:
-                    self.get_logger().info(f'Camera topic {camera_topic} not available yet. Waiting...')
-                    rclpy.spin_once(self, timeout_sec=1.0)
-           
-            self.get_logger().info(f'Camera topic {camera_topic} is available.')
+        if self.debug_mode:
+            self.get_logger().warning(
+                'DEBUG MODE ENABLED: camera topics will NOT be used. '
+                f'Frames will be read from debug_trajectory_path={self.debug_trajectory_path!r} instead.'
+            )
+            self._load_debug_trajectory(self.debug_trajectory_path)
+        else:
+            # 3. Wait for camera topics to be available
+            self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
+            for camera_topic in self.camera_topic:
+                self.get_logger().info(f'Waiting for camera topic: {camera_topic}')
+                # wait for the topic to be available
+                find = False
+                while not find:
+                    topics_info = self.get_topic_names_and_types()
+                    for topic_info in topics_info:
+                        topic_name = topic_info[0]
+                        if topic_name == camera_topic:
+                            self.get_logger().info(f'Camera topic {camera_topic} is available.')
+                            find = True
+                            break
 
-        # 4. Set up synchronized camera subscribers
-        self.bridge = CvBridge()
-        self.latest_synced_images = None
-        self.synced_images_event = threading.Event()
+                    if not find:
+                        self.get_logger().info(f'Camera topic {camera_topic} not available yet. Waiting...')
+                        rclpy.spin_once(self, timeout_sec=1.0)
 
-        self.camera_subs = [
-            message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
-            for topic in self.camera_topic
-        ]
-        self.camera_sync = message_filters.ApproximateTimeSynchronizer(
-            self.camera_subs, queue_size=10, slop=10
-        )
-        self.camera_sync.registerCallback(self.synced_images_callback)
+                self.get_logger().info(f'Camera topic {camera_topic} is available.')
+
+            # 4. Set up synchronized camera subscribers
+            self.bridge = CvBridge()
+            self.latest_synced_images = None
+            self.synced_images_event = threading.Event()
+
+            self.camera_subs = [
+                message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
+                for topic in self.camera_topic
+            ]
+            self.camera_sync = message_filters.ApproximateTimeSynchronizer(
+                self.camera_subs, queue_size=10, slop=10
+            )
+            self.camera_sync.registerCallback(self.synced_images_callback)
 
         self.traj_cnt = 0
         self.max_step = 90
+        self.gripper_closed = False
+        self.previous_gripper_position = 0.0    
 
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
         self.control_loop()
@@ -145,6 +176,9 @@ class AIControllerNode(Node):
 
     def get_synced_images(self, timeout_sec=5.0):
         """Block (while spinning callbacks) until a fresh synchronized set of camera images arrives."""
+        if self.debug_mode:
+            return self._get_debug_images()
+
         self.synced_images_event.clear()
         start = self.get_clock().now()
         while not self.synced_images_event.is_set():
@@ -154,6 +188,61 @@ class AIControllerNode(Node):
                 self.get_logger().error('Timed out waiting for synchronized camera images.')
                 return None
         return self.latest_synced_images
+
+    def _add_dataset_collector_scripts_to_path(self):
+        """Best-effort: make dataset_collector_pkg's savers.Trajectory importable."""
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            scripts_dir = Path(get_package_share_directory('dataset_collector_pkg')) / 'scripts'
+        except Exception as exc:
+            self.get_logger().error(f'Could not locate dataset_collector_pkg scripts directory: {exc}')
+            return
+
+        if scripts_dir.is_dir() and str(scripts_dir) not in sys.path:
+            sys.path.append(str(scripts_dir))
+
+    def _load_debug_trajectory(self, trajectory_path):
+        """DEBUG TEST ONLY: load a saved trajectory .pkl to replay its camera_front_image frames."""
+        if not trajectory_path:
+            raise ValueError('Parameter debug_trajectory_path must be set when debug_mode is enabled.')
+
+        path = Path(trajectory_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f'Debug trajectory file does not exist: {path}')
+
+        self._add_dataset_collector_scripts_to_path()
+
+        with path.open('rb') as f:
+            data = DebugTrajectoryUnpickler(f).load()
+
+        trajectory = data['traj']
+        self.debug_steps = [trajectory[t]['obs'] for t in range(len(trajectory))]
+        self.debug_step_index = 0
+        self.get_logger().warning(
+            f'DEBUG MODE: loaded {len(self.debug_steps)} frames from {path}.'
+        )
+
+    def _get_debug_images(self):
+        """DEBUG TEST ONLY: return the next camera_front_image from the loaded trajectory."""
+        if not self.debug_steps:
+            self.get_logger().error('Debug trajectory has no steps to replay.')
+            return None
+
+        index = self.debug_step_index % len(self.debug_steps)
+        front_image = self.debug_steps[index].get('camera_front_image')
+        if front_image is None:
+            self.get_logger().error(f'Debug step {index} has no camera_front_image.')
+            return None
+
+        if hasattr(front_image, 'ndim') and front_image.ndim == 1:
+            front_image = cv2.imdecode(front_image, cv2.IMREAD_COLOR)
+            front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2RGB)
+
+        self.get_logger().info(
+            f'[DEBUG] Using camera_front_image from trajectory step {index + 1}/{len(self.debug_steps)}.'
+        )
+        self.debug_step_index += 1
+        return [front_image]
     
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
@@ -292,6 +381,9 @@ class AIControllerNode(Node):
                 self.get_logger().info(f'Controlling gripper at step {step}')   
                 gripper_goal = GripperCommand.Goal()
                 gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                # if self.gripper_closed:
+                #     self.get_logger().info(f'Keeping gripper closed at step {step}')
+                #     gripper_goal.command.position = 255.0  # Keep the gripper closed
                 gripper_goal.command.max_effort = 50.0
                 future = self.gripper_action_client.send_goal_async(gripper_goal)
                 rclpy.spin_until_future_complete(self, future)
@@ -300,6 +392,17 @@ class AIControllerNode(Node):
                 else:
                     self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
                     raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
+                
+                self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
+                if not self.gripper_closed and gripper_goal.command.position == 255.0:
+                    self.get_logger().info(f'Gripper is closing at step {step}')
+                    self.gripper_closed = True
+                    
+                # check if a transiction close->open has been made
+                if self.gripper_closed and gripper_goal.command.position == 0.0:
+                    self.get_logger().info(f'Gripper is opening at step {step}')
+                    self.gripper_closed = False
+                    break  # exit the loop if the gripper has opened after being closed 
                 
                 
         

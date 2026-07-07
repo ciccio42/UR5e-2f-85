@@ -1,6 +1,6 @@
 replicate_trajectory:
   ros__parameters:
-    trajectory_path: "/home/saved_trajectories/robot/pick_place/task_00/traj001.pkl"
+    trajectory_path: "/home/saved_trajectories/robot/pick_place/task_00/traj004.pkl"
     set_home_service: "set_robot_to_home"
     set_pose_service: "set_robot_to_pose"
     frame_id: "base_link"

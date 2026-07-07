@@ -644,12 +644,15 @@ def build_tvf_formatter(config, env_name):
         task_spec = config.tasks_cfgs.get(env_name, dict())
         img_height, img_width = img.shape[:2]
         """applies to every timestep's RGB obs['camera_front_image']"""
+        # print(f"\n\tImage shape: {img.shape}, task_spec: {task_spec}, agent: {agent}")
+        # default crop params
         if len(getattr(task_spec, "demo_crop", OrderedDict())) != 0 and not agent:
             crop_params = task_spec.get(
                 "demo_crop", [0, 0, 0, 0])
         if len(getattr(task_spec, "agent_crop", OrderedDict())) != 0 and agent:
             crop_params = task_spec.get(
                 "agent_crop", [0, 0, 0, 0])
+            # print(f"\n\tAgent crop params: {crop_params}")
         if len(getattr(task_spec, "task_crops", OrderedDict())) != 0:
             crop_params = task_spec.get(
                 "task_crops", [0, 0, 0, 0])

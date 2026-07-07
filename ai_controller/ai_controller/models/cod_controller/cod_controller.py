@@ -41,6 +41,8 @@ class CODController(AIController):
         # set random seed for reproducibility
         seed_everything(42)
         
+        self.gripper_closed = False
+        
     def load_model(self, model_config):
         """Load the COD model from the given configuration.
         
@@ -210,7 +212,8 @@ class CODController(AIController):
         """Reset the controller to its initial state."""
         # 1. Save current trajectory data if needed
         # 2. Load the demo dataset for the current task
-        pass
+        self.gripper_closed = False
+        
     
     def pre_process(self, input_data):
         """Pre-process the input data before feeding it to the model.
@@ -222,7 +225,8 @@ class CODController(AIController):
         states = input_data[1]
         
         # apply the image formatter to the input image
-        formatted_imgs = [self.img_formatter(img) for img in imgs]
+        formatted_imgs = [self.img_formatter(img,
+                                             agent=True) for img in imgs]
         
         if states is not None:
             raise NotImplementedError("State processing is not implemented yet.")
@@ -259,8 +263,10 @@ class CODController(AIController):
         desired_position = action[:3]
         desired_orientation = axisangle2quat(vec=action[3:6])
         predicted_gripper = action[-1]
-        if predicted_gripper > 0.75:
+        print(f"Predicted gripper value: {predicted_gripper}")
+        if predicted_gripper > 0.50:
             gripper_finger_pos = 255
+            self.gripper_closed = True
         else:
             gripper_finger_pos = 0
             
@@ -311,13 +317,16 @@ class CODController(AIController):
         # move the pre-processed images to the device (e.g., GPU) if necessary
         # get only the frontal image for inference
         # print(f"Pre-processed images shape: {[img.shape for img in pre_processed_imgs]}")
-        pre_processed_imgs, pre_processed_states, context = move_to_device(pre_processed_imgs[0],
-                                                                  pre_processed_states,
-                                                                  self.demo_frames, 
-                                                                  device=self.device)
+        pre_processed_imgs, pre_processed_states, context = move_to_device(
+                                                                pre_processed_imgs[0],
+                                                                pre_processed_states,
+                                                                self.demo_frames, 
+                                                                device=self.device)
         
         # perform inference using the model
         with torch.no_grad():
+            print(f"Performing model inference at time step {t} with gripper state: {self.gripper_closed}")
+            self.model.first_phase = not(self.gripper_closed)
             out = self.model(
                         states=pre_processed_states,
                         images=pre_processed_imgs,
@@ -349,7 +358,7 @@ class CODController(AIController):
                 
                 # show the image with predicted bounding boxes using OpenCV
                 cv2.imshow(f"Predicted BB at step {t}", img_np[:, :, ::-1])  # Convert RGB to BGR for OpenCVclear
-                cv2.waitKey(1000)  # Display the image for 1 s
+                cv2.waitKey(-1)  # Display the image for 1 s
                 # close the OpenCV window
                 cv2.destroyAllWindows()
 
