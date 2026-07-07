@@ -26,7 +26,8 @@
     * [] Move Human-Demo on spark
     * [X] Perform inference
     * [X] Move Robot based on Inference
-    * [] Save rollout
+    * [X] Save rollout
+    * [X] Save command
   + [] VLA
     * [X] Add class for open-vla
     * [X] Test Inference OpenVLA

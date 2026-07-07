@@ -1,4 +1,5 @@
 import importlib
+import os
 import pickle
 import sys
 import time
@@ -67,6 +68,10 @@ class ReplicateRollout(Node):
         self.declare_parameter('gripper_result_timeout_sec', 10.0)
         self.declare_parameter('show_images', True)
         self.declare_parameter('preview_wait_ms', 200)
+        self.declare_parameter('context_path', '')
+        self.declare_parameter('save_video', False)
+        self.declare_parameter('video_output_dir', '')
+        self.declare_parameter('video_fps', 5.0)
 
         self.rollout_path = self.get_parameter('rollout_path').value
         self.dry_run = bool(self.get_parameter('dry_run').value)
@@ -101,10 +106,26 @@ class ReplicateRollout(Node):
 
         self.steps = self._load_rollout(self.rollout_path)
 
+        self.context_path = self._resolve_context_path(
+            self.rollout_path, self.get_parameter('context_path').value)
+        self.context_frames = self._load_context_frames(self.context_path)
+
         self.get_logger().info(
             f"{'[DRY-RUN] ' if self.dry_run else ''}"
-            f'Loaded {len(self.steps)} steps from {self.rollout_path!r}.'
+            f'Loaded {len(self.steps)} steps from {self.rollout_path!r}. '
+            f'Loaded {len(self.context_frames)} context frames from {self.context_path!r}.'
         )
+
+        self.save_video = bool(self.get_parameter('save_video').value)
+        self.video_fps = float(self.get_parameter('video_fps').value)
+        video_output_dir_param = self.get_parameter('video_output_dir').value
+        self.video_output_dir = video_output_dir_param or str(Path(self.rollout_path).expanduser().parent)
+        self._video_basename = Path(self.rollout_path).stem
+        self.original_video_writer = None
+        self.annotated_video_writer = None
+        if self.save_video:
+            os.makedirs(self.video_output_dir, exist_ok=True)
+            self.get_logger().info(f'Saving comparison videos to {self.video_output_dir}')
 
     def _load_rollout(self, rollout_path):
         if not rollout_path:
@@ -121,6 +142,49 @@ class ReplicateRollout(Node):
 
         trajectory = data['traj']
         return [trajectory[t] for t in range(len(trajectory))]
+
+    @staticmethod
+    def _resolve_context_path(rollout_path, context_path_param):
+        """CODController._save_command_trajectory() saves 'context_{traj_cnt:03d}.pkl'
+        next to save_rollout()'s 'traj_{traj_cnt:03d}.pkl', in the same task directory,
+        using the same counter. If context_path isn't given explicitly, try to derive it
+        from rollout_path by that naming convention."""
+        if context_path_param:
+            return context_path_param
+
+        rollout_file = Path(rollout_path)
+        if rollout_file.name.startswith('traj_'):
+            candidate = rollout_file.with_name(rollout_file.name.replace('traj_', 'context_', 1))
+            if candidate.is_file():
+                return str(candidate)
+
+        return ''
+
+    def _load_context_frames(self, context_path):
+        """Load a context_*.pkl (saved by CODController._save_command_trajectory) so the
+        command frames that conditioned this rollout can be shown alongside it."""
+        if not context_path:
+            return []
+
+        path = Path(context_path).expanduser()
+        if not path.is_file():
+            self.get_logger().warning(f'Context trajectory file does not exist: {path}; skipping context preview.')
+            return []
+
+        _add_dataset_collector_scripts_to_path()
+
+        with path.open('rb') as f:
+            data = RolloutUnpickler(f).load()
+
+        trajectory = data['traj']
+        frames = []
+        for t in range(len(trajectory)):
+            obs = trajectory[t].get('obs', {})
+            frame = obs.get('camera_front_image') if isinstance(obs, dict) else None
+            if frame is not None:
+                frames.append(frame[:,:,::-1])  # convert RGB->BGR for OpenCV display
+
+        return frames
 
     def wait_for_moveit_services(self):
         self.get_logger().info('Waiting for MoveIt controller services...')
@@ -162,6 +226,109 @@ class ReplicateRollout(Node):
 
         return image_bgr
 
+    def _build_context_panel(self, target_height):
+        """Tile the (up to 4) context frames into a single 2x2 grid image, scaled to
+        target_height so it hstacks cleanly with the other preview panels."""
+        if not self.context_frames:
+            return None
+
+        n_cols, n_rows = 2, 2
+        n_tiles = n_cols * n_rows
+        frames = list(self.context_frames[:n_tiles])
+
+        tile_height = max(1, target_height // n_rows)
+        ref_frame = frames[0]
+        tile_width = max(1, int(tile_height * ref_frame.shape[1] / ref_frame.shape[0]))
+        blank_tile = np.zeros((tile_height, tile_width, 3), dtype=np.uint8)
+
+        tiles = []
+        for i in range(n_tiles):
+            frame = frames[i] if i < len(frames) else None
+            tile = cv2.resize(frame, (tile_width, tile_height)) if frame is not None else blank_tile.copy()
+            # cv2.putText(tile, f'ctx {i}', (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            tiles.append(tile)
+
+        rows = [np.hstack(tiles[r * n_cols:(r + 1) * n_cols]) for r in range(n_rows)]
+        panel = np.vstack(rows)
+
+        if panel.shape[0] != target_height:
+            panel = cv2.resize(panel, (panel.shape[1], target_height))
+
+        # cv2.putText(panel, 'Context frames (2x2)', (10, panel.shape[0] - 10),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+        return panel
+
+    @staticmethod
+    def _add_label_bar(image_bgr, text, bar_height=32):
+        """Stack a captioned black bar on top of image_bgr (used for video panels)."""
+        bar = np.zeros((bar_height, image_bgr.shape[1], 3), dtype=np.uint8)
+        cv2.putText(bar, text, (10, int(bar_height * 0.72)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        return np.vstack([bar, image_bgr])
+
+    def _compose_execution_vs_demo(self, execution_bgr, target_height):
+        """Build one video frame: Robot-Execution (left) next to Human-Demonstration
+        (right, the context frames), each captioned with a label bar."""
+        execution_resized = cv2.resize(
+            execution_bgr,
+            (int(execution_bgr.shape[1] * target_height / execution_bgr.shape[0]), target_height))
+
+        context_panel = self._build_context_panel(target_height)
+        if context_panel is None:
+            context_panel = np.zeros((target_height, execution_resized.shape[1], 3), dtype=np.uint8)
+
+        execution_labeled = self._add_label_bar(execution_resized, 'Robot-Execution')
+        context_labeled = self._add_label_bar(context_panel, 'Human-Demonstration')
+
+        return np.hstack([execution_labeled, context_labeled])
+
+    def _ensure_video_writer(self, attr_name, filename, frame):
+        writer = getattr(self, attr_name)
+        if writer is None:
+            height, width = frame.shape[:2]
+            path = os.path.join(self.video_output_dir, filename)
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            writer = cv2.VideoWriter(path, fourcc, self.video_fps, (width, height))
+            if not writer.isOpened():
+                self.get_logger().error(f'Could not open video writer for {path}')
+                writer = False
+            else:
+                self.get_logger().info(f'Recording video to {path}')
+            setattr(self, attr_name, writer)
+        return writer
+
+    def _record_video_frames(self, obs):
+        """Append one frame to each comparison video: 'original' from the raw
+        camera_front_image, 'annotated' from cropped_image + predicted_bb — both
+        composed as Robot-Execution (left) vs Human-Demonstration (right)."""
+        if not self.save_video:
+            return
+
+        front_image = obs.get('camera_front_image')
+        if front_image is not None:
+            original_frame = self._compose_execution_vs_demo(front_image, front_image.shape[0])
+            writer = self._ensure_video_writer(
+                'original_video_writer', f'{self._video_basename}_original.mp4', original_frame)
+            if writer:
+                writer.write(original_frame)
+
+        cropped_image = obs.get('cropped_image')
+        if cropped_image is not None:
+            cropped_bgr = cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR)
+            annotated_execution = self._draw_predicted_bb(cropped_bgr, obs.get('predicted_bb'))
+            annotated_frame = self._compose_execution_vs_demo(annotated_execution, annotated_execution.shape[0])
+            writer = self._ensure_video_writer(
+                'annotated_video_writer', f'{self._video_basename}_annotated.mp4', annotated_frame)
+            if writer:
+                writer.write(annotated_frame)
+
+    def _close_video_writers(self):
+        for attr in ('original_video_writer', 'annotated_video_writer'):
+            writer = getattr(self, attr, None)
+            if writer:
+                writer.release()
+                setattr(self, attr, None)
+
     def _update_preview(self, index, obs):
         """Show the original camera_front_image next to the cropped model-input image
         with predicted_bb boxes overlaid, so a rollout can be visually inspected."""
@@ -193,7 +360,12 @@ class ReplicateRollout(Node):
         cv2.putText(cropped_resized, 'cropped_image + predicted_bb', (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
 
-        combined = np.hstack([front_resized, cropped_resized])
+        panels = [front_resized, cropped_resized]
+        context_panel = self._build_context_panel(target_height)
+        if context_panel is not None:
+            panels.append(context_panel)
+
+        combined = np.hstack(panels)
 
         try:
             cv2.imshow(self.preview_window_name, combined)
@@ -248,6 +420,12 @@ class ReplicateRollout(Node):
         return True, pose, gripper_position, issues
 
     def replicate_rollout(self):
+        try:
+            return self._replicate_rollout()
+        finally:
+            self._close_video_writers()
+
+    def _replicate_rollout(self):
         if not self.wait_for_moveit_services():
             return False
 
@@ -260,7 +438,9 @@ class ReplicateRollout(Node):
         all_valid = True
         for index, step in enumerate(self.steps):
             ok, pose, gripper_position, issues = self._check_step(step)
-            self._update_preview(index, step.get('obs', {}) if isinstance(step, dict) else {})
+            obs = step.get('obs', {}) if isinstance(step, dict) else {}
+            self._update_preview(index, obs)
+            self._record_video_frames(obs)
             for issue in issues:
                 self.get_logger().warning(f'Step {index}: {issue}')
             if not ok:
@@ -277,6 +457,8 @@ class ReplicateRollout(Node):
             if self.dry_run:
                 self.get_logger().info(f'[DRY-RUN] Step {index}: would send the pose + gripper command above.')
             else:
+                # wait the user to press enter before sending the command, so they can inspect the preview window
+                input(f'Press Enter to send the pose + gripper command for step {index} (or Ctrl+C to abort)...')
                 if not self.call_go_to_pose(pose):
                     self.get_logger().error(f'Failed while executing rollout step {index}.')
                     return False

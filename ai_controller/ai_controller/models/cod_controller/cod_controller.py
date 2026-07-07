@@ -155,8 +155,31 @@ class CODController(AIController):
                 raise ValueError(f"Unexpected shape for selected frame: {selected_frame.shape}")
 
         return selected_frames
+
+    def _save_command_trajectory(self, frames, save_path, task_id, traj_cnt):
+        """Save the selected context/command frames (the demo images conditioning this
+        rollout) as a .pkl Trajectory, using the same savers.Trajectory class and
+        'camera_front_image' obs schema as ai_controller_node.py's save_rollout()."""
+        try:
+            Trajectory = importlib.import_module('scripts.savers').Trajectory
+        except ImportError as exc:
+            print(f"Could not import scripts.savers.Trajectory to save command frames: {exc}")
+            return
+
+        complete_save_path = os.path.join(save_path, f'task_{task_id}')
+        os.makedirs(complete_save_path, exist_ok=True)
+
+        command_traj_name = 'context_{:03d}'.format(traj_cnt)
         
-    def load_command(self, demo_path, task_id):
+        command_traj = Trajectory()
+        for frame in frames:
+            command_traj.append(obs={'camera_front_image': frame})
+
+        command_traj_path = os.path.join(complete_save_path, f"context_{traj_cnt:03d}.pkl")
+        command_traj.save(command_traj_path, task_id=task_id, traj_cnt=traj_cnt)
+        print(f"Saved command frames trajectory to {command_traj_path}")
+
+    def load_command(self, demo_path, task_id, save_demo_frames=True, traj_cnt=0, save_path=None):
         """Load the demo dataset for the given task ID.
         
         Args:
@@ -180,11 +203,17 @@ class CODController(AIController):
             demo_frames = demo_data['traj']
             
         print(f"Demo data loaded for task ID {task_id}. Selecting random frames for inference...")
-        self.demo_frames = self.select_random_frames(demo_frames, 
-                                                     n_select=4, 
-                                                     sample_sides=True, 
+        self.demo_frames = self.select_random_frames(demo_frames,
+                                                     n_select=4,
+                                                     sample_sides=True,
                                                      random_frames=True)
-        
+
+        if save_demo_frames:
+            self._save_command_trajectory(self.demo_frames, 
+                                          save_path, 
+                                          task_id, 
+                                          traj_cnt)
+
         # save demo_frames with PIL Images to a folder for visualization
         demo_frames_folder = os.path.join(demo_path, f"task_{task_id}/demo_frames")
         os.makedirs(demo_frames_folder, exist_ok=True)

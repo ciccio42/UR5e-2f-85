@@ -482,7 +482,10 @@ class AIControllerNode(Node):
                     # load the demo data for the given task_id
                     self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
                     self.controller.load_command(self.demo_path, 
-                                                 enter_task_id)
+                                                 enter_task_id,
+                                                 save_demo_frames=True,
+                                                 traj_cnt=self.traj_cnt,
+                                                 save_path=self.save_rollout_path)
                 
             
                 # 1. Get sensor data (e.g., camera images)

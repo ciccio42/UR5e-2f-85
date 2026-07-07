@@ -110,7 +110,9 @@ ros2 run ai_controller ai_controller_node
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check
 ros2 run ai_controller replicate_rollout --ros-args \
-    -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/traj_000.pkl
+    -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/traj_000.pkl \
+    -p context_trajectory_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/context_000.pkl \
+    -p save_video:=True
   
 ``` 
 
