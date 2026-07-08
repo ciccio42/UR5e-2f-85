@@ -235,7 +235,7 @@ class OpenVLAController(AIController):
         post_processed_actions = []
         for indx, action in enumerate(action_chunk[: self.cfg.chunk_size]):
             action = action * SCALE_FACTOR
-            print(f"[OpenVLAController] Action delta at time {n_steps}: {action}")
+            print(f"[OpenVLAController] Action delta at time {n_steps} - Indx {indx}: {action}")
 
             action_world = np.zeros(7)
             if "abs_pose" in self.cfg.task_suite_name:

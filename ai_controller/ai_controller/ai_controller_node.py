@@ -21,63 +21,9 @@ from PIL import Image
 import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from control_msgs.action import GripperCommand
-
-# Mirrors dataset_collector_pkg/utils.py field names so rollouts saved here
-# share the same obs schema as recorded demonstration trajectories.
-EEF_POS_NAME = 'eef_pos'
-EEF_QUAT_NAME = 'eef_quat'
-JOINT_POS_NAME = 'joint_pos'
-JOINT_VEL_NAME = 'joint_vel'
-GRIPPER_QPOS_NAME = 'gripper_qpos'
-GRIPPER_QVEL_NAME = 'gripper_qvel'
-
-def _quat2mat(quat):
-    """(x, y, z, w) quaternion -> 3x3 rotation matrix.
-
-    Ported from real_ur5e_pick_place_delta_removed_0_5_10_15/utils.py's quat2mat,
-    to exactly match the convention used when generating this model's training data.
-    """
-    inds = np.array([3, 0, 1, 2])
-    q = np.asarray(quat, dtype=np.float64).copy()[inds]
-    n = np.dot(q, q)
-    if n < np.finfo(float).eps * 4.0:
-        return np.identity(3)
-    q *= math.sqrt(2.0 / n)
-    q2 = np.outer(q, q)
-    return np.array([
-        [1.0 - q2[2, 2] - q2[3, 3], q2[1, 2] - q2[3, 0], q2[1, 3] + q2[2, 0]],
-        [q2[1, 2] + q2[3, 0], 1.0 - q2[1, 1] - q2[3, 3], q2[2, 3] - q2[1, 0]],
-        [q2[1, 3] - q2[2, 0], q2[2, 3] + q2[1, 0], 1.0 - q2[1, 1] - q2[2, 2]],
-    ])
-
-
-def _mat2euler_sxyz(rmat):
-    """3x3 rotation matrix -> (roll, pitch, yaw) static/extrinsic XYZ Euler angles
-    (radians). Ported from the same utils.py's mat2euler(axes='sxyz')."""
-    eps = np.finfo(float).eps * 4.0
-    M = np.asarray(rmat, dtype=np.float64)[:3, :3]
-    cy = math.sqrt(M[0, 0] * M[0, 0] + M[1, 0] * M[1, 0])
-    if cy > eps:
-        roll = math.atan2(M[2, 1], M[2, 2])
-        pitch = math.atan2(-M[2, 0], cy)
-        yaw = math.atan2(M[1, 0], M[0, 0])
-    else:
-        roll = math.atan2(-M[1, 2], M[1, 1])
-        pitch = math.atan2(-M[2, 0], cy)
-        yaw = 0.0
-    return np.array([roll, pitch, yaw])
-
-
-def _normalize_angle(angle, tol=1e-1):
-    """Ported from ur5e_pick_place.py's PickPlaceEnv.normalize_angle."""
-    norm = (angle + np.pi) % (2 * np.pi) - np.pi
-    if np.isclose(norm, -np.pi, atol=tol):
-        norm = np.pi
-    return norm
-
+from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _normalize_angle, EEF_POS_NAME, EEF_QUAT_NAME, JOINT_POS_NAME, JOINT_VEL_NAME, GRIPPER_QPOS_NAME, GRIPPER_QVEL_NAME
 
 _trajectory_cls = None
-
 
 def _get_trajectory_cls(node):
     """Lazily resolve dataset_collector_pkg's savers.Trajectory class."""
@@ -96,7 +42,6 @@ class DebugTrajectoryUnpickler(pickle.Unpickler):
         if module.startswith('multi_task_il') and name == 'Trajectory':
             return importlib.import_module('savers').Trajectory
         return super().find_class(module, name)
-
 
 class AIControllerNode(Node):
     
@@ -598,54 +543,67 @@ class AIControllerNode(Node):
                 predicted_bb = None
                 target_obj_prediction = None
                 if self.ai_controller_target == 'cod_controller':
-                    action, predicted_bb, target_obj_prediction = out
+                    pred_action, predicted_bb, target_obj_prediction = out
+                    actions = [pred_action]
                 elif self.ai_controller_target == 'openvla_controller':
-                    action = out[0]
-                self.get_logger().info(f'Computed Action at step {step}: {action}')
-                
-                if self.move_robot:
-                    # 5. Send commands to the robot (e.g., set pose, control gripper)
-                    # call service to set robot to the desired pose
-                    self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
-                    input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
-                    pose_request = GoToPose.Request()
-                    pose_request.pose.header.stamp = self.get_clock().now().to_msg()
-                    pose_request.pose.header.frame_id = self.frame_id
-                    pose_request.pose.pose.position.x = action[0]
-                    pose_request.pose.pose.position.y = action[1]
-                    pose_request.pose.pose.position.z = action[2]
-                    pose_request.pose.pose.orientation.x = action[3]
-                    pose_request.pose.pose.orientation.y = action[4]
-                    pose_request.pose.pose.orientation.z = action[5]
-                    pose_request.pose.pose.orientation.w = action[6]
-                    future = self.set_pose_client.call_async(pose_request)
-                    rclpy.spin_until_future_complete(self, future)
-                    if future.result() is not None:
-                        self.get_logger().info(f'Robot set to desired pose at step {step}')
-                    else:
-                        self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                        raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                    
-                    # 6. Control the gripper based on the predicted action
-                    self.get_logger().info(f'Controlling gripper at step {step}')   
-                    gripper_goal = GripperCommand.Goal()
-                    gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
-                    # if self.gripper_closed:
-                    #     self.get_logger().info(f'Keeping gripper closed at step {step}')
-                    #     gripper_goal.command.position = 255.0  # Keep the gripper closed
-                    gripper_goal.command.max_effort = 50.0
-                    future = self.gripper_action_client.send_goal_async(gripper_goal)
-                    rclpy.spin_until_future_complete(self, future)
-                    if future.result() is not None:
-                        self.get_logger().info(f'Gripper command sent at step {step}')
-                    else:
-                        self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
-                        raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
-                    
-                    self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
-                    if not self.gripper_closed and gripper_goal.command.position == 255.0:
-                        self.get_logger().info(f'Gripper is closing at step {step}')
-                        self.gripper_closed = True
+                    actions = out
+                    # OpenVLAController returns a list of actions wrt base_link frame
+                    # [x, y, z, roll, pitch, yaw, gripper_position]
+                    # convert orientation from roll/pitch/yaw to quaternion
+                    for i in range(len(actions)):
+                        new_action = np.zeros(8)
+                        new_action[:3] = actions[i][:3] # position remains the same
+                        roll, pitch, yaw = actions[i][3:6]
+                        quat = _euler2quat(roll, pitch, yaw)
+                        new_action[3:7] = quat
+                        new_action[7] = actions[i][6] # gripper position remains the same
+                        actions[i] = new_action
+
+                for indx, action in enumerate(actions):
+                    self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
+                    if self.move_robot:
+                        # 5. Send commands to the robot (e.g., set pose, control gripper)
+                        # call service to set robot to the desired pose
+                        self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
+                        input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
+                        pose_request = GoToPose.Request()
+                        pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+                        pose_request.pose.header.frame_id = self.frame_id
+                        pose_request.pose.pose.position.x = action[0]
+                        pose_request.pose.pose.position.y = action[1]
+                        pose_request.pose.pose.position.z = action[2]
+                        pose_request.pose.pose.orientation.x = action[3]
+                        pose_request.pose.pose.orientation.y = action[4]
+                        pose_request.pose.pose.orientation.z = action[5]
+                        pose_request.pose.pose.orientation.w = action[6]
+                        future = self.set_pose_client.call_async(pose_request)
+                        rclpy.spin_until_future_complete(self, future)
+                        if future.result() is not None:
+                            self.get_logger().info(f'Robot set to desired pose at step {step}')
+                        else:
+                            self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                            raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                        
+                        # 6. Control the gripper based on the predicted action
+                        self.get_logger().info(f'Controlling gripper at step {step}')   
+                        gripper_goal = GripperCommand.Goal()
+                        gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                        # if self.gripper_closed:
+                        #     self.get_logger().info(f'Keeping gripper closed at step {step}')
+                        #     gripper_goal.command.position = 255.0  # Keep the gripper closed
+                        gripper_goal.command.max_effort = 50.0
+                        future = self.gripper_action_client.send_goal_async(gripper_goal)
+                        rclpy.spin_until_future_complete(self, future)
+                        if future.result() is not None:
+                            self.get_logger().info(f'Gripper command sent at step {step}')
+                        else:
+                            self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
+                            raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
+                        
+                        self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
+                        if not self.gripper_closed and gripper_goal.command.position == 255.0:
+                            self.get_logger().info(f'Gripper is closing at step {step}')
+                            self.gripper_closed = True
 
                 # check if a transiction close->open has been made
                 episode_done = False
