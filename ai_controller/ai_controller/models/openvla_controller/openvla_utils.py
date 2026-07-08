@@ -76,8 +76,10 @@ def crop_front_image(image: np.ndarray, task_name: str) -> np.ndarray:
     height, width = image.shape[:2]
     box_h = height - top - bottom_margin
     box_w = width - left - right_margin
-    return image[top:top + box_h, left:left + box_w]
-
+    image = image[top:top + box_h, left:left + box_w]
+    # resize to 224x224 for OpenVLA input
+    image = np.array(Image.fromarray(image).resize((OPENVLA_IMAGE_SIZE, OPENVLA_IMAGE_SIZE)), dtype=np.uint8)
+    return image
 
 COMMAND_TEMPLATE = {
     '00': "Pick the green box and place it into the first bin",
@@ -865,6 +867,7 @@ def get_vla_action(
         if cfg.use_proprio:
             proprio = obs["state"]
             proprio_norm_stats = vla.norm_stats[cfg.unnorm_key]["proprio"]
+            # print(f"[OpenVLAUtils] Normalizing proprioception data with stats: {proprio_norm_stats}")
             obs["state"] = normalize_proprio(proprio, proprio_norm_stats)
             proprio = obs["state"]
 

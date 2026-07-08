@@ -32,4 +32,4 @@
     * [X] Add class for open-vla
     * [X] Test Inference OpenVLA
     * [X] Test Inference on real-hardware
-    * [] Perform a complete test 
+    * [X] Perform a complete test 

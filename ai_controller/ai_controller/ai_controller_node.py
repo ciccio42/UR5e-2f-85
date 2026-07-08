@@ -85,8 +85,7 @@ class AIControllerNode(Node):
         self.declare_parameter('save_rollout_path', '/home/ros2_ws/src/ai_controller/saved_rollouts')
         # Robot-state capture (for recording the executed rollout as a Trajectory)
         self.declare_parameter('joint_states_topic', '/joint_states')
-        self.declare_parameter('joint_robot_names', ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint',
-                                                       'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'])
+        self.declare_parameter('joint_robot_names', ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'])
         self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
         self.declare_parameter('eef_frame_name', 'tcp_link')
         self.declare_parameter('move_robot', False)

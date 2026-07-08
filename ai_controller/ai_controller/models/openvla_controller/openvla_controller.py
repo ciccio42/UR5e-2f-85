@@ -10,6 +10,7 @@ import yaml
 from PIL import Image as PILImage
 
 from ai_controller.utils.ai_controller import AIController
+from ai_controller.utils.utils import seed_everything
 
 # openvla.py lives alongside this file; import it the same way it imports
 # openvla_utils.py, so this works whether or not the installed ai_controller
@@ -63,7 +64,7 @@ class OpenVLAConfig:
     unnorm_key: str = ""
     # Dataset key used to look up action/proprio normalization stats in the
     # checkpoint's dataset_statistics.json (must match a top-level key there).
-    task_suite_name: str = ""
+    task_suite_name: str = "real_ur5e_pick_place_rm_0_5_10_15"
 
     # ── Quantization ─────────────────────────────────────────────────────── #
     load_in_8bit: bool = False
@@ -119,6 +120,7 @@ class OpenVLAController(AIController):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.move_model_to_device(self.device)
+        seed_everything(0) 
         self.model.eval()
 
     # ------------------------------------------------------------------ #
@@ -195,10 +197,11 @@ class OpenVLAController(AIController):
         images, states = input_data[0], input_data[1]
 
         obs = {"full_image": crop_front_image(images[0], self.task_name)}
-
+    
         if self.cfg.num_images_in_input > 1 and len(images) > 1:
-            obs["camera_gripper_image"] = images[-1]
-
+            # resize 224x224
+            obs["camera_gripper_image"] = np.array(PILImage.fromarray(images[-1]).resize((224, 224)), dtype=np.uint8)
+            
         if self.cfg.use_proprio and states is not None:
             obs["state"] = np.array(states, dtype=np.float64)
 
@@ -290,6 +293,7 @@ class OpenVLAController(AIController):
                 PILImage.fromarray(obs[key]).save(
                     os.path.join(save_path, f"openvla_input_{key}_t{t:03d}.png")
                 )
-        print(f"[OpenVLAController] Inference t={t}: running model on device {self.device}...")
+        print(f"[OpenVLAController] Inference t={t}: task description = {self.cfg.task_description}")
+        print(f"[OpenVLAController] Inference t={t}: obs keys = {list(obs.keys())}, states = {states}")
         actions = self._policy.get_action(obs, task_label=self.cfg.task_description)
         return self.post_process(obs=obs, states=states, action_chunk=actions, n_steps=t)

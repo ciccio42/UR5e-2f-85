@@ -4,6 +4,9 @@ import pickle
 import sys
 from pathlib import Path
 import numpy as np
+import random
+import torch
+import os
 
 # Mirrors dataset_collector_pkg/utils.py field names so rollouts saved here
 # share the same obs schema as recorded demonstration trajectories.
@@ -77,3 +80,13 @@ def _euler2quat(roll, pitch, yaw):
     z = cr * cp * sy - sr * sp * cy
 
     return np.array([x, y, z, w], dtype=np.float64)
+
+
+def seed_everything(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
