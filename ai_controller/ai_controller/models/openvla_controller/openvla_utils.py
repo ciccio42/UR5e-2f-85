@@ -49,6 +49,55 @@ R_EE_TO_GRIPPER = np.array([
 # Configure NumPy print settings
 np.set_printoptions(formatter={"float": lambda x: "{0:0.3f}".format(x)})
 
+# Crop margins [top, bottom, left, right] applied to the raw front-camera image
+# before any resizing, matching crop_image_adj_bb() in the RLDS dataset builder
+# this checkpoint was trained on (real_ur5e_pick_place_delta_removed_0_5_10_15/
+# ur5e_pick_place.py) and dataset_collector_pkg's/CODController's agent_crop.
+TASK_CROP = {
+    'pick_place': [0, 30, 140, 120],
+    'nut_assembly': [20, 25, 80, 75],
+    'stack_block': [20, 25, 80, 75],
+    'press_button': [10, 10, 70, 70],
+}
+
+
+def crop_front_image(image: np.ndarray, task_name: str) -> np.ndarray:
+    """Crop the raw front-camera image to the agent field-of-view used when
+    generating training data for this task, before any resizing. Mirrors
+    crop_image_adj_bb() in ur5e_pick_place.py (without the bounding-box
+    adjustment, which OpenVLA doesn't need). NOT applied to camera_gripper_image
+    (eye_in_hand_image), which the training pipeline resizes uncropped.
+    """
+    crop_params = TASK_CROP.get(task_name)
+    if crop_params is None:
+        return image
+
+    top, bottom_margin, left, right_margin = crop_params
+    height, width = image.shape[:2]
+    box_h = height - top - bottom_margin
+    box_w = width - left - right_margin
+    return image[top:top + box_h, left:left + box_w]
+
+
+COMMAND_TEMPLATE = {
+    '00': "Pick the green box and place it into the first bin",
+    '01': "Pick the green box and place it into the second bin",
+    '02': "Pick the green box and place it into the third bin",
+    '03': "Pick the green box and place it into the fourth bin",
+    '04': "Pick the yellow box and place it into the first bin",
+    '05': "Pick the yellow box and place it into the second bin",
+    '06': "Pick the yellow box and place it into the third bin",
+    '07': "Pick the yellow box and place it into the fourth bin",
+    '08': "Pick the blue box and place it into the first bin",
+    '09': "Pick the blue box and place it into the second bin",
+    '10': "Pick the blue box and place it into the third bin",
+    '11': "Pick the blue box and place it into the fourth bin",
+    '12': "Pick the red box and place it into the first bin",
+    '13': "Pick the red box and place it into the second bin",
+    '14': "Pick the red box and place it into the third bin",
+    '15': "Pick the red box and place it into the fourth bin"
+}
+
 
 def model_is_on_hf_hub(model_path: str) -> bool:
     """Checks whether a model path points to a model on Hugging Face Hub."""
@@ -842,6 +891,18 @@ def get_vla_action(
 
     # Extract subset of actions for open loop steps
     return [action[i] for i in range(min(len(action), cfg.num_open_loop_steps))]
+
+def normalize_angle(angle: float, tol: float = 1e-1) -> float:
+    """Normalize angle to (-pi, pi], where -pi wraps to pi.
+
+    Ported from robosuite_test/robosuite_utils.py's normalize_angle (VLA-Bench),
+    used by action_post_processing to keep accumulated Euler angles in range.
+    """
+    norm = (angle + np.pi) % (2 * np.pi) - np.pi
+    if np.isclose(norm, -np.pi, atol=tol):
+        norm = np.pi
+    return norm
+
 
 def axisangle_to_euler(aa):
     angle = np.linalg.norm(aa)

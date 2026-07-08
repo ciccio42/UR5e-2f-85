@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 from dataclasses import dataclass
@@ -18,6 +19,14 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 from openvla import OpenVLAPolicy
+from openvla_utils import (
+    COMMAND_TEMPLATE,
+    SCALE_FACTOR,
+    axisangle_to_euler,
+    crop_front_image,
+    euler_to_axis_angle,
+    normalize_angle,
+)
 
 
 @dataclass
@@ -86,12 +95,18 @@ class OpenVLAController(AIController):
     ------------------
     1. pre_process  - pack raw camera images (+ optional robot state) into obs dict.
     2. inference    - build language prompt -> OpenVLAPolicy.get_action (get_vla_action).
-    3. post_process - return action list unchanged for the caller.
+    3. post_process - convert the predicted delta-action chunk into absolute
+                       world-frame actions, mirroring VLA-Bench's
+                       robosuite_test/models/openvla.py open_vla_policy.action_post_processing.
 
     Action format
     -------------
-    Each action is a 7-D numpy array: [dx, dy, dz, droll, dpitch, dyaw, gripper].
-    Units and scale depend on the training dataset and unnorm_key.
+    Actions predicted by the model (pre post_process) are 7-D deltas:
+    [dx, dy, dz, droll, dpitch, dyaw, gripper]. Units and scale depend on the
+    training dataset and unnorm_key (see openvla_utils.SCALE_FACTOR).
+    post_process() integrates these deltas against the current end-effector
+    pose to produce absolute world-frame actions: [x, y, z, ax, ay, az, gripper],
+    where [ax, ay, az] is an axis-angle orientation.
     """
 
     def __init__(self, model_config: str, task_name: str = "pick_place"):
@@ -127,9 +142,15 @@ class OpenVLAController(AIController):
         if not (self.cfg.load_in_8bit or self.cfg.load_in_4bit):
             self.model = self.model.to(device)
 
-    def load_demo_dataset(self, demo_path: str, task_id: str):
+    def load_command(self, demo_path: str, task_id: str, **kwargs):
         """OpenVLA is prompt-driven; demonstration loading is not required."""
-        print(f"[OpenVLAController] Prompt-based model - skipping demo loading (task {task_id}).")
+        command = input(f"Write the task description for task {task_id} \n\t- Template {COMMAND_TEMPLATE.get(task_id, 'No template available')}\n\t(or press Enter to use default): ")
+        if command.strip():
+            self.cfg.task_description = command.strip()
+            print(f"[OpenVLAController] Updated task description: {self.cfg.task_description}")
+        else:
+            # assign the template if no input is provided
+            self.cfg.task_description = COMMAND_TEMPLATE.get(task_id, self.cfg.task_description)
 
     def reset(self):
         pass
@@ -138,8 +159,20 @@ class OpenVLAController(AIController):
         """
         Pack raw camera images (and optionally robot state) for the model.
 
-        Resizing/cropping is handled downstream by openvla_utils.get_vla_action
-        (prepare_images_for_vla), matching the VLA-Bench reference pipeline.
+        The front image is first cropped with crop_front_image() to match the
+        agent field-of-view baked into this checkpoint's training data (see
+        openvla_utils.TASK_CROP / real_ur5e_pick_place_delta_removed_0_5_10_15/
+        ur5e_pick_place.py's crop_image_adj_bb()). camera_gripper_image is left
+        uncropped, matching that same training pipeline (only camera_front_image
+        is task-cropped there; eye_in_hand_image is resized as-is). Resizing to
+        224x224 and the eval-time center crop are then handled downstream by
+        openvla_utils.get_vla_action (prepare_images_for_vla).
+
+        NOTE: camera_gripper_image must be a genuine wrist/eye-in-hand camera to
+        match training. ai_controller_node's default `camera_topic` param
+        (front/left/right static views) does NOT provide one - if no wrist
+        camera is wired up, set num_images_in_input: 1 in the model config
+        instead of passing a mismatched second image here.
 
         Parameters
         ----------
@@ -155,25 +188,81 @@ class OpenVLAController(AIController):
         -------
         [obs_dict, states]
             obs_dict keys:
-                "full_image"           - np.ndarray (H, W, 3) uint8
-                "camera_gripper_image" - same shape, present only if num_images_in_input > 1
+                "full_image"           - np.ndarray (H, W, 3) uint8, cropped to TASK_CROP[task_name]
+                "camera_gripper_image" - raw (uncropped), present only if num_images_in_input > 1
                 "state"                - np.ndarray (proprio_dim,), present only if use_proprio
         """
         images, states = input_data[0], input_data[1]
 
-        obs = {"full_image": images[0]}
+        obs = {"full_image": crop_front_image(images[0], self.task_name)}
 
         if self.cfg.num_images_in_input > 1 and len(images) > 1:
-            obs["camera_gripper_image"] = images[1]
+            obs["camera_gripper_image"] = images[-1]
 
         if self.cfg.use_proprio and states is not None:
             obs["state"] = np.array(states, dtype=np.float64)
 
         return [obs, states]
 
-    def post_process(self, output_data):
-        """Pass the action list through unchanged."""
-        return output_data
+    def post_process(self, obs, states, action_chunk, n_steps=-1):
+        """
+        Convert a chunk of predicted delta-actions into absolute world-frame actions.
+
+        Ports action_post_processing from VLA-Bench's robosuite_test/models/openvla.py
+        (open_vla_policy.action_post_processing) verbatim, adapted to this
+        controller's proprio state layout: `states` is the 8-dim vector
+        [eef_x, eef_y, eef_z, roll, pitch, yaw, gripper_open, gripper_closed]
+        built by ai_controller_node._build_openvla_state, so the current
+        end-effector position and gripper-orientation Euler angles are read
+        directly from `states[0:3]` / `states[3:6]` instead of being
+        recomputed from a raw eef_quat via quat2mat/mat2euler.
+
+        Parameters
+        ----------
+        obs          : observation dict returned by pre_process (unused by the
+                       math below, kept for parity with the reference signature
+                       and for future post-processing that depends on it).
+        states       : 8-dim proprio vector, or None - see pre_process.
+        action_chunk : list of 7-D delta actions predicted by the model:
+                       [dx, dy, dz, droll, dpitch, dyaw, gripper].
+        n_steps      : current time step, used only for logging.
+
+        Returns
+        -------
+        list of 7-D numpy arrays: [x, y, z, ax, ay, az, gripper], where
+        [ax, ay, az] is an axis-angle orientation.
+        """
+        post_processed_actions = []
+        for indx, action in enumerate(action_chunk[: self.cfg.chunk_size]):
+            action = action * SCALE_FACTOR
+            print(f"[OpenVLAController] Action delta at time {n_steps}: {action}")
+
+            action_world = np.zeros(7)
+            if "abs_pose" in self.cfg.task_suite_name:
+                action_world[0:3] = action[0:3]
+            else:
+                if indx == 0:
+                    if states is None:
+                        raise ValueError(
+                            "post_process requires the robot's proprio state "
+                            "(eef position/orientation) to integrate delta actions."
+                        )
+                    action_world[0:3] = states[0:3] + action[0:3]
+                    current_gripper_orientation = [normalize_angle(a) for a in states[3:6]]
+                else:
+                    action_world[0:3] = post_processed_actions[-1][0:3] + action[0:3]
+                    current_gripper_orientation = axisangle_to_euler(post_processed_actions[-1][3:6])
+                    current_gripper_orientation = [normalize_angle(a) for a in current_gripper_orientation]
+
+                gripper_orientation_action = current_gripper_orientation + action[3:6]
+                gripper_orientation_action = [normalize_angle(a) for a in gripper_orientation_action]
+                action_world[3:6] = euler_to_axis_angle(gripper_orientation_action)
+                action_world[-1] = action[-1]
+            post_processed_actions.append(copy.deepcopy(action_world))
+
+            # print(f"[OpenVLAController] post_process: action {indx} = {action_world}")
+
+        return post_processed_actions
 
     def inference(self, input_data, t: int, save_path: Optional[str] = None):
         """
@@ -183,20 +272,24 @@ class OpenVLAController(AIController):
         ----------
         input_data : [images, states]  - see pre_process for format.
         t          : current time step (used for debug image filenames).
-        save_path  : if set, saves the model input image to this directory.
+        save_path  : if set, saves the model input images to this directory.
 
         Returns
         -------
         list of numpy arrays, length <= num_open_loop_steps.
-        Each element is a 7-D action: [dx, dy, dz, droll, dpitch, dyaw, gripper].
+        Each element is a 7-D absolute action: [x, y, z, ax, ay, az, gripper].
         """
         obs, states = self.pre_process(input_data)
 
         if save_path is not None:
             os.makedirs(save_path, exist_ok=True)
-            PILImage.fromarray(obs["full_image"]).save(
-                os.path.join(save_path, f"openvla_input_t{t:03d}.png")
-            )
+            # Save every image actually fed to the model, matching
+            # CODController.inference()'s pre_processed_imgs saving loop.
+            image_keys = [k for k in ("full_image", "camera_gripper_image") if k in obs]
+            for key in image_keys:
+                PILImage.fromarray(obs[key]).save(
+                    os.path.join(save_path, f"openvla_input_{key}_t{t:03d}.png")
+                )
         print(f"[OpenVLAController] Inference t={t}: running model on device {self.device}...")
         actions = self._policy.get_action(obs, task_label=self.cfg.task_description)
-        return self.post_process(actions)
+        return self.post_process(obs=obs, states=states, action_chunk=actions, n_steps=t)

@@ -102,10 +102,15 @@ docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run moveit_controller moveit_controller_node
 
-# Run AI-Controller
+# Run AI-Controller (COD-Default)
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run ai_controller ai_controller_node
+
+# Run AI-Controller (Open-VLA)
+ros2 run ai_controller ai_controller_node --ros-args \
+  -p ai_controller_target:="openvla_controller" \
+  -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/openvla-7b-ur5e-pick-place-165k/config.json"
 
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check

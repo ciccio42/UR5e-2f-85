@@ -71,3 +71,14 @@ class AIController(ABC):
             input_data: The input data for inference.
         """
         raise NotImplementedError("The method inference() is not implemented.")
+    
+    @abstractmethod
+    def load_command(self, demo_path: str, task_id: str, **kwargs):
+        """Load the command for the given task.
+        
+        Args:
+            demo_path (str): The path to the demonstration data.
+            task_id (str): The identifier for the task.
+            kwargs: Additional keyword arguments for loading the command.
+        """
+        raise NotImplementedError("The method load_command() is not implemented.")

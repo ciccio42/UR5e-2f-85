@@ -1,5 +1,6 @@
 import importlib
 import json
+import math
 import pickle
 import sys
 import threading
@@ -29,6 +30,51 @@ JOINT_POS_NAME = 'joint_pos'
 JOINT_VEL_NAME = 'joint_vel'
 GRIPPER_QPOS_NAME = 'gripper_qpos'
 GRIPPER_QVEL_NAME = 'gripper_qvel'
+
+def _quat2mat(quat):
+    """(x, y, z, w) quaternion -> 3x3 rotation matrix.
+
+    Ported from real_ur5e_pick_place_delta_removed_0_5_10_15/utils.py's quat2mat,
+    to exactly match the convention used when generating this model's training data.
+    """
+    inds = np.array([3, 0, 1, 2])
+    q = np.asarray(quat, dtype=np.float64).copy()[inds]
+    n = np.dot(q, q)
+    if n < np.finfo(float).eps * 4.0:
+        return np.identity(3)
+    q *= math.sqrt(2.0 / n)
+    q2 = np.outer(q, q)
+    return np.array([
+        [1.0 - q2[2, 2] - q2[3, 3], q2[1, 2] - q2[3, 0], q2[1, 3] + q2[2, 0]],
+        [q2[1, 2] + q2[3, 0], 1.0 - q2[1, 1] - q2[3, 3], q2[2, 3] - q2[1, 0]],
+        [q2[1, 3] - q2[2, 0], q2[2, 3] + q2[1, 0], 1.0 - q2[1, 1] - q2[2, 2]],
+    ])
+
+
+def _mat2euler_sxyz(rmat):
+    """3x3 rotation matrix -> (roll, pitch, yaw) static/extrinsic XYZ Euler angles
+    (radians). Ported from the same utils.py's mat2euler(axes='sxyz')."""
+    eps = np.finfo(float).eps * 4.0
+    M = np.asarray(rmat, dtype=np.float64)[:3, :3]
+    cy = math.sqrt(M[0, 0] * M[0, 0] + M[1, 0] * M[1, 0])
+    if cy > eps:
+        roll = math.atan2(M[2, 1], M[2, 2])
+        pitch = math.atan2(-M[2, 0], cy)
+        yaw = math.atan2(M[1, 0], M[0, 0])
+    else:
+        roll = math.atan2(-M[1, 2], M[1, 1])
+        pitch = math.atan2(-M[2, 0], cy)
+        yaw = 0.0
+    return np.array([roll, pitch, yaw])
+
+
+def _normalize_angle(angle, tol=1e-1):
+    """Ported from ur5e_pick_place.py's PickPlaceEnv.normalize_angle."""
+    norm = (angle + np.pi) % (2 * np.pi) - np.pi
+    if np.isclose(norm, -np.pi, atol=tol):
+        norm = np.pi
+    return norm
+
 
 _trajectory_cls = None
 
@@ -74,7 +120,8 @@ class AIControllerNode(Node):
         self.declare_parameter('camera_topic', 
                                             ['/zed_front/zed_node/rgb/color/rect/image', 
                                             '/zed_left/zed_node/rgb/color/rect/image',
-                                            '/zed_right/zed_node/rgb/color/rect/image'])
+                                            '/zed_right/zed_node/rgb/color/rect/image',
+                                            '/zed_gripper/zed_node/rgb/color/rect/image'])
         self.declare_parameter('task_name', 
                                             "pick_place")
         self.declare_parameter('demo_path', 
@@ -97,6 +144,7 @@ class AIControllerNode(Node):
                                                        'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'])
         self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
         self.declare_parameter('eef_frame_name', 'tcp_link')
+        self.declare_parameter('move_robot', False)
 
 
 
@@ -118,6 +166,7 @@ class AIControllerNode(Node):
         self.joint_robot_names = self.get_parameter('joint_robot_names').get_parameter_value().string_array_value
         self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
         self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
+        self.move_robot = self.get_parameter('move_robot').get_parameter_value().bool_value
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
@@ -341,6 +390,33 @@ class AIControllerNode(Node):
 
         return state
 
+    def _build_openvla_state(self, robot_state):
+        """Build the 8-dim proprio vector [eef_x, eef_y, eef_z, roll, pitch, yaw,
+        gripper_open, gripper_closed] expected by OpenVLAController (proprio_dim: 8
+        in openvla_config.yaml), matching the EEF_state (6) + gripper_state (2)
+        fields recorded by real_ur5e_pick_place_delta_removed_0_5_10_15/ur5e_pick_place.py
+        (PickPlaceEnv._create_step): eef_pose = [eef_pos(3), eef_euler_rpy(3)] and
+        gripper_state = [0.0, last commanded gripper action].
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build OpenVLA proprio state.')
+            return None
+
+        euler = _mat2euler_sxyz(_quat2mat(eef_quat))
+        euler = np.array([_normalize_angle(angle) for angle in euler])
+
+        gripper_open = 0.0
+        gripper_closed = 1.0 if self.gripper_closed else 0.0
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            euler,
+            [gripper_open, gripper_closed],
+        ])
+
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
         self.get_logger().info('Moving robot to initial pose before first inference...')
@@ -503,8 +579,14 @@ class AIControllerNode(Node):
                 # with the observation image used for this step's inference
                 robot_state = self._capture_robot_state()
 
-                # 2. Get joint-states or other relevant robot states (if needed for inference)
-                states = None
+                # 2. Get joint-states or other relevant robot states (if needed for inference).
+                # Each controller expects a different state format (or none at all), so branch
+                # on the loaded model: CODController.pre_process() raises NotImplementedError
+                # if states is not None, while OpenVLAController needs the 8-dim proprio vector.
+                if self.ai_controller_target == 'openvla_controller':
+                    states = self._build_openvla_state(robot_state)
+                else:
+                    states = None
 
                 # 3. Perform inference using the AI controller
                 step_save_path = f'{save_path}/step_{step}'
@@ -512,57 +594,58 @@ class AIControllerNode(Node):
                                                 input_data=[images, states],
                                                 t=step,
                                                 save_path=step_save_path)
-
+                
                 predicted_bb = None
                 target_obj_prediction = None
-                if len(out) > 1:
+                if self.ai_controller_target == 'cod_controller':
                     action, predicted_bb, target_obj_prediction = out
-                else:
+                elif self.ai_controller_target == 'openvla_controller':
                     action = out[0]
                 self.get_logger().info(f'Computed Action at step {step}: {action}')
                 
-                # 5. Send commands to the robot (e.g., set pose, control gripper)
-                # call service to set robot to the desired pose
-                self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
-                input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
-                pose_request = GoToPose.Request()
-                pose_request.pose.header.stamp = self.get_clock().now().to_msg()
-                pose_request.pose.header.frame_id = self.frame_id
-                pose_request.pose.pose.position.x = action[0]
-                pose_request.pose.pose.position.y = action[1]
-                pose_request.pose.pose.position.z = action[2]
-                pose_request.pose.pose.orientation.x = action[3]
-                pose_request.pose.pose.orientation.y = action[4]
-                pose_request.pose.pose.orientation.z = action[5]
-                pose_request.pose.pose.orientation.w = action[6]
-                future = self.set_pose_client.call_async(pose_request)
-                rclpy.spin_until_future_complete(self, future)
-                if future.result() is not None:
-                    self.get_logger().info(f'Robot set to desired pose at step {step}')
-                else:
-                    self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                    raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                
-                # 6. Control the gripper based on the predicted action
-                self.get_logger().info(f'Controlling gripper at step {step}')   
-                gripper_goal = GripperCommand.Goal()
-                gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
-                # if self.gripper_closed:
-                #     self.get_logger().info(f'Keeping gripper closed at step {step}')
-                #     gripper_goal.command.position = 255.0  # Keep the gripper closed
-                gripper_goal.command.max_effort = 50.0
-                future = self.gripper_action_client.send_goal_async(gripper_goal)
-                rclpy.spin_until_future_complete(self, future)
-                if future.result() is not None:
-                    self.get_logger().info(f'Gripper command sent at step {step}')
-                else:
-                    self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
-                    raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
-                
-                self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
-                if not self.gripper_closed and gripper_goal.command.position == 255.0:
-                    self.get_logger().info(f'Gripper is closing at step {step}')
-                    self.gripper_closed = True
+                if self.move_robot:
+                    # 5. Send commands to the robot (e.g., set pose, control gripper)
+                    # call service to set robot to the desired pose
+                    self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
+                    input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
+                    pose_request = GoToPose.Request()
+                    pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+                    pose_request.pose.header.frame_id = self.frame_id
+                    pose_request.pose.pose.position.x = action[0]
+                    pose_request.pose.pose.position.y = action[1]
+                    pose_request.pose.pose.position.z = action[2]
+                    pose_request.pose.pose.orientation.x = action[3]
+                    pose_request.pose.pose.orientation.y = action[4]
+                    pose_request.pose.pose.orientation.z = action[5]
+                    pose_request.pose.pose.orientation.w = action[6]
+                    future = self.set_pose_client.call_async(pose_request)
+                    rclpy.spin_until_future_complete(self, future)
+                    if future.result() is not None:
+                        self.get_logger().info(f'Robot set to desired pose at step {step}')
+                    else:
+                        self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                        raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                    
+                    # 6. Control the gripper based on the predicted action
+                    self.get_logger().info(f'Controlling gripper at step {step}')   
+                    gripper_goal = GripperCommand.Goal()
+                    gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                    # if self.gripper_closed:
+                    #     self.get_logger().info(f'Keeping gripper closed at step {step}')
+                    #     gripper_goal.command.position = 255.0  # Keep the gripper closed
+                    gripper_goal.command.max_effort = 50.0
+                    future = self.gripper_action_client.send_goal_async(gripper_goal)
+                    rclpy.spin_until_future_complete(self, future)
+                    if future.result() is not None:
+                        self.get_logger().info(f'Gripper command sent at step {step}')
+                    else:
+                        self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
+                        raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
+                    
+                    self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
+                    if not self.gripper_closed and gripper_goal.command.position == 255.0:
+                        self.get_logger().info(f'Gripper is closing at step {step}')
+                        self.gripper_closed = True
 
                 # check if a transiction close->open has been made
                 episode_done = False
