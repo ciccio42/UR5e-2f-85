@@ -120,7 +120,7 @@ class OpenVLAController(AIController):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.move_model_to_device(self.device)
-        seed_everything(0) 
+        seed_everything(7) 
         self.model.eval()
 
     # ------------------------------------------------------------------ #

@@ -108,9 +108,11 @@ source install/setup.bash
 ros2 run ai_controller ai_controller_node
 
 # Run AI-Controller (Open-VLA)
+pip install --upgrade protobuf --break-system-packages
 ros2 run ai_controller ai_controller_node --ros-args \
-  -p ai_controller_target:="openvla_controller" \
-  -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/openvla-7b-ur5e-pick-place-165k/config.json"
+    -p move_robot:=True  \
+    -p ai_controller_target:="openvla_controller" \
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml
 
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check

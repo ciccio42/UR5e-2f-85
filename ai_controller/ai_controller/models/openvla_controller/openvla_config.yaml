@@ -5,7 +5,8 @@
 # Examples:
 #   model_path: "openvla/openvla-7b"
 #   model_path: "/dataset/checkpoints/openvla-7b-finetuned"
-model_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/openvla-7b-ur5e-pick-place-165k"
+model_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/openvla-7b-real-world"
+
 
 # ── Action head ─────────────────────────────────────────────────────────────
 # Set use_l1_regression: true for fine-tuned models trained with a continuous

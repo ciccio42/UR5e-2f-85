@@ -387,7 +387,7 @@ class CODController(AIController):
                 
                 # show the image with predicted bounding boxes using OpenCV
                 cv2.imshow(f"Predicted BB at step {t}", img_np[:, :, ::-1])  # Convert RGB to BGR for OpenCVclear
-                cv2.waitKey(-1)  # Display the image for 1 s
+                cv2.waitKey(1000)  # Display the image for 1 s
                 # close the OpenCV window
                 cv2.destroyAllWindows()
 

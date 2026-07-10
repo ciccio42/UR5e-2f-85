@@ -23,7 +23,7 @@
   + [] Test AI-Controller with hardware
     * [X] Test load demo
     * [X] Test camera
-    * [] Move Human-Demo on spark
+    * [X] Move Human-Demo on spark
     * [X] Perform inference
     * [X] Move Robot based on Inference
     * [X] Save rollout

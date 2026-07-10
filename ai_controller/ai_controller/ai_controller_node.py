@@ -465,6 +465,9 @@ class AIControllerNode(Node):
 
         Trajectory = _get_trajectory_cls(self)
         
+        traj_cnt = int(input("Write the current trajectory count to the console: "))
+        self.traj_cnt = traj_cnt
+        
         while rclpy.ok():
         
             input("Press Enter to start the control loop. Make sure the robot is in a safe position.")
@@ -480,6 +483,8 @@ class AIControllerNode(Node):
             for step in range(self.max_step):
                 
                 if step == 0:
+                    # resetting controller state for the new task
+                    self.controller.reset()
                     self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
                     # call service to set robot to home position
                     # wait for the service to complete
@@ -564,7 +569,7 @@ class AIControllerNode(Node):
                         # 5. Send commands to the robot (e.g., set pose, control gripper)
                         # call service to set robot to the desired pose
                         self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
-                        input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
+                        # input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
                         pose_request = GoToPose.Request()
                         pose_request.pose.header.stamp = self.get_clock().now().to_msg()
                         pose_request.pose.header.frame_id = self.frame_id
