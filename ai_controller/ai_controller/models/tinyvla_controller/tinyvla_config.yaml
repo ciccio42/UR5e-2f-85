@@ -1,0 +1,31 @@
+# TinyVLA controller configuration
+# Pass the path to this file via the 'model_config_path' ROS parameter.
+
+# Path to the fine-tuned checkpoint directory (post-processed, LoRA merged or
+# adapter-only depending on `enable_lora`).
+model_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/tiny_vla/post-processed/checkpoint-3000"
+
+# Base Llava-Pythia checkpoint. Only read when enable_lora is true.
+model_base: "/home/ros2_ws/src/ai_controller/checkpoint_folder/tiny_vla/post-processed/Llava-Pythia-1.3B"
+
+enable_lora: true
+conv_mode: "pythia"
+
+# Action head the checkpoint was trained with - one of: act, droid_diffusion,
+# transformer_diffusion. Must match training config (see TinyVLA repo).
+action_head: "droid_diffusion"
+
+# Only affects action_post_processing()'s abs_pose vs. delta-action branch in
+# tinyvla.py - set to a suite name containing "abs_pose" if this checkpoint
+# was trained on absolute (rather than delta) actions.
+task_suite_name: "real_ur5e_pick_place_delta_removed_0_5_10_15"
+
+# Free-form description of the task sent to the model as the language goal.
+# Overridden interactively per-trajectory by TinyVLAController.load_command().
+task_description: "pick up the object and place it in the target location"
+
+# NOTE: a `dataset_stats.pkl` file (qpos_mean/std + action normalization stats)
+# is expected in model_path's *parent* directory, e.g. if model_path is
+# ".../tiny_vla/post-processed/checkpoint-3000" then this file must exist at
+# ".../tiny_vla/post-processed/dataset_stats.pkl" - see TinyVLAPolicy.__init__
+# in tinyvla.py.

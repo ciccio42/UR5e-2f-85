@@ -114,6 +114,12 @@ ros2 run ai_controller ai_controller_node --ros-args \
     -p ai_controller_target:="openvla_controller" \
     -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml
 
+# Run AI-Controller (TinyVLA)
+ros2 run ai_controller ai_controller_node --ros-args \
+    -p move_robot:=True  \
+    -p ai_controller_target:="tinyvla_controller" \
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml"
+
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check
 ros2 run ai_controller replicate_rollout --ros-args \
@@ -161,6 +167,47 @@ ros2 run ai_controller ai_controller_node \
   --ros-args \
   -p ai_controller_target:=openvla_controller \
   -p model_config_path:=/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml \
+  -p task_name:=pick_place
+```
+
+## TinyVLA Dependencies
+
+Install the following inside the container (`docker exec -it ur_robotiq_teleoperation_container bash`).
+Reference (validated) inference code this controller is ported from lives at
+`~/Desktop/Multi-Task-LFD/repo/VLA-Bench/robosuite_test/models/tinyvla.py`; the
+original TinyVLA training repo is at `~/Desktop/Multi-Task-LFD/repo/TinyVLA`.
+
+### Required
+```bash
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller
+git clone https://github.com/ciccio42/TinyVLA.git
+
+# llava_pythia (model/tokenizer/image-processor code) and policy_heads (action
+# head implementations: act / droid_diffusion / transformer_diffusion)
+cd TinyVLA/llava-pythia && pip install -e . --break-system-packages
+cd ../policy_heads && pip install -e . --break-system-packages
+cd ../..
+
+pip install deepspeed timm einops einops-exts sentencepiece pyquaternion --break-system-packages
+
+# unit test
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller
+python3 test.py
+```
+
+Checkpoint layout expected by `tinyvla_config.yaml` (`model_path` / `model_base`):
+a LoRA (or merged) checkpoint directory, its Llava-Pythia-1.3B base, and a
+`dataset_stats.pkl` (qpos/action normalization stats) one level above
+`model_path` - see the comments in `tinyvla_config.yaml` and
+`TinyVLAPolicy.__init__` in `tinyvla.py`.
+
+### Configuration
+Set the ROS parameters to use TinyVLA:
+```bash
+ros2 run ai_controller ai_controller_node \
+  --ros-args \
+  -p ai_controller_target:=tinyvla_controller \
+  -p model_config_path:=/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml \
   -p task_name:=pick_place
 ```
 

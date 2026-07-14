@@ -33,3 +33,5 @@
     * [X] Test Inference OpenVLA
     * [X] Test Inference on real-hardware
     * [X] Perform a complete test 
+    * [] Test TinyVLA
+    

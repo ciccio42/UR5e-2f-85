@@ -124,6 +124,9 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'openvla_controller':
             from ai_controller.models.openvla_controller.openvla_controller import OpenVLAController
             self.controller = OpenVLAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'tinyvla_controller':
+            from ai_controller.models.tinyvla_controller.tinyvla_controller import TinyVLAController
+            self.controller = TinyVLAController(self.model_config_path, self.task_name)
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -361,6 +364,26 @@ class AIControllerNode(Node):
             [gripper_open, gripper_closed],
         ])
 
+    def _build_tinyvla_state(self, robot_state):
+        """Build the 7-dim [eef_x, eef_y, eef_z, qx, qy, qz, qw] vector expected by
+        TinyVLAController. Unlike _build_openvla_state, orientation is passed as a
+        raw quaternion rather than pre-converted Euler angles: TinyVLAPolicy derives
+        its own gripper-frame Euler angles via R_EE_TO_GRIPPER (see tinyvla.py's
+        prepare_observation), which uses a different EEF->gripper frame convention
+        than OpenVLA's.
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build TinyVLA proprio state.')
+            return None
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+        ])
+
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
         self.get_logger().info('Moving robot to initial pose before first inference...')
@@ -534,6 +557,8 @@ class AIControllerNode(Node):
                 # if states is not None, while OpenVLAController needs the 8-dim proprio vector.
                 if self.ai_controller_target == 'openvla_controller':
                     states = self._build_openvla_state(robot_state)
+                elif self.ai_controller_target == 'tinyvla_controller':
+                    states = self._build_tinyvla_state(robot_state)
                 else:
                     states = None
 
@@ -549,10 +574,10 @@ class AIControllerNode(Node):
                 if self.ai_controller_target == 'cod_controller':
                     pred_action, predicted_bb, target_obj_prediction = out
                     actions = [pred_action]
-                elif self.ai_controller_target == 'openvla_controller':
+                elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
                     actions = out
-                    # OpenVLAController returns a list of actions wrt base_link frame
-                    # [x, y, z, roll, pitch, yaw, gripper_position]
+                    # OpenVLAController/TinyVLAController both return a list of
+                    # actions wrt base_link frame [x, y, z, roll, pitch, yaw, gripper_position]
                     # convert orientation from roll/pitch/yaw to quaternion
                     for i in range(len(actions)):
                         new_action = np.zeros(8)
