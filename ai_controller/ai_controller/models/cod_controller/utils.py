@@ -20,7 +20,7 @@ import torch.optim as optim
 from einops import *
 from collections import OrderedDict 
 from torchvision import transforms
-from torchvision.transforms.functional import resized_crop
+from torchvision.transforms.functional import resized_crop, resize
 import random
 
 class ResNetFeats(nn.Module):
@@ -639,8 +639,20 @@ def build_tvf_formatter(config, env_name):
     note eval_fn always feeds in traj['obs']['images'], i.e. shape (h,w,3)
     """
 
-    def resize_crop(img, bb=None, agent=False):
-        """applies to every timestep's RGB obs['camera_front_image']"""
+    def resize_crop(img, bb=None, agent=False, wrist_crop=False):
+        """applies to every timestep's RGB obs['camera_front_image'] (or, when
+        wrist_crop=True, the eye-in-hand/gripper camera image).
+
+        wrist_crop=True skips the front-camera crop window entirely and only
+        resizes: the wrist/gripper image is already framed on the gripper, so
+        applying the same agent/demo crop margins as the 3rd-person view would
+        cut into it incorrectly.
+        """
+        if wrist_crop:
+            img = transforms.ToTensor()(img.copy())
+            img = resize(img, size=(config.dataset_cfg.height, config.dataset_cfg.width))
+            return img
+
         task_spec = config.tasks_cfgs.get(env_name, dict())
         img_height, img_width = img.shape[:2]
         """applies to every timestep's RGB obs['camera_front_image']"""
@@ -670,7 +682,7 @@ def build_tvf_formatter(config, env_name):
         img = resized_crop(img, top=top, left=left, height=box_h,
                             width=box_w, size=(config.dataset_cfg.height, config.dataset_cfg.width))
         return img
-        
+
     return resize_crop
 
 def seed_everything(seed=42):

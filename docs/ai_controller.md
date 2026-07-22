@@ -29,6 +29,7 @@ docker run -it --rm \
   -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
   -v ${UR5e_2f_85_PATH}/ai_controller:/home/ros2_ws/src/ai_controller \
   -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed_camera_calibration:/home/ros2_ws/src/zed_camera/zed_camera_calibration:ro \
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
   -v /home/asus-mivia/Desktop/saved_trajectories:/home/saved_trajectories \
   -v /home/asus-mivia/Desktop/dataset:/dataset \
@@ -97,22 +98,31 @@ docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=true
 
-# Run moveit_controller 
+# Run moveit_controller
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run moveit_controller moveit_controller_node
 
+# Run moveit_controller in PLAN-ONLY mode: every GoHome/GoToPose request is planned and
+# published to /display_planned_path for RViz, but never executed on the robot
+# (no ExecuteTrajectory call, no controller_manager switch). See "Simulate before you
+# execute" in script_controller.md.
+ros2 run moveit_controller moveit_controller_node --ros-args -p execute_trajectory:=False
+
 # Run AI-Controller (COD-Default)
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
-ros2 run ai_controller ai_controller_node
+ros2 run ai_controller ai_controller_node --ros-args \
+    -p move_robot:=True  \
+    -p ai_controller_target:="cod_controller" \
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-EYE-IN-HAND--Batch24/config.yaml"
 
 # Run AI-Controller (Open-VLA)
 pip install --upgrade protobuf --break-system-packages
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True  \
     -p ai_controller_target:="openvla_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml"
 
 # Run AI-Controller (TinyVLA)
 ros2 run ai_controller ai_controller_node --ros-args \
@@ -126,8 +136,12 @@ ros2 run ai_controller replicate_rollout --ros-args \
     -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/traj_000.pkl \
     -p context_trajectory_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/context_000.pkl \
     -p save_video:=True
+
   
 ``` 
+
+Script-Controller (scripted, click-to-target pick-place, no learned model) has its own
+launch command and instructions in [Script-Controller](script_controller.md).
 
 **Docker-2: Launch Zed-Camera Drivers**
 ```bash

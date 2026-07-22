@@ -149,7 +149,7 @@ class _StackedAttnLayers(nn.Module):
                 ]
                 a1, drop1 = [mod[i]
                              for mod in [self._obs_a1s, self._obs_drop1s]]
-                if i >= self._fuse_starts:
+                if self.compute_demo_emb and i >= self._fuse_starts:
                     rep_k, rep_v = [
                         repeat(rep, 'B head ch THW -> B obs_T head ch THW', obs_T=obs_T) for rep in [demo_k, demo_v]]
                     # only start attending to demonstration a few layers later
@@ -157,7 +157,8 @@ class _StackedAttnLayers(nn.Module):
                     cat_k = torch.cat([rep_k, obs_k], dim=4)
                     cat_v = torch.cat([rep_v, obs_v], dim=4)
                 else:
-                    cat_k, cat_v = obs_k, obs_v  # only attend to observation selves
+                    # no demo to attend to (e.g. wrist encoder): only attend to observation selves
+                    cat_k, cat_v = obs_k, obs_v
                 obs_kq = torch.einsum(
                     'btnci,btncj->btnij', cat_k, obs_q) / self._temperature  # B, obs_T, heads, (1+T_demo)*HW, 1*HW
                 assert obs_kq.shape[-2] == (1+self._demo_T) * H * W or \
@@ -204,7 +205,6 @@ class _StackedAttnLayers(nn.Module):
                     param.requires_grad = False
                     count += np.prod(param.shape)
         return count
-
 
 class _TransformerFeatures(nn.Module):
     """
@@ -363,7 +363,6 @@ class _TransformerFeatures(nn.Module):
 
         return pe_features, no_pe_features
 
-
 class _LSTMOneMany(nn.Module):
 
     def __init__(self, input_dim, hidden_dim, layer_dim, output_dim, forward_t):
@@ -409,7 +408,6 @@ class _LSTMOneMany(nn.Module):
             predictions[:, t, :] = torch.clone(output)
 
         return predictions
-
 
 class _DiscreteLogHead(nn.Module):
     def __init__(self, in_dim, out_dim, n_mixtures, const_var=True, sep_var=False, lstm=False, lstm_config=None):
@@ -532,7 +530,6 @@ class _DiscreteLogHead(nn.Module):
 
         return (mu, ln_scale, logit_prob)
 
-
 class VideoImitation(nn.Module):
     """ The imitation policy model  """
 
@@ -585,6 +582,21 @@ class VideoImitation(nn.Module):
                 concat_bb=concat_bb,
                 compute_img_emb=action_cfg.get("concat_img_emb", True),
                 compute_demo_emb=action_cfg.get("concat_demo_emb", True),
+                **attn_cfg)
+
+        # wrist (eye-in-hand) camera: own encoder, agent-observation only (no demo pairing,
+        # since the demo trajectory does not have a matching wrist view)
+        self._use_wrist_img = action_cfg.get("use_wrist_img", False)
+        self._embed_wrist = None
+        if self._use_wrist_img:
+            self._embed_wrist = _TransformerFeatures(
+                latent_dim=latent_dim,
+                demo_T=demo_T,
+                dim_H=dim_H,
+                dim_W=dim_W,
+                concat_bb=concat_bb,
+                compute_img_emb=True,
+                compute_demo_emb=False,
                 **attn_cfg)
 
         self._object_detector = None
@@ -645,12 +657,15 @@ class VideoImitation(nn.Module):
             concat_demo_act, concat_demo_head))
 
         print(f"Concat state: {concat_state} - State dim {sdim}")
+        print(f"Use wrist image: {self._use_wrist_img}")
         if "KP" not in target_obj_detector_path and "COD" not in target_obj_detector_path:
             ac_in_dim = int(latent_dim + float(concat_demo_act)
-                            * latent_dim + float(concat_bb) * 4 * self._bb_sequence + float(concat_state) * sdim)
+                            * latent_dim + float(concat_bb) * 4 * self._bb_sequence + float(concat_state) * sdim
+                            + float(self._use_wrist_img) * latent_dim)
         else:
             ac_in_dim = int(latent_dim * float(self._concat_img_emb) + float(self._concat_demo_emb)
-                            * latent_dim + float(concat_bb) * 4 + float(concat_state) * sdim)
+                            * latent_dim + float(concat_bb) * 4 + float(concat_state) * sdim
+                            + float(self._use_wrist_img) * latent_dim)
 
         inv_input_dim = int(2*ac_in_dim)
 
@@ -814,28 +829,24 @@ class VideoImitation(nn.Module):
         self.conv_layer_ref = self.get_conv_layer_reference(model=model)
         print(self.conv_layer_ref)
 
-    def _get_inv_action_distribution(self, action_module, action_dist, img_embed, demo_embed, predicted_bb, states):
+    def _get_inv_action_distribution(self, action_module, action_dist, img_embed, demo_embed, predicted_bb, states, wrist_embed=None):
         inv_in = torch.cat((img_embed[:, :-1], img_embed[:, 1:]), 2)
         if self.concat_demo_act:
+            first_half = [img_embed[:, :-1], demo_embed[:, :-1]]
+            second_half = [img_embed[:, 1:], demo_embed[:, :-1]]
+            if wrist_embed is not None:
+                first_half.append(wrist_embed[:, :-1])
+                second_half.append(wrist_embed[:, 1:])
             if self._concat_bb:
                 predicted_bb = rearrange(predicted_bb, 'B T O D -> B T (O D)')
-                inv_in = torch.cat(
-                    (
-                        F.normalize(
-                            torch.cat((img_embed[:, :-1], demo_embed[:, :-1], predicted_bb[:, :-1]), dim=2), dim=2),
-                        F.normalize(
-                            torch.cat((img_embed[:,  1:], demo_embed[:, :-1], predicted_bb[:, 1:]), dim=2), dim=2),
-                    ),
-                    dim=2)
-            else:
-                inv_in = torch.cat(
-                    (
-                        F.normalize(
-                            torch.cat((img_embed[:, :-1], demo_embed[:, :-1]), dim=2), dim=2),
-                        F.normalize(
-                            torch.cat((img_embed[:,  1:], demo_embed[:, :-1]), dim=2), dim=2),
-                    ),
-                    dim=2)
+                first_half.append(predicted_bb[:, :-1])
+                second_half.append(predicted_bb[:, 1:])
+            inv_in = torch.cat(
+                (
+                    F.normalize(torch.cat(first_half, dim=2), dim=2),
+                    F.normalize(torch.cat(second_half, dim=2), dim=2),
+                ),
+                dim=2)
 
             # print(inv_in.shape)
         if self._concat_state:
@@ -852,7 +863,7 @@ class VideoImitation(nn.Module):
         mu_inv, scale_inv, logit_inv = action_dist(inv_pred)
         return mu_inv, scale_inv, logit_inv
 
-    def _get_action_distribution(self, action_module, action_dist, bb, img_embed, states, demo_embed, first_phase):
+    def _get_action_distribution(self, action_module, action_dist, bb, img_embed, states, demo_embed, first_phase, wrist_embed=None):
         #if self.concat_demo_act:  # for action model
         #if self._concat_demo_emb:
         if img_embed is not None:
@@ -862,6 +873,10 @@ class VideoImitation(nn.Module):
                 ac_in = img_embed
         else:
             ac_in = demo_embed
+
+        if wrist_embed is not None:
+            ac_in = torch.cat((ac_in, wrist_embed), dim=2)
+
         if self._concat_bb:
             bb = rearrange(bb, 'B T O D -> B T (O D)')
             if not self._concat_demo_emb and not self._concat_img_emb:
@@ -886,7 +901,7 @@ class VideoImitation(nn.Module):
             ac_pred)
         return mu_bc, scale_bc, logit_bc
 
-    def get_action(self, embed_out, target_obj_embedding=None, bb=None, ret_dist=True, states=None, eval=False, first_phase=True):
+    def get_action(self, embed_out, target_obj_embedding=None, bb=None, ret_dist=True, states=None, eval=False, first_phase=True, wrist_embed=None):
         """directly modifies output dict to put action outputs inside"""
         out = dict()
         # single-head case
@@ -913,6 +928,15 @@ class VideoImitation(nn.Module):
                 ac_in = img_embed
             else:
                 ac_in = img_embed
+
+        wrist_ac_in = None
+        if wrist_embed is not None:
+            # mirror the same slicing convention used for ac_in/img_embed above,
+            # so both stay aligned on the time dimension
+            if self._concat_target_obj_embedding and not eval:
+                wrist_ac_in = wrist_embed[:, 1:, :]
+            else:
+                wrist_ac_in = wrist_embed
 
         if self._concat_demo_emb:
             if self.demo_mean:
@@ -954,7 +978,8 @@ class VideoImitation(nn.Module):
                     img_embed=ac_in[first_phase_indx] if ac_in is not None else ac_in,
                     states=states[first_phase_indx],
                     demo_embed=demo_embed[first_phase_indx] if demo_embed is not None else None,
-                    first_phase=True
+                    first_phase=True,
+                    wrist_embed=wrist_ac_in[first_phase_indx] if wrist_ac_in is not None else None
                 )
                 mu_bc[first_phase_indx] = mu_picking
                 scale_bc[first_phase_indx] = scale_picking
@@ -967,7 +992,8 @@ class VideoImitation(nn.Module):
                     img_embed=ac_in[second_phase_indx] if ac_in is not None else ac_in,
                     states=states[second_phase_indx],
                     demo_embed=demo_embed[second_phase_indx] if demo_embed is not None else None,
-                    first_phase=False
+                    first_phase=False,
+                    wrist_embed=wrist_ac_in[second_phase_indx] if wrist_ac_in is not None else None
                 )
                 mu_bc[second_phase_indx] = mu_place
                 scale_bc[second_phase_indx] = scale_place
@@ -982,7 +1008,8 @@ class VideoImitation(nn.Module):
                     img_embed=ac_in,
                     states=states,
                     demo_embed=demo_embed if demo_embed is not None else None,
-                    first_phase=True)
+                    first_phase=True,
+                    wrist_embed=wrist_ac_in)
                 mu_bc = mu_picking
                 scale_bc = scale_picking
                 logit_bc = logit_picking
@@ -994,7 +1021,8 @@ class VideoImitation(nn.Module):
                     img_embed=ac_in,
                     states=states,
                     demo_embed=demo_embed if demo_embed is not None else None,
-                    first_phase=False
+                    first_phase=False,
+                    wrist_embed=wrist_ac_in
                 )
                 mu_bc = mu_place
                 scale_bc = scale_place
@@ -1004,6 +1032,7 @@ class VideoImitation(nn.Module):
             if ret_dist else (mu_bc.type(torch.float32), scale_bc.type(torch.float32), logit_bc.type(torch.float32))
         out['demo_embed'] = demo_embed
         out['img_embed'] = img_embed
+        out['wrist_embed'] = wrist_embed
         # multi-head case? maybe register a name for each action head
         return out
 
@@ -1043,7 +1072,8 @@ class VideoImitation(nn.Module):
         target_obj_embedding=None,
         compute_activation_map=False,
         first_phase=None,
-        t=-1
+        t=-1,
+        wrist_images=None
     ):
         B, obs_T, _, height, width = images.shape
         demo_T = context.shape[1]
@@ -1052,7 +1082,17 @@ class VideoImitation(nn.Module):
         embed_out = None
         if self._concat_img_emb or self._concat_demo_emb:
             embed_out = self._embed(
-                images, context, compute_activation_map=compute_activation_map)
+                images, 
+                context, 
+                compute_activation_map=compute_activation_map)
+
+        wrist_embed = None
+        if self._use_wrist_img and wrist_images is not None:
+            # no demo pairing for the wrist stream: pass an empty (0-length) context
+            wrist_out = self._embed_wrist(
+                images=wrist_images, 
+                context=context)
+            wrist_embed = wrist_out['img_embed']
 
         if self._concat_bb and self._object_detector is None:
             predict_gt_bb = True
@@ -1163,7 +1203,8 @@ class VideoImitation(nn.Module):
                 ret_dist=ret_dist,
                 states=states,
                 eval=eval,
-                first_phase=self.first_phase if eval else first_phase)
+                first_phase=self.first_phase if eval else first_phase,
+                wrist_embed=wrist_embed)
         else:
             out = self.get_action(
                 embed_out=embed_out,
@@ -1172,7 +1213,8 @@ class VideoImitation(nn.Module):
                 ret_dist=ret_dist,
                 states=states,
                 eval=eval,
-                first_phase=self.first_phase if eval else first_phase)
+                first_phase=self.first_phase if eval else first_phase,
+                wrist_embed=wrist_embed)
 
         if self._concat_bb:
             out['predicted_bb'] = predicted_bb
@@ -1223,7 +1265,8 @@ class VideoImitation(nn.Module):
                     demo_embed=demo_embed[first_phase_indx],
                     predicted_bb=predicted_bb[first_phase_indx,
                                               :, 0, :][:, :, None, :],
-                    states=states[first_phase_indx]
+                    states=states[first_phase_indx],
+                    wrist_embed=wrist_embed[first_phase_indx] if wrist_embed is not None else None
                 )
                 mu_inv[first_phase_indx] = mu_picking
                 scale_inv[first_phase_indx] = scale_picking
@@ -1237,7 +1280,8 @@ class VideoImitation(nn.Module):
                     demo_embed=demo_embed[second_phase_indx],
                     predicted_bb=predicted_bb[second_phase_indx,
                                               :, 0, :][:, :, None, :],
-                    states=states[second_phase_indx])
+                    states=states[second_phase_indx],
+                    wrist_embed=wrist_embed[second_phase_indx] if wrist_embed is not None else None)
                 mu_inv[second_phase_indx] = mu_place
                 scale_inv[second_phase_indx] = scale_place
                 logit_inv[second_phase_indx] = logit_place

@@ -23,6 +23,7 @@
   <build_depend>tf2_ros</build_depend>
   <build_depend>geometry_msgs</build_depend>
   <build_depend>control_msgs</build_depend>
+  <build_depend>visualization_msgs</build_depend>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
@@ -38,6 +39,7 @@
   <exec_depend>dataset_collector_pkg</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>control_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
 
   <!-- <build_depend>ur5e_2f_85_teleoperation_msg</build_depend> -->
 

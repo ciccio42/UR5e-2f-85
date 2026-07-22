@@ -9,4 +9,5 @@
 - [ZED](docs/zed.md), contains the instructions to build and run docker for controlling ZED-Camera
 - [Dataset-Collector](docs/dataset_collector.md), contains the instructions to build and run all the dockers needed to perform trajectory collection
 - [AI-Controller](docs/ai_controller.md),
+- [Script-Controller](docs/script_controller.md), contains the instructions to run the scripted (non-learned), click-to-target pick-place controller
 - [ToDo](docs/todo.md)

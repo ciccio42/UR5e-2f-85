@@ -133,6 +133,13 @@ class AIControllerNode(Node):
         
         # add controller  name to save_rollout_path
         self.save_rollout_path = os.path.join(self.save_rollout_path, self.ai_controller_target, self.task_name)
+        if self.ai_controller_target == 'cod_controller':
+            # further split rollouts by checkpoint epoch/step and whether the
+            # wrist/eye-in-hand image was used, so runs from different
+            # checkpoints don't get mixed together on disk.
+            epoch = getattr(self.controller, 'epoch', 'unknown')
+            wrist_dir = 'wrist' if getattr(self.controller, 'use_wrist_img', False) else 'no_wrist'
+            self.save_rollout_path = os.path.join(self.save_rollout_path, f'epoch_{epoch}', wrist_dir)
         os.makedirs(self.save_rollout_path, exist_ok=True)
         
         # 2. Set up ROS2 interfaces (publishers, subscribers, services)
@@ -198,7 +205,7 @@ class AIControllerNode(Node):
                 for topic in self.camera_topic
             ]
             self.camera_sync = message_filters.ApproximateTimeSynchronizer(
-                self.camera_subs, queue_size=10, slop=10
+                self.camera_subs, queue_size=10, slop=100
             )
             self.camera_sync.registerCallback(self.synced_images_callback)
 
@@ -617,6 +624,8 @@ class AIControllerNode(Node):
                         self.get_logger().info(f'Controlling gripper at step {step}')   
                         gripper_goal = GripperCommand.Goal()
                         gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                        # check the z-position of the action to determine if the gripper should be closed or opened                       
+                        
                         # if self.gripper_closed:
                         #     self.get_logger().info(f'Keeping gripper closed at step {step}')
                         #     gripper_goal.command.position = 255.0  # Keep the gripper closed

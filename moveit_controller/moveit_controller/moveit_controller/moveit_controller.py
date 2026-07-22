@@ -38,6 +38,18 @@ class MoveItControllerNode(Node):
         self.declare_parameter('manual_goal_completion', False)
         self.manual_goal_completion = self.get_parameter('manual_goal_completion').value
 
+        # When False: plan every requested motion, publish it to /display_planned_path
+        # for RViz (MotionPlanning display -> Planned Path), and return without ever
+        # calling ExecuteTrajectory or touching the controller_manager. Lets you preview
+        # a full pick-place run (e.g. via script_controller_node) against fake/real
+        # hardware without the robot actually moving.
+        self.declare_parameter('execute_trajectory', True)
+        self.execute_trajectory = self.get_parameter('execute_trajectory').value
+        if not self.execute_trajectory:
+            self.get_logger().warning(
+                'execute_trajectory:=False - PLAN-ONLY MODE. Planned trajectories will be '
+                'published to /display_planned_path for RViz but NOT executed on the robot.')
+
         self._latest_joint_state = None
         self._joint_state_event = threading.Event()
         self.joint_state_callback_group = ReentrantCallbackGroup()
@@ -208,16 +220,19 @@ class MoveItControllerNode(Node):
             self.get_logger().error('MoveGroup action server not available!')
             return False
 
-        if not self._execute_trajectory_client.wait_for_server(timeout_sec=1.0):
+        if self.execute_trajectory and not self._execute_trajectory_client.wait_for_server(timeout_sec=1.0):
             self.get_logger().error('ExecuteTrajectory action server not available!')
             return False
-        
-        self.get_logger().info('Switching controllers to prepare for moving to specified joint positions...')
-        if not self._switch_controllers(controller_to_run=self.controller_to_run, 
-                                       controller_to_stop=self.controller_to_stop):
-            self.get_logger().error('Could not start the required controller to move to specified joint positions.')
-            return False
-        
+
+        if self.execute_trajectory:
+            self.get_logger().info('Switching controllers to prepare for moving to specified joint positions...')
+            if not self._switch_controllers(controller_to_run=self.controller_to_run,
+                                           controller_to_stop=self.controller_to_stop):
+                self.get_logger().error('Could not start the required controller to move to specified joint positions.')
+                return False
+        else:
+            self.get_logger().info('execute_trajectory:=False - skipping controller switch (plan-only).')
+
         goal = MoveGroup.Goal()
         goal.request.group_name = self.planning_component
         goal.request.num_planning_attempts = 5
@@ -270,6 +285,11 @@ class MoveItControllerNode(Node):
         display_trajectory.trajectory.append(result.planned_trajectory)
         self._display_trajectory_publisher.publish(display_trajectory)
         self.get_logger().info('Published planned trajectory to /display_planned_path.')
+
+        if not self.execute_trajectory:
+            self.get_logger().info(
+                'execute_trajectory:=False - plan published for RViz, skipping execution.')
+            return True
 
         # try:
         #     answer = input('Execute this planned trajectory? [y/N]: ').strip().lower()
@@ -429,23 +449,26 @@ class MoveItControllerNode(Node):
         success = self.set_robot_to_home_position()
         if success:
             response.success = True
-            response.message = 'Robot moved to home position successfully.'
+            response.message = ('Home trajectory planned (not executed).' if not self.execute_trajectory
+                                 else 'Robot moved to home position successfully.')
         else:
             response.success = False
             response.message = 'Failed to move robot to home position.'
-        
+
         # wait a bit to ensure the robot has stopped moving before switching controllers back
         # self.get_logger().info('Waiting for robot to finish moving...')
         # self.get_clock().sleep_for(Duration(seconds=2.0))
 
-        # reset controllers to original state
-        self.get_logger().info('Resetting controllers to original state...')
-        if self._switch_controllers(controller_to_run=self.controller_to_stop,
-                                    controller_to_stop=self.controller_to_run):
-            self.get_logger().info('Controllers reset successfully.')
-        else:
-            self.get_logger().error('Failed to reset controllers to original state.')
-        
+        # reset controllers to original state (only needed if we actually switched to
+        # controller_to_run to execute; plan-only mode never touched the controllers)
+        if self.execute_trajectory:
+            self.get_logger().info('Resetting controllers to original state...')
+            if self._switch_controllers(controller_to_run=self.controller_to_stop,
+                                        controller_to_stop=self.controller_to_run):
+                self.get_logger().info('Controllers reset successfully.')
+            else:
+                self.get_logger().error('Failed to reset controllers to original state.')
+
         return response
     
     def handle_set_robot_to_pose(self, request, response):
@@ -456,18 +479,21 @@ class MoveItControllerNode(Node):
         success = self.send_moveit_goal(pose)
         if success:
             response.success = True
-            response.message = 'Robot pose set successfully.'
+            response.message = ('Pose trajectory planned (not executed).' if not self.execute_trajectory
+                                 else 'Robot pose set successfully.')
         else:
             response.success = False
             response.message = 'Failed to set robot pose.'
-        
-        # reset controllers to original state
-        self.get_logger().info('Resetting controllers to original state...')
-        if self._switch_controllers(controller_to_run=self.controller_to_stop,
-                                    controller_to_stop=self.controller_to_run):
-            self.get_logger().info('Controllers reset successfully.')
-        else:
-            self.get_logger().error('Failed to reset controllers to original state.')
+
+        # reset controllers to original state (only needed if we actually switched to
+        # controller_to_run to execute; plan-only mode never touched the controllers)
+        if self.execute_trajectory:
+            self.get_logger().info('Resetting controllers to original state...')
+            if self._switch_controllers(controller_to_run=self.controller_to_stop,
+                                        controller_to_stop=self.controller_to_run):
+                self.get_logger().info('Controllers reset successfully.')
+            else:
+                self.get_logger().error('Failed to reset controllers to original state.')
 
         return response
     

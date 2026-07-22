@@ -15,7 +15,8 @@ setup(
         'ai_controller':[
             'models/*',
             'utils/*',
-            ]    
+            'script_controller/*',
+            ]
     },
     install_requires=['setuptools'],
     zip_safe=True,
@@ -32,6 +33,7 @@ setup(
         'console_scripts': [
             'ai_controller_node = ai_controller.ai_controller_node:main',
             'replicate_rollout = ai_controller.replicate_rollout:main',
+            'script_controller_node = ai_controller.script_controller_node:main',
         ],
     },
 )

@@ -61,21 +61,30 @@ class CODController(AIController):
             raise FileNotFoundError(f"No model checkpoints found in {model_folder}.")
         model_path = models[-1]
         print(f"Loading model weights from {model_path}...")
-         
+
+        # checkpoint step/epoch, used by ai_controller_node to organize saved rollouts
+        self.epoch = int(model_path.split('-')[-1].split('.')[0])
+
         weights = torch.load(model_path, map_location=self.device)
         weights_copy = copy.deepcopy(weights)
         for key in weights_copy.keys():
             if 'object_detector' in key:
                 del weights[key]
         model.load_state_dict(weights, strict=False)
+        print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")
         model.load_target_obj_detector(
                                         target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,
                                         target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step
                                     )
         model._object_detector.eval()
-        model.eval()    
+        model.eval()
         print("Model weights loaded successfully.")
-        
+
+        # whether this checkpoint was trained with the wrist/eye-in-hand image
+        # stream, used by ai_controller_node to organize saved rollouts
+        self.use_wrist_img = getattr(model, '_use_wrist_img', False)
+        print(f"Model uses wrist/eye-in-hand image stream: {self.use_wrist_img}")
+
         return model
         
 
@@ -252,11 +261,17 @@ class CODController(AIController):
         """
         imgs = input_data[0]
         states = input_data[1]
-        
-        # apply the image formatter to the input image
+
+        # apply the image formatter to the input images. The last image is the
+        # wrist/eye-in-hand camera: it's already framed on the gripper, so skip
+        # the front-camera crop window for it (see build_tvf_formatter's
+        # wrist_crop flag) and only resize.
+        last_idx = len(imgs) - 1
         formatted_imgs = [self.img_formatter(img,
-                                             agent=True) for img in imgs]
-        
+                                             agent=True,
+                                             wrist_crop=(i == last_idx and last_idx > 0))
+                          for i, img in enumerate(imgs)]
+
         if states is not None:
             raise NotImplementedError("State processing is not implemented yet.")
         else:
@@ -295,7 +310,14 @@ class CODController(AIController):
         print(f"Predicted gripper value: {predicted_gripper}")
         if predicted_gripper > 0.50:
             gripper_finger_pos = 255
+            
+            if not self.gripper_closed:
+                # if the gripper is not closed and the predicted action is closing move the gripper a little bit forward
+                action[1] += 0.00  # Move the robot slightly forward to avoid collision when closing the gripper
+                input("Press Enter to continue after adjusting the action to avoid collision...")
+                print(f"Adjusted action to avoid collision when closing the gripper: {action}")
             self.gripper_closed = True
+            
         else:
             gripper_finger_pos = 0
             
@@ -316,6 +338,7 @@ class CODController(AIController):
         
         # post-process the predicted action
         action = self._post_process_action(action)
+        
         return action, predicted_bb, target_obj_prediction
     
     def inference(self, input_data, t, save_path=None):
@@ -343,15 +366,22 @@ class CODController(AIController):
                 pil_img = PIL.Image.fromarray((img_np * 255).astype(np.uint8))
                 pil_img.save(os.path.join(save_path, f"pre_processed_img_{i}.png"))
         
+        # the wrist/eye-in-hand image (last element) has its own embedding stream
+        # in the model (see mt_rep_double_policy.py's wrist_images/_embed_wrist),
+        # so it's moved to device separately from the frontal image below.
+        wrist_image = None
+        if len(pre_processed_imgs) > 1:
+            wrist_image = pre_processed_imgs[-1][None][None].float().to(self.device)
+
         # move the pre-processed images to the device (e.g., GPU) if necessary
         # get only the frontal image for inference
         # print(f"Pre-processed images shape: {[img.shape for img in pre_processed_imgs]}")
         pre_processed_imgs, pre_processed_states, context = move_to_device(
                                                                 pre_processed_imgs[0],
                                                                 pre_processed_states,
-                                                                self.demo_frames, 
+                                                                self.demo_frames,
                                                                 device=self.device)
-        
+
         # perform inference using the model
         with torch.no_grad():
             print(f"Performing model inference at time step {t} with gripper state: {self.gripper_closed}")
@@ -366,8 +396,9 @@ class CODController(AIController):
                         eval=True,
                         target_obj_embedding=None,
                         compute_activation_map=True,
-                        t=t)
-            
+                        t=t,
+                        wrist_images=wrist_image)
+
             action = out['bc_distrib'].sample()[0, -1].cpu().numpy()
             predicted_bb = out.get('predicted_bb', None)
             target_obj_prediction = out.get('target_obj_prediction', None)
@@ -384,13 +415,23 @@ class CODController(AIController):
                     cv2.rectangle(img_np, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
                 pil_img = PIL.Image.fromarray(img_np)
                 pil_img.save(os.path.join(save_path, f"predicted_bb_img_{t}.png"))
-                
+
+                # attach the wrist/eye-in-hand image on the right, to visually verify
+                # what was actually fed to the model this step. Both images are
+                # already resized to the same (config.dataset_cfg.height, width) by
+                # build_tvf_formatter, so they can be stacked side-by-side directly.
+                display_img = img_np
+                if wrist_image is not None:
+                    wrist_np = wrist_image[0, 0].permute(1, 2, 0).cpu().numpy()
+                    wrist_np = np.ascontiguousarray((wrist_np * 255).astype(np.uint8))
+                    display_img = np.hstack([img_np, wrist_np])
+
                 # show the image with predicted bounding boxes using OpenCV
-                cv2.imshow(f"Predicted BB at step {t}", img_np[:, :, ::-1])  # Convert RGB to BGR for OpenCVclear
+                cv2.imshow(f"Predicted BB at step {t}", display_img[:, :, ::-1])  # Convert RGB to BGR for OpenCV
                 cv2.waitKey(1000)  # Display the image for 1 s
                 # close the OpenCV window
                 cv2.destroyAllWindows()
-
+                
             return self.post_process([action, predicted_bb, target_obj_prediction])
         
         
