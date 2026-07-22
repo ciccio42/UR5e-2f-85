@@ -19,8 +19,8 @@ described in [AI-Controller](ai_controller.md) are already running.
 # Make sure base_link -> table_0 is being published in TF before starting script_controller_node
 # (see "How target points are computed" below) - e.g.:
 ros2 run tf2_ros static_transform_publisher \
-    --x -0.020 --y 0.612 --z 0.120 --qx 0.000 --qy 0.000 --qz 1.000 --qw 0.000 \
-    --frame-id base_link --child-frame-id table_0
+    --x 0.00 --y 0.612 --z -0.120 --qx 0.000 --qy 0.000 --qz 1.000 --qw 0.000 \
+    --frame-id base_link --child-frame-id table_0 &
 
 # Run Script-Controller (scripted, click-to-target pick-place - no learned model)
 # Leave move_robot:=False the first time to dry-run (logs the poses/primitives without moving the robot).

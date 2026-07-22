@@ -165,6 +165,7 @@ class ScriptControllerNode(Node):
             min_step=self.min_step,
             reach_hover_height=self.reach_hover_height,
             approach_z_offset=self.approach_z_offset,
+            release_height_offset=self.release_height_offset,
             lift_height=self.lift_height,
             gripper_open_position=self.gripper_open_position,
             gripper_closed_position=self.gripper_closed_position,
@@ -209,6 +210,7 @@ class ScriptControllerNode(Node):
         self.declare_parameter('min_step', 0.02)
         self.declare_parameter('reach_hover_height', 0.15)
         self.declare_parameter('approach_z_offset', 0.0)
+        self.declare_parameter('release_height_offset', 0.10)
         self.declare_parameter('lift_height', 0.15)
 
         self.declare_parameter('gripper_open_position', 0.1)
@@ -256,6 +258,7 @@ class ScriptControllerNode(Node):
         self.min_step = gpv('min_step').get_parameter_value().double_value
         self.reach_hover_height = gpv('reach_hover_height').get_parameter_value().double_value
         self.approach_z_offset = gpv('approach_z_offset').get_parameter_value().double_value
+        self.release_height_offset = gpv('release_height_offset').get_parameter_value().double_value
         self.lift_height = gpv('lift_height').get_parameter_value().double_value
 
         self.gripper_open_position = gpv('gripper_open_position').get_parameter_value().double_value
@@ -557,7 +560,7 @@ class ScriptControllerNode(Node):
 
         self.get_logger().info(f'Target object position (base_link): {obj_pos}')
         self.get_logger().info(f'Target bin position (base_link): {bin_pos}')
-        obj_pos[1] -= 0.04  # offset to move the object y in the object
+        obj_pos[1] -= 0.06  # offset to move the object y in the object
         target_object_pose = GripperPose(obj_pos, self.grasp_orientation)
         target_bin_pose = GripperPose(bin_pos, self.grasp_orientation)
         return target_object_pose, target_bin_pose

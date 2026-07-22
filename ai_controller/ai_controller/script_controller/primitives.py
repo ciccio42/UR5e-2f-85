@@ -23,7 +23,7 @@ from ai_controller.script_controller.geometry_utils import build_linear_waypoint
 class MotionPrimitives:
 
     def __init__(self, node, set_pose_client, gripper_action_client, frame_id,
-                 min_step, reach_hover_height, approach_z_offset, lift_height,
+                 min_step, reach_hover_height, approach_z_offset, release_height_offset, lift_height,
                  gripper_open_position, gripper_closed_position, gripper_max_effort,
                  move_robot=True):
         self.node = node
@@ -33,6 +33,7 @@ class MotionPrimitives:
         self.min_step = min_step
         self.reach_hover_height = reach_hover_height
         self.approach_z_offset = approach_z_offset
+        self.release_height_offset = release_height_offset
         self.lift_height = lift_height
         self.gripper_open_position = gripper_open_position
         self.gripper_closed_position = gripper_closed_position
@@ -158,7 +159,7 @@ class MotionPrimitives:
         target_pos = np.array([
             target_bin_pose.position[0],
             target_bin_pose.position[1],
-            target_bin_pose.position[2] + self.approach_z_offset,
+            target_bin_pose.position[2] + self.release_height_offset,
         ])
         new_pose = self._move_linear(current_pose, target_pos, target_bin_pose.orientation,
                                       on_step, on_plan, label='placing')
