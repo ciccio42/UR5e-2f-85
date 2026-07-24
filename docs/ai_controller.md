@@ -126,7 +126,7 @@ ros2 run ai_controller ai_controller_node --ros-args \
 
 # Run AI-Controller (TinyVLA)
 ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=True  \
+    -p move_robot:=False  \
     -p ai_controller_target:="tinyvla_controller" \
     -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml"
 
@@ -136,8 +136,6 @@ ros2 run ai_controller replicate_rollout --ros-args \
     -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/traj_000.pkl \
     -p context_trajectory_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/context_000.pkl \
     -p save_video:=True
-
-  
 ``` 
 
 Script-Controller (scripted, click-to-target pick-place, no learned model) has its own
@@ -200,13 +198,31 @@ git clone https://github.com/ciccio42/TinyVLA.git
 # head implementations: act / droid_diffusion / transformer_diffusion)
 cd TinyVLA/llava-pythia && pip install -e . --break-system-packages
 cd ../policy_heads && pip install -e . --break-system-packages
-cd ../..
 
-pip install deepspeed timm einops einops-exts sentencepiece pyquaternion --break-system-packages
+pip uninstall torch torchvision --break-system-packages
+pip install "torch==2.7.0" "torchvision==0.22.0" --index-url https://download.pytorch.org/whl/cu128 --break-system-packages
+pip install ipython --break-system-packages --ignore-installed psutil
+pip install "diffusers==0.39.0" --break-system-packages
+pip uninstall flash-attn -y  --break-system-packages
+
+
+# pip install "numpy<2" opencv-python --force-reinstall --break-system-packages
+# # pip install "huggingface-hub<1.0,>=0.19.3" --break-system-package
+# pip install "deepspeed==0.18.1" --break-system-packages
+# pip install "bitsandbytes==0.48.0" --break-system-packages
+# pip install "sentencepiece==0.1.99" --break-system-packages
+# pip install "timm==0.6.13" --break-system-packages
+# pip install "torch==2.7.0" --break-system-packages
+# pip install "torchvision==0.22.0" --break-system-packages
+# pip install pyquaternion --break-system-packages --ignore-installed psutil
+
+export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA
+export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA/llava-pythia
 
 # unit test
 cd /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller
-python3 test.py
+python3 test.py \
+        --config /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml
 ```
 
 Checkpoint layout expected by `tinyvla_config.yaml` (`model_path` / `model_base`):
