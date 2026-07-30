@@ -212,7 +212,8 @@ class AIControllerNode(Node):
         self.traj_cnt = 0
         self.max_step = 90
         self.gripper_closed = False
-        self.previous_gripper_position = 0.0    
+        self.previous_gripper_position = 0.0
+        self.initial_gripper_pose = None
 
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
         self.control_loop()
@@ -533,7 +534,19 @@ class AIControllerNode(Node):
                         raise RuntimeError(f'Failed to set robot to home position: {response.message}')      
                     
                     self.move_to_initial_pose()
-                    
+
+                    # capture the settled gripper pose (via TF) right after the robot
+                    # reaches its initial pose, as the episode's reference starting pose
+                    initial_robot_state = self._capture_robot_state()
+                    self.initial_gripper_pose = np.concatenate([
+                        initial_robot_state.get(EEF_POS_NAME, np.zeros(3)),
+                        initial_robot_state.get(EEF_QUAT_NAME, np.array([0.0, 0.0, 0.0, 1.0])),
+                    ])
+                    # fix the model-predicted orientation to the measured initial
+                    # gripper orientation (see TinyVLAController.post_process)
+                    if hasattr(self.controller, 'set_starting_orientation'):
+                        self.controller.set_starting_orientation(self.initial_gripper_pose[3:7])
+
                     # load the demo data for the given task_id
                     self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
                     self.controller.load_command(self.demo_path, 
@@ -632,13 +645,24 @@ class AIControllerNode(Node):
                         gripper_goal.command.max_effort = 50.0
                         future = self.gripper_action_client.send_goal_async(gripper_goal)
                         rclpy.spin_until_future_complete(self, future)
-                        if future.result() is not None:
-                            self.get_logger().info(f'Gripper command sent at step {step}')
-                        else:
-                            self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
-                            raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
-                        
-                        self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
+                        goal_handle = future.result()
+                        if goal_handle is None or not goal_handle.accepted:
+                            self.get_logger().error(f'Gripper goal rejected: {future.exception()}')
+                            raise RuntimeError(f'Gripper goal rejected: {future.exception()}')
+
+                        # wait for the gripper to actually finish moving before continuing -
+                        # goal acceptance above only means the server started executing it,
+                        # and re-sending a goal on the next step preempts an in-progress one
+                        result_future = goal_handle.get_result_async()
+                        rclpy.spin_until_future_complete(self, result_future)
+                        result = result_future.result()
+                        if result is None:
+                            self.get_logger().error(f'Failed to get gripper command result: {result_future.exception()}')
+                            raise RuntimeError(f'Failed to get gripper command result: {result_future.exception()}')
+
+                        self.get_logger().info(
+                            f'Gripper command position: {gripper_goal.command.position} '
+                            f'(reached_goal={result.result.reached_goal}, stalled={result.result.stalled})')
                         if not self.gripper_closed and gripper_goal.command.position == 255.0:
                             self.get_logger().info(f'Gripper is closing at step {step}')
                             self.gripper_closed = True

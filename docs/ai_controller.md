@@ -101,7 +101,7 @@ ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py launch_servo:=tr
 # Run moveit_controller
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
-ros2 run moveit_controller moveit_controller_node
+ros2 run moveit_controller moveit_controller_node --ros-args -p execute_trajectory:=True
 
 # Run moveit_controller in PLAN-ONLY mode: every GoHome/GoToPose request is planned and
 # published to /display_planned_path for RViz, but never executed on the robot
@@ -109,9 +109,11 @@ ros2 run moveit_controller moveit_controller_node
 # execute" in script_controller.md.
 ros2 run moveit_controller moveit_controller_node --ros-args -p execute_trajectory:=False
 
-# Run AI-Controller (COD-Default)
+
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
+
+# Run AI-Controller (COD-Default)
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True  \
     -p ai_controller_target:="cod_controller" \
@@ -125,6 +127,8 @@ ros2 run ai_controller ai_controller_node --ros-args \
     -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml"
 
 # Run AI-Controller (TinyVLA)
+export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA
+export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA/llava-pythia
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=False  \
     -p ai_controller_target:="tinyvla_controller" \

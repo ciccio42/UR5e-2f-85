@@ -31,7 +31,7 @@ from llava_pythia.model.language_model.pythia.llava_pythia import LlavaPythiaCon
 from llava_pythia.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 
 from ai_controller.utils.utils import _quat2mat, _mat2euler_sxyz
-from tinyvla_utils import SCALE_FACTOR, R_EE_TO_GRIPPER, crop_front_image, normalize_angle, euler_to_axis_angle, rot_6d_to_euler_angles
+from tinyvla_utils import SCALE_FACTOR, normalize_angle, euler_to_axis_angle, rot_6d_to_euler_angles
 
 
 class TinyVLAPolicy:
@@ -126,21 +126,18 @@ class TinyVLAPolicy:
             states=states.unsqueeze(0),
         )
 
-    def prepare_observation(self, obs, task_name, stats, gripper_closed):
-        """Crop/resize the two camera views and build the normalized 8-dim proprio
-        state [eef_pos(3), eef_euler_rpy(3), gripper_open, gripper_closed]."""
-        front_image = crop_front_image(obs['camera_front_image'], task_name)
-
-        eye_in_hand = cv2.flip(obs['eye_in_hand_image'], 1)
-        eye_in_hand = cv2.resize(eye_in_hand, (224, 224))
-
+    def prepare_observation(self, obs, stats, gripper_closed):
+        """Resize the two camera views (already cropped to TASK_CROP and to 224x224
+        by TinyVLAController.pre_process(), see tinyvla_utils.crop_front_image) and
+        build the normalized 8-dim proprio state
+        [eef_pos(3), eef_euler_rpy(3), gripper_open, gripper_closed]."""
         images = np.array([
-            cv2.resize(front_image, (320, 180)),
-            cv2.resize(eye_in_hand, (320, 180)),
+            cv2.resize(obs['camera_front_image'], (320, 180)),
+            cv2.resize(obs['eye_in_hand_image'], (320, 180)),
         ])
         images = images / 255.0
 
-        eef_mat = R_EE_TO_GRIPPER @ _quat2mat(obs['eef_quat'])
+        eef_mat = _quat2mat(obs['eef_quat'])
         eef_euler = np.array([normalize_angle(a) for a in _mat2euler_sxyz(eef_mat)])
 
         eef_pose = np.zeros(6, dtype=np.float32)
@@ -180,7 +177,7 @@ class TinyVLAPolicy:
             else:
                 action_world[0:3] = obs['eef_pos'] + action[0:3]
 
-                current_gripper_orientation = _mat2euler_sxyz(R_EE_TO_GRIPPER @ _quat2mat(obs['eef_quat']))
+                current_gripper_orientation = _mat2euler_sxyz(_quat2mat(obs['eef_quat']))
                 current_gripper_orientation = [normalize_angle(a) for a in current_gripper_orientation]
                 gripper_orientation_action = current_gripper_orientation + action[3:6]
                 gripper_orientation_action = [normalize_angle(a) for a in gripper_orientation_action]
@@ -191,17 +188,17 @@ class TinyVLAPolicy:
 
         return post_processed_actions
 
-    def compute_action(self, obs, gripper_closed, task_description, task_name='pick_place', n_steps=-1):
+    def compute_action(self, obs, gripper_closed, task_description, n_steps=-1):
         """Run one TinyVLA forward pass (with ACT-style temporal aggregation across
         steps) and return a single-element list containing the world-frame action.
 
         Parameters
         ----------
-        obs : dict with keys 'camera_front_image', 'eye_in_hand_image' (raw uint8
-              RGB arrays) and 'eef_pos' (3,), 'eef_quat' (4,) (xyzw).
+        obs : dict with keys 'camera_front_image', 'eye_in_hand_image' (uint8 RGB
+              arrays, already cropped/resized by TinyVLAController.pre_process())
+              and 'eef_pos' (3,), 'eef_quat' (4,) (xyzw).
         gripper_closed : 0 or 1 - the currently-commanded gripper state.
         task_description : language goal string.
-        task_name : used to select the front-camera crop window (see tinyvla_utils.TASK_CROP).
         n_steps : current control-loop step for this trajectory; pass 0 to (re)start
                   temporal aggregation and run the warm-up queries.
 
@@ -220,7 +217,7 @@ class TinyVLAPolicy:
 
         with torch.no_grad():
             traj_rgb_np, robot_state = self.prepare_observation(
-                obs=obs, task_name=task_name, stats=self.stats, gripper_closed=gripper_closed
+                obs=obs, stats=self.stats, gripper_closed=gripper_closed
             )
             robot_state = torch.from_numpy(robot_state).float().cuda()
 

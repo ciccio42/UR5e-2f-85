@@ -13,22 +13,16 @@ from PIL import Image
 
 SCALE_FACTOR = 0.05
 
-# Rotates from the EEF frame used by ai_controller's robot-state capture into
-# the gripper frame TinyVLA was trained on (a 90-degree rotation about Z).
-R_EE_TO_GRIPPER = np.array([
-    [0.0, -1.0, 0.0],
-    [1.0, 0.0, 0.0],
-    [0.0, 0.0, 1.0],
-])
-
 TINYVLA_IMAGE_SIZE = 224
 
 # Crop margins [top, bottom, left, right] applied to the raw front-camera
-# image before resizing, matching VLA-Bench/robosuite_test/robosuite_utils.py's
+# image before resizing, matching the actual RLDS dataset-generation script for
+# this checkpoint: ~/Desktop/Multi-Task-LFD/repo/open_x_embodiment/datasets/
+# real_ur5e_pick_place_delta_removed_0_5_10_15/{ur5e_pick_place.py,utils.py}'s
 # TASK_CROP - NOT the same numbers as openvla_controller/openvla_utils.py's
-# TASK_CROP, since this checkpoint was trained with a different crop window.
+# TASK_CROP, since that controller uses a different checkpoint/crop window.
 TASK_CROP = {
-    'pick_place': [20, 25, 80, 75],
+    'pick_place': [0, 30, 140, 120],
     'nut_assembly': [20, 25, 80, 75],
     'stack_block': [20, 25, 80, 75],
     'press_button': [10, 10, 70, 70],

@@ -3,12 +3,13 @@ import sys
 from dataclasses import dataclass
 from typing import Optional
 
+import cv2
 import numpy as np
 import yaml
 from PIL import Image as PILImage
 
 from ai_controller.utils.ai_controller import AIController
-from ai_controller.utils.utils import seed_everything
+from ai_controller.utils.utils import seed_everything, _quat2mat, _mat2euler_sxyz
 
 # tinyvla.py/tinyvla_utils.py live alongside this file; import them the same
 # way openvla_controller.py imports openvla.py/openvla_utils.py.
@@ -17,7 +18,7 @@ if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
 
 from tinyvla import TinyVLAPolicy
-from tinyvla_utils import COMMAND_TEMPLATE
+from tinyvla_utils import COMMAND_TEMPLATE, TINYVLA_IMAGE_SIZE, crop_front_image, normalize_angle, euler_to_axis_angle
 
 
 @dataclass
@@ -60,11 +61,12 @@ class TinyVLAController(AIController):
         self._policy: Optional[TinyVLAPolicy] = None
         self.gripper_closed = False
         self.n_steps = 0
+        self.starting_orientation = None
 
         # AIController.__init__ calls self.load_model() which populates self.cfg
         super().__init__(model_config)
 
-        seed_everything(7)
+        seed_everything(0)
 
     # ------------------------------------------------------------------ #
     #  AIController abstract method implementations                        #
@@ -99,10 +101,55 @@ class TinyVLAController(AIController):
     def reset(self):
         self.gripper_closed = False
         self.n_steps = 0
+        self.starting_orientation = None
+
+    PREVIEW_WINDOW_NAME = "TinyVLAController - front | gripper"
+
+    def _show_camera_preview(self, front_rgb, gripper_rgb):
+        """Show the front + gripper camera images side by side and block until
+        Enter is pressed."""
+        height = min(front_rgb.shape[0], gripper_rgb.shape[0])
+
+        def resize_to_height(img, height):
+            if img.shape[0] == height:
+                return img
+            scale = height / img.shape[0]
+            return cv2.resize(img, (int(img.shape[1] * scale), height))
+
+        front_bgr = cv2.cvtColor(resize_to_height(front_rgb, height), cv2.COLOR_RGB2BGR)
+        gripper_bgr = cv2.cvtColor(resize_to_height(gripper_rgb, height), cv2.COLOR_RGB2BGR)
+        cv2.putText(front_bgr, "front", (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (0, 255, 0), 2, cv2.LINE_AA)
+        cv2.putText(gripper_bgr, "gripper", (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (0, 255, 0), 2, cv2.LINE_AA)
+
+        combined = np.hstack([front_bgr, gripper_bgr])
+        cv2.imshow(self.PREVIEW_WINDOW_NAME, combined)
+        print("[TinyVLAController] Showing front/gripper camera preview - press Enter to continue...")
+        while True:
+            key = cv2.waitKey(0) & 0xFF
+            if key in (13, 10):  # Enter
+                break
+
+    def _axis_angle_from_quat(self, eef_quat):
+        eef_euler = np.array([normalize_angle(a) for a in _mat2euler_sxyz(_quat2mat(eef_quat))])
+        return euler_to_axis_angle(eef_euler)
+
+    def set_starting_orientation(self, eef_quat):
+        """Seed the orientation post_process() pins the model's output to (see
+        post_process) from an externally-measured eef_quat - e.g.
+        ai_controller_node's initial_gripper_pose, captured via TF right after the
+        robot settles at its initial pose, before the first inference step. Takes
+        priority over pre_process's auto-capture since it runs first."""
+        self.starting_orientation = self._axis_angle_from_quat(eef_quat)
 
     def pre_process(self, input_data):
         """
-        Pack raw camera images and robot pose into the obs dict TinyVLAPolicy expects.
+        Pack raw camera images and robot pose into the obs dict TinyVLAPolicy expects,
+        applying the same front-camera crop (tinyvla_utils.TASK_CROP) and eye-in-hand
+        resize that TinyVLAPolicy was trained on, so the preview window and the
+        save_path debug images (see inference()) show exactly what the model sees
+        rather than the raw camera frames.
 
         Parameters
         ----------
@@ -115,20 +162,28 @@ class TinyVLAController(AIController):
 
         Returns
         -------
-        obs dict with keys 'camera_front_image', 'eye_in_hand_image', and,
-        if states is not None, 'eef_pos' (3,) / 'eef_quat' (4,).
+        obs dict with keys 'camera_front_image' (cropped to TASK_CROP[task_name] and
+        resized to 224x224), 'eye_in_hand_image' (resized to 224x224, no crop - see
+        TASK_CROP comment in tinyvla_utils.py), and, if states is not None, 'eef_pos'
+        (3,) / 'eef_quat' (4,).
         """
         images, states = input_data[0], input_data[1]
 
+        eye_in_hand_image = images[-1] if len(images) > 1 else images[0]
         obs = {
-            "camera_front_image": images[0],
-            "eye_in_hand_image": images[-1] if len(images) > 1 else images[0],
+            "camera_front_image": crop_front_image(images[0], self.task_name),
+            "eye_in_hand_image": cv2.resize(eye_in_hand_image, (TINYVLA_IMAGE_SIZE, TINYVLA_IMAGE_SIZE)),
         }
+
+        self._show_camera_preview(obs["camera_front_image"], obs["eye_in_hand_image"])
 
         if states is not None:
             states = np.asarray(states, dtype=np.float64)
             obs["eef_pos"] = states[0:3]
             obs["eef_quat"] = states[3:7]
+
+            if self.starting_orientation is None:
+                self.starting_orientation = self._axis_angle_from_quat(obs["eef_quat"])
 
         return obs
 
@@ -141,6 +196,11 @@ class TinyVLAController(AIController):
         opening requires the value to drop below 0.7 once closed, while closing
         from open requires it to exceed 0.9.
 
+        Orientation is pinned to the eef_quat given at the first step of the
+        episode (captured in pre_process): the model's predicted orientation is
+        discarded and replaced with that starting orientation on every step, so
+        the gripper never rotates.
+
         Parameters
         ----------
         action_world : 7-D numpy array [x, y, z, ax, ay, az, gripper] from
@@ -149,14 +209,23 @@ class TinyVLAController(AIController):
 
         Returns
         -------
-        The same array with action_world[-1] replaced by 0.0 or 255.0.
+        The same array with action_world[3:6] held at the episode's starting
+        orientation and action_world[-1] replaced by 0.0 or 255.0.
         """
+        if self.starting_orientation is not None:
+            action_world[3:6] = self.starting_orientation
+
         gripper_value = action_world[-1]
+        print(f"[TinyVLAController] Raw gripper value: {gripper_value:.3f} (closed={self.gripper_closed})")
         if self.gripper_closed:
-            self.gripper_closed = gripper_value >= 0.7
+            self.gripper_closed = gripper_value >= 0.4
         else:
-            self.gripper_closed = gripper_value > 0.9
+            self.gripper_closed = gripper_value >= 0.5
         action_world[-1] = 255.0 if self.gripper_closed else 0.0
+        
+        # if action_world[2] < 0.05:
+        #     print(f"[TinyVLAController] Adding x offset")
+        #     action_world[0] -= 0.04
         return action_world
 
     def inference(self, input_data, t: int, save_path: Optional[str] = None):
@@ -187,10 +256,9 @@ class TinyVLAController(AIController):
             obs=obs,
             gripper_closed=1 if self.gripper_closed else 0,
             task_description=self.cfg.task_description,
-            task_name=self.task_name,
             n_steps=self.n_steps,
         )
-        print(f"[TinyVLAController] Inference t={t}: latency = {inf_time:.3f}s")
+        print(f"[TinyVLAController] Inference t={t}: latency = {inf_time:.3f}s: raw action = {actions}")
         self.n_steps += 1
 
         return [self.post_process(action) for action in actions]

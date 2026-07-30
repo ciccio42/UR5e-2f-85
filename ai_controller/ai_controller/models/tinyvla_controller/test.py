@@ -27,6 +27,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from tinyvla_controller import TinyVLAController
+from tinyvla_utils import TINYVLA_IMAGE_SIZE
 
 DEFAULT_CONFIG_PATH = os.environ.get(
     "TINYVLA_TEST_CONFIG",
@@ -72,8 +73,11 @@ class TestTinyVLAController(unittest.TestCase):
 
         self.assertIn("camera_front_image", obs)
         self.assertIn("eye_in_hand_image", obs)
-        np.testing.assert_array_equal(obs["camera_front_image"], images[0])
-        np.testing.assert_array_equal(obs["eye_in_hand_image"], images[-1])
+        # pre_process crops (TASK_CROP) + resizes both views to the model's
+        # 224x224 input, so they no longer match the raw camera frames exactly.
+        expected_shape = (TINYVLA_IMAGE_SIZE, TINYVLA_IMAGE_SIZE, 3)
+        self.assertEqual(obs["camera_front_image"].shape, expected_shape)
+        self.assertEqual(obs["eye_in_hand_image"].shape, expected_shape)
         self.assertIn("eef_pos", obs)
         self.assertIn("eef_quat", obs)
         self.assertEqual(obs["eef_pos"].shape, (3,))
