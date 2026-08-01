@@ -53,7 +53,6 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
     && python -m pip install \
         torch==2.13.0 \
         torchvision==0.28.0 \
-        torchaudio==2.13.0 \
         --index-url https://download.pytorch.org/whl/cu130
 
 # Clone every source dependency at an immutable revision. The directory names
@@ -82,22 +81,46 @@ RUN git clone "${SEEDO_REPOSITORY}" "${SEEDO_ROOT}" \
 # The upstream requirements install three overlapping OpenCV wheels. They also
 # pin an obsolete setuptools and build MMCV in an isolated environment where
 # pkg_resources is unavailable. Install those exceptional packages explicitly.
-RUN python -m pip install setuptools==69.5.1 wheel \
+RUN python -m pip install setuptools==80.9.0 wheel \
     && grep -Ev '^(opencv_(contrib_)?python(_headless)?|mmcv|setuptools)==' "${SEEDO_ROOT}/requirements.txt" \
         > /tmp/seedo-requirements.txt \
     && python -m pip install -r /tmp/seedo-requirements.txt \
+    && python -m pip uninstall -y \
+        opencv-python \
+        opencv-contrib-python \
+        opencv-python-headless \
     && python -m pip install \
         opencv-contrib-python==4.10.0.84 \
         moviepy==1.0.3 \
-    && MMCV_WITH_OPS=1 python -m pip install --no-build-isolation mmcv==2.2.0
+    && MMCV_WITH_OPS=1 python -m pip install \
+        --no-build-isolation \
+        --no-deps \
+        mmcv==2.2.0
 
-# PyTorch is installed above from the CUDA 13 wheel index. Build isolation is
-# disabled so editable packages cannot replace it with another CUDA build. The SAM2
-# CUDA post-processing extension is optional and is skipped for this portable
-# baseline; the CUDA models themselves still run on the GPU.
-RUN python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/GroundingDINO" \
-    && python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/segment-anything" \
-    && SAM2_BUILD_CUDA=0 python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/segment-anything-2"
+# GroundingDINO's CUDA extension still uses the pre-2.x
+# AT_DISPATCH_FLOATING_TYPES(value.type(), ...) pattern. On this PyTorch/CUDA
+# combo, Tensor::type() no longer implicitly converts to c10::ScalarType, so
+# the dispatch macro fails to compile. Swap in .scalar_type(), which is what
+# the macro actually needs.
+RUN sed -i \
+        -e 's/value\.type(), "ms_deform_attn_forward_cuda"/value.scalar_type(), "ms_deform_attn_forward_cuda"/' \
+        -e 's/value\.type(), "ms_deform_attn_backward_cuda"/value.scalar_type(), "ms_deform_attn_backward_cuda"/' \
+        "${SEEDO_ROOT}/GroundingDINO/groundingdino/models/GroundingDINO/csrc/MsDeformAttn/ms_deform_attn_cuda.cu"
+
+# GroundingDINO's legacy editable installer recursively invokes an isolated pip
+# environment. Build its CUDA extension directly in the source tree instead.
+# SAM2's optional post-processing extension remains disabled; its models still
+# execute on the GPU through PyTorch.
+RUN cd "${SEEDO_ROOT}/GroundingDINO" \
+    && TORCH_CUDA_ARCH_LIST=12.1 python setup.py build_ext --inplace \
+    && python -m pip install \
+        --no-build-isolation \
+        --no-deps \
+        "${SEEDO_ROOT}/segment-anything" \
+    && SAM2_BUILD_CUDA=0 python -m pip install \
+        --no-build-isolation \
+        --no-deps \
+        "${SEEDO_ROOT}/segment-anything-2"
 
 ENV PYTHONPATH="${SEEDO_ROOT}:${SEEDO_ROOT}/GroundingDINO:${SEEDO_ROOT}/segment-anything:${SEEDO_ROOT}/segment-anything-2"
 
