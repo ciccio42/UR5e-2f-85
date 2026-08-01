@@ -1,4 +1,6 @@
-FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+# ARM64/DGX Spark port of SeeDo. The upstream baseline used CUDA 11.8 and
+# PyTorch 2.3.1, which cannot target the Blackwell GPU in this system.
+FROM nvidia/cuda:13.0.1-devel-ubuntu24.04
 
 ARG SEEDO_REPOSITORY="https://github.com/InfanteAngelo/SeeDo.git"
 ARG SEEDO_COMMIT="48ff18827c626c196648dc92333491c9e9dd8948"
@@ -12,6 +14,8 @@ ARG SAM2_COMMIT="54ce85058ba0fdd2d2a7d45ade7c3744e26ba3d7"
 LABEL org.opencontainers.image.title="SeeDo baseline"
 LABEL org.opencontainers.image.description="Reproducible SeeDo environment with CUDA, PyTorch, GroundingDINO, SAM and SAM2"
 LABEL org.opencontainers.image.revision="${SEEDO_COMMIT}"
+LABEL com.seedo.pytorch.version="2.10.0"
+LABEL com.seedo.cuda.version="13.0.1"
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -19,9 +23,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     CUDA_HOME=/usr/local/cuda \
-    SEEDO_ROOT=/opt/SeeDo \
+    SEEDO_ROOT=/home/seedo \
+    VIRTUAL_ENV=/opt/seedo-venv \
+    PATH=/opt/seedo-venv/bin:${PATH} \
     NVIDIA_VISIBLE_DEVICES=all \
-    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    NVIDIA_DRIVER_CAPABILITIES=all
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
@@ -34,7 +40,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libxext6 \
         libxrender1 \
         ninja-build \
+        python3 \
+        python3-dev \
+        python3-pip \
+        python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# Use an isolated Python environment and the official CUDA 13 wheels. These
+# wheels support Linux ARM64 and keep torch/torchvision on matching versions.
+RUN python3 -m venv "${VIRTUAL_ENV}" \
+    && python -m pip install --upgrade "pip<25" \
+    && python -m pip install \
+        torch==2.10.0 \
+        torchvision==0.25.0 \
+        torchaudio==2.10.0 \
+        --index-url https://download.pytorch.org/whl/cu130
 
 # Clone every source dependency at an immutable revision. The directory names
 # intentionally match the relative paths used by SeeDo.
@@ -63,14 +83,13 @@ RUN git clone "${SEEDO_REPOSITORY}" "${SEEDO_ROOT}" \
 # Keep the contrib build only; it contains the standard OpenCV modules too.
 RUN grep -Ev '^opencv_(contrib_)?python(_headless)?==' "${SEEDO_ROOT}/requirements.txt" \
         > /tmp/seedo-requirements.txt \
-    && python -m pip install --upgrade "pip<25" \
     && python -m pip install -r /tmp/seedo-requirements.txt \
     && python -m pip install \
         opencv-contrib-python==4.10.0.84 \
         moviepy==1.0.3
 
-# PyTorch is supplied by the base image. --no-build-isolation prevents the
-# editable packages from replacing it with a different CUDA build. The SAM2
+# PyTorch is installed above from the CUDA 13 wheel index. Build isolation is
+# disabled so editable packages cannot replace it with another CUDA build. The SAM2
 # CUDA post-processing extension is optional and is skipped for this portable
 # baseline; the CUDA models themselves still run on the GPU.
 RUN python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/GroundingDINO" \
