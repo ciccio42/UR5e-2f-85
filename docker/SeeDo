@@ -79,14 +79,17 @@ RUN git clone "${SEEDO_REPOSITORY}" "${SEEDO_ROOT}" \
         "${SEEDO_ROOT}/segment-anything/.git" \
         "${SEEDO_ROOT}/segment-anything-2/.git"
 
-# The upstream requirements install three mutually overlapping OpenCV wheels.
-# Keep the contrib build only; it contains the standard OpenCV modules too.
-RUN grep -Ev '^opencv_(contrib_)?python(_headless)?==' "${SEEDO_ROOT}/requirements.txt" \
+# The upstream requirements install three overlapping OpenCV wheels. They also
+# pin an obsolete setuptools and build MMCV in an isolated environment where
+# pkg_resources is unavailable. Install those exceptional packages explicitly.
+RUN python -m pip install setuptools==69.5.1 wheel \
+    && grep -Ev '^(opencv_(contrib_)?python(_headless)?|mmcv|setuptools)==' "${SEEDO_ROOT}/requirements.txt" \
         > /tmp/seedo-requirements.txt \
     && python -m pip install -r /tmp/seedo-requirements.txt \
     && python -m pip install \
         opencv-contrib-python==4.10.0.84 \
-        moviepy==1.0.3
+        moviepy==1.0.3 \
+    && MMCV_WITH_OPS=1 python -m pip install --no-build-isolation mmcv==2.2.0
 
 # PyTorch is installed above from the CUDA 13 wheel index. Build isolation is
 # disabled so editable packages cannot replace it with another CUDA build. The SAM2
