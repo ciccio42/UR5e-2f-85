@@ -1,0 +1,88 @@
+FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-devel
+
+ARG SEEDO_REPOSITORY="https://github.com/InfanteAngelo/SeeDo.git"
+ARG SEEDO_COMMIT="48ff18827c626c196648dc92333491c9e9dd8948"
+ARG GROUNDING_DINO_REPOSITORY="https://github.com/InfanteAngelo/GroundingDINO.git"
+ARG GROUNDING_DINO_COMMIT="f5e78e5e36ad3bdd50996de4f9d25e35dde8ddc9"
+ARG SAM_REPOSITORY="https://github.com/facebookresearch/segment-anything.git"
+ARG SAM_COMMIT="dca509fe793f601edb92606367a655c15ac00fdf"
+ARG SAM2_REPOSITORY="https://github.com/facebookresearch/segment-anything-2.git"
+ARG SAM2_COMMIT="54ce85058ba0fdd2d2a7d45ade7c3744e26ba3d7"
+
+LABEL org.opencontainers.image.title="SeeDo baseline"
+LABEL org.opencontainers.image.description="Reproducible SeeDo environment with CUDA, PyTorch, GroundingDINO, SAM and SAM2"
+LABEL org.opencontainers.image.revision="${SEEDO_COMMIT}"
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CUDA_HOME=/usr/local/cuda \
+    SEEDO_ROOT=/opt/SeeDo \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        ffmpeg \
+        git \
+        libgl1 \
+        libglib2.0-0 \
+        libsm6 \
+        libxext6 \
+        libxrender1 \
+        ninja-build \
+    && rm -rf /var/lib/apt/lists/*
+
+# Clone every source dependency at an immutable revision. The directory names
+# intentionally match the relative paths used by SeeDo.
+RUN git clone "${SEEDO_REPOSITORY}" "${SEEDO_ROOT}" \
+    && git -C "${SEEDO_ROOT}" checkout --detach "${SEEDO_COMMIT}" \
+    && test "$(git -C "${SEEDO_ROOT}" rev-parse HEAD)" = "${SEEDO_COMMIT}" \
+    && git clone "${GROUNDING_DINO_REPOSITORY}" "${SEEDO_ROOT}/GroundingDINO" \
+    && git -C "${SEEDO_ROOT}/GroundingDINO" checkout --detach "${GROUNDING_DINO_COMMIT}" \
+    && test "$(git -C "${SEEDO_ROOT}/GroundingDINO" rev-parse HEAD)" = "${GROUNDING_DINO_COMMIT}" \
+    && git clone "${SAM_REPOSITORY}" "${SEEDO_ROOT}/segment-anything" \
+    && git -C "${SEEDO_ROOT}/segment-anything" checkout --detach "${SAM_COMMIT}" \
+    && test "$(git -C "${SEEDO_ROOT}/segment-anything" rev-parse HEAD)" = "${SAM_COMMIT}" \
+    && git clone "${SAM2_REPOSITORY}" "${SEEDO_ROOT}/segment-anything-2" \
+    && git -C "${SEEDO_ROOT}/segment-anything-2" checkout --detach "${SAM2_COMMIT}" \
+    && test "$(git -C "${SEEDO_ROOT}/segment-anything-2" rev-parse HEAD)" = "${SAM2_COMMIT}" \
+    && sed -i \
+        's/^api_key = .*/api_key = os.environ.get("OPENAI_API_KEY", "")/' \
+        "${SEEDO_ROOT}/VLM_CaP/VideoPerception/src/vlm_perception.py" \
+    && rm -rf \
+        "${SEEDO_ROOT}/.git" \
+        "${SEEDO_ROOT}/GroundingDINO/.git" \
+        "${SEEDO_ROOT}/segment-anything/.git" \
+        "${SEEDO_ROOT}/segment-anything-2/.git"
+
+# The upstream requirements install three mutually overlapping OpenCV wheels.
+# Keep the contrib build only; it contains the standard OpenCV modules too.
+RUN grep -Ev '^opencv_(contrib_)?python(_headless)?==' "${SEEDO_ROOT}/requirements.txt" \
+        > /tmp/seedo-requirements.txt \
+    && python -m pip install --upgrade "pip<25" \
+    && python -m pip install -r /tmp/seedo-requirements.txt \
+    && python -m pip install \
+        opencv-contrib-python==4.10.0.84 \
+        moviepy==1.0.3
+
+# PyTorch is supplied by the base image. --no-build-isolation prevents the
+# editable packages from replacing it with a different CUDA build. The SAM2
+# CUDA post-processing extension is optional and is skipped for this portable
+# baseline; the CUDA models themselves still run on the GPU.
+RUN python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/GroundingDINO" \
+    && python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/segment-anything" \
+    && SAM2_BUILD_CUDA=0 python -m pip install --no-build-isolation -e "${SEEDO_ROOT}/segment-anything-2"
+
+ENV PYTHONPATH="${SEEDO_ROOT}:${SEEDO_ROOT}/GroundingDINO:${SEEDO_ROOT}/segment-anything:${SEEDO_ROOT}/segment-anything-2"
+
+WORKDIR ${SEEDO_ROOT}
+
+# Build-time smoke test. CUDA availability is intentionally checked only when
+# the container is run with --gpus, because GPUs are normally absent at build.
+RUN python -c "import cv2, mediapipe, openai, torch, torchvision; import groundingdino, segment_anything, sam2; print('SeeDo imports OK'); print('torch:', torch.__version__); print('CUDA build:', torch.version.cuda)"
+
+CMD ["bash"]
