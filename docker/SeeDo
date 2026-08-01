@@ -14,7 +14,7 @@ ARG SAM2_COMMIT="2b90b9f5ceec907a1c18123530e92e794ad901a4"
 LABEL org.opencontainers.image.title="SeeDo baseline"
 LABEL org.opencontainers.image.description="Reproducible SeeDo environment with CUDA, PyTorch, GroundingDINO, SAM and SAM2"
 LABEL org.opencontainers.image.revision="${SEEDO_COMMIT}"
-LABEL com.seedo.pytorch.version="2.10.0"
+LABEL com.seedo.pytorch.version="2.13.0"
 LABEL com.seedo.cuda.version="13.0.1"
 
 ENV DEBIAN_FRONTEND=noninteractive \
@@ -51,9 +51,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python3 -m venv "${VIRTUAL_ENV}" \
     && python -m pip install --upgrade "pip<25" \
     && python -m pip install \
-        torch==2.10.0 \
-        torchvision==0.25.0 \
-        torchaudio==2.10.0 \
+        torch==2.13.0 \
+        torchvision==0.28.0 \
+        torchaudio==2.13.0 \
         --index-url https://download.pytorch.org/whl/cu130
 
 # Clone every source dependency at an immutable revision. The directory names
