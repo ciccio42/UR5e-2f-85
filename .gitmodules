@@ -1,0 +1,3 @@
+[submodule "external/mimic-video"]
+	path = external/mimic-video
+	url = https://github.com/mimic-video/mimic-video.git
