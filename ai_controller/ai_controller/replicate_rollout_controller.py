@@ -36,27 +36,37 @@ def _add_dataset_collector_scripts_to_path():
         sys.path.append(str(scripts_dir))
 
 
-class ReplicateRollout(Node):
-    """Loads a rollout .pkl saved by ai_controller_node.py's save_rollout() and, per step,
-    checks that it can be parsed into a robot command. In dry_run mode (default) it only
-    logs the pose/gripper command it WOULD send; with dry_run:=false it actually sends
-    them via the same MoveIt/gripper interfaces as ai_controller_node.py.
+class ReplicateRolloutController(Node):
+    """Loads a rollout .pkl saved by script_controller_node.py and, per step,
+    checks that it can be parsed into a robot command. In dry_run mode (default)
+    it only logs the pose/gripper command it WOULD send; with dry_run:=false it
+    actually sends them via the same MoveIt/gripper interfaces as
+    replicate_rollout.py.
 
-    Unlike dataset_collector_pkg's replicate_trajectory.py (which replays recorded
-    demonstrations keyed by eef_pos/eef_quat/gripper_qpos), this reads the rollout's
-    top-level `action` field directly: an 8-vector [x, y, z, qx, qy, qz, qw, gripper_pos]
-    as produced by CODController._post_process_action / used in ai_controller_node.py's
-    control_loop (gripper_pos is already a raw 0/255 GripperCommand position, not the
-    0.0-1.0 style used by the recorded-demonstration pipeline).
+    Unlike replicate_rollout.py (which validates AI/COD rollout fields such as
+    camera_front_image, cropped_image and predicted_bb), this reads the
+    script_controller_node.py schema directly:
+    front/left/right/gripper RGB+depth images, robot state fields and
+    the top-level `action` field. The action is an 8-vector
+    [x, y, z, qx, qy, qz, qw, gripper_normalized], where gripper_normalized is
+    mapped back to gripper_open_position / gripper_closed_position before
+    replay.
     """
 
     REQUIRED_OBS_FIELDS = ('eef_pos', 'eef_quat', 'joint_pos', 'joint_vel', 'gripper_qpos', 'gripper_qvel')
+    CAMERA_FIELDS = (
+        ('front', ('front_camera_image', 'camera_front_image'),
+         ('front_camera_depth', 'camera_front_depth')),
+        ('left', ('left_camera_image',), ('left_camera_depth',)),
+        ('right', ('right_camera_image',), ('right_camera_depth',)),
+        ('wrist', ('gripper_camera_image',), ('gripper_camera_depth',)),
+    )
 
     def __init__(self):
-        super().__init__('replicate_rollout')
+        super().__init__('replicate_rollout_controller')
 
         self.declare_parameter('rollout_path', '')
-        self.declare_parameter('dry_run', False)
+        self.declare_parameter('dry_run', True)
         self.declare_parameter('set_home_service', 'set_robot_to_home')
         self.declare_parameter('set_pose_service', 'set_robot_to_pose')
         self.declare_parameter('frame_id', 'base_link')
@@ -64,11 +74,13 @@ class ReplicateRollout(Node):
         self.declare_parameter('step_delay_sec', 0.0)
         self.declare_parameter('service_timeout_sec', 10.0)
         self.declare_parameter('gripper_action_topic', '/robotiq_gripper_controller/gripper_cmd')
+        self.declare_parameter('gripper_open_position', 0.1)
+        self.declare_parameter('gripper_closed_position', 0.8)
+        self.declare_parameter('gripper_closed_threshold', 0.5)
         self.declare_parameter('gripper_max_effort', 50.0)
         self.declare_parameter('gripper_result_timeout_sec', 10.0)
         self.declare_parameter('show_images', True)
         self.declare_parameter('preview_wait_ms', 200)
-        self.declare_parameter('context_path', '')
         self.declare_parameter('save_video', False)
         self.declare_parameter('video_output_dir', '')
         self.declare_parameter('video_fps', 5.0)
@@ -82,16 +94,19 @@ class ReplicateRollout(Node):
         self.step_delay_sec = float(self.get_parameter('step_delay_sec').value)
         self.service_timeout_sec = float(self.get_parameter('service_timeout_sec').value)
         self.gripper_action_topic = self.get_parameter('gripper_action_topic').value
+        self.gripper_open_position = float(self.get_parameter('gripper_open_position').value)
+        self.gripper_closed_position = float(self.get_parameter('gripper_closed_position').value)
+        self.gripper_closed_threshold = float(self.get_parameter('gripper_closed_threshold').value)
         self.gripper_max_effort = float(self.get_parameter('gripper_max_effort').value)
         self.gripper_result_timeout_sec = float(self.get_parameter('gripper_result_timeout_sec').value)
         self.show_images = bool(self.get_parameter('show_images').value)
         self.preview_wait_ms = int(self.get_parameter('preview_wait_ms').value)
 
-        self.preview_window_name = 'Rollout Check: original vs cropped+predicted_bb'
+        self.preview_window_name = 'Controller Rollout Check: cameras + robot state'
         if self.show_images:
             try:
                 cv2.namedWindow(self.preview_window_name, cv2.WINDOW_NORMAL)
-                cv2.resizeWindow(self.preview_window_name, 1000, 400)
+                cv2.resizeWindow(self.preview_window_name, 1400, 900)
             except cv2.error as exc:
                 self.get_logger().warning(f'Could not create preview window: {exc}')
                 self.show_images = False
@@ -106,14 +121,9 @@ class ReplicateRollout(Node):
 
         self.steps = self._load_rollout(self.rollout_path)
 
-        self.context_path = self._resolve_context_path(
-            self.rollout_path, self.get_parameter('context_path').value)
-        self.context_frames = self._load_context_frames(self.context_path)
-
         self.get_logger().info(
             f"{'[DRY-RUN] ' if self.dry_run else ''}"
-            f'Loaded {len(self.steps)} steps from {self.rollout_path!r}. '
-            f'Loaded {len(self.context_frames)} context frames from {self.context_path!r}.'
+            f'Loaded {len(self.steps)} steps from {self.rollout_path!r}.'
         )
 
         self.save_video = bool(self.get_parameter('save_video').value)
@@ -121,15 +131,14 @@ class ReplicateRollout(Node):
         video_output_dir_param = self.get_parameter('video_output_dir').value
         self.video_output_dir = video_output_dir_param or str(Path(self.rollout_path).expanduser().parent)
         self._video_basename = Path(self.rollout_path).stem
-        self.original_video_writer = None
-        self.annotated_video_writer = None
+        self.preview_video_writer = None
         if self.save_video:
             os.makedirs(self.video_output_dir, exist_ok=True)
-            self.get_logger().info(f'Saving comparison videos to {self.video_output_dir}')
+            self.get_logger().info(f'Saving full preview video to {self.video_output_dir}')
 
     def _load_rollout(self, rollout_path):
         if not rollout_path:
-            raise ValueError('Parameter rollout_path must point to a rollout .pkl file saved by ai_controller_node.')
+            raise ValueError('Parameter rollout_path must point to a rollout .pkl file saved by script_controller_node.')
 
         path = Path(rollout_path).expanduser()
         if not path.is_file():
@@ -142,49 +151,6 @@ class ReplicateRollout(Node):
 
         trajectory = data['traj']
         return [trajectory[t] for t in range(len(trajectory))]
-
-    @staticmethod
-    def _resolve_context_path(rollout_path, context_path_param):
-        """CODController._save_command_trajectory() saves 'context_{traj_cnt:03d}.pkl'
-        next to save_rollout()'s 'traj_{traj_cnt:03d}.pkl', in the same task directory,
-        using the same counter. If context_path isn't given explicitly, try to derive it
-        from rollout_path by that naming convention."""
-        if context_path_param:
-            return context_path_param
-
-        rollout_file = Path(rollout_path)
-        if rollout_file.name.startswith('traj_'):
-            candidate = rollout_file.with_name(rollout_file.name.replace('traj_', 'context_', 1))
-            if candidate.is_file():
-                return str(candidate)
-
-        return ''
-
-    def _load_context_frames(self, context_path):
-        """Load a context_*.pkl (saved by CODController._save_command_trajectory) so the
-        command frames that conditioned this rollout can be shown alongside it."""
-        if not context_path:
-            return []
-
-        path = Path(context_path).expanduser()
-        if not path.is_file():
-            self.get_logger().warning(f'Context trajectory file does not exist: {path}; skipping context preview.')
-            return []
-
-        _add_dataset_collector_scripts_to_path()
-
-        with path.open('rb') as f:
-            data = RolloutUnpickler(f).load()
-
-        trajectory = data['traj']
-        frames = []
-        for t in range(len(trajectory)):
-            obs = trajectory[t].get('obs', {})
-            frame = obs.get('front_camera_image') if isinstance(obs, dict) else None
-            if frame is not None:
-                frames.append(frame[:,:,::-1])  # convert RGB->BGR for OpenCV display
-
-        return frames
 
     def wait_for_moveit_services(self):
         self.get_logger().info('Waiting for MoveIt controller services...')
@@ -202,85 +168,216 @@ class ReplicateRollout(Node):
         return home_ready and pose_ready and gripper_ready
 
     @staticmethod
-    def _draw_predicted_bb(image_bgr, predicted_bb):
-        """Draw predicted_bb boxes on a copy of image_bgr, mirroring cod_controller.py's
-        own visualization (predicted_bb[0][0] -> Nx4 [x1, y1, x2, y2] boxes in the
-        cropped image's pixel space)."""
-        if predicted_bb is None:
-            return image_bgr
-
-        boxes = predicted_bb
-        if hasattr(boxes, 'ndim'):
-            if boxes.ndim == 4:
-                boxes = boxes[0][0]
-            elif boxes.ndim == 3:
-                boxes = boxes[0]
-
-        image_bgr = np.ascontiguousarray(image_bgr.copy())
-        for box in boxes:
-            try:
-                x1, y1, x2, y2 = box
-                cv2.rectangle(image_bgr, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
-            except (TypeError, ValueError):
-                continue
-
-        return image_bgr
-
-    def _build_context_panel(self, target_height):
-        """Tile the (up to 4) context frames into a single 2x2 grid image, scaled to
-        target_height so it hstacks cleanly with the other preview panels."""
-        if not self.context_frames:
+    def _ensure_bgr_image(image):
+        if image is None:
             return None
 
-        n_cols, n_rows = 2, 2
-        n_tiles = n_cols * n_rows
-        frames = list(self.context_frames[:n_tiles])
+        if isinstance(image, np.ndarray):
+            if image.ndim == 2:
+                return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+            if image.ndim == 3 and image.shape[2] == 3:
+                return image
+            if image.ndim == 3 and image.shape[2] == 4:
+                return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+            if image.ndim == 1:
+                decoded = cv2.imdecode(image.astype(np.uint8, copy=False), cv2.IMREAD_COLOR)
+                return decoded
 
-        tile_height = max(1, target_height // n_rows)
-        ref_frame = frames[0]
-        tile_width = max(1, int(tile_height * ref_frame.shape[1] / ref_frame.shape[0]))
-        blank_tile = np.zeros((tile_height, tile_width, 3), dtype=np.uint8)
+        if isinstance(image, (bytes, bytearray, memoryview)):
+            buffer = np.frombuffer(image, dtype=np.uint8)
+            return cv2.imdecode(buffer, cv2.IMREAD_COLOR)
 
-        tiles = []
-        for i in range(n_tiles):
-            frame = frames[i] if i < len(frames) else None
-            tile = cv2.resize(frame, (tile_width, tile_height)) if frame is not None else blank_tile.copy()
-            # cv2.putText(tile, f'ctx {i}', (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
-            tiles.append(tile)
-
-        rows = [np.hstack(tiles[r * n_cols:(r + 1) * n_cols]) for r in range(n_rows)]
-        panel = np.vstack(rows)
-
-        if panel.shape[0] != target_height:
-            panel = cv2.resize(panel, (panel.shape[1], target_height))
-
-        # cv2.putText(panel, 'Context frames (2x2)', (10, panel.shape[0] - 10),
-        #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
-        return panel
+        return None
 
     @staticmethod
-    def _add_label_bar(image_bgr, text, bar_height=32):
-        """Stack a captioned black bar on top of image_bgr (used for video panels)."""
-        bar = np.zeros((bar_height, image_bgr.shape[1], 3), dtype=np.uint8)
-        cv2.putText(bar, text, (10, int(bar_height * 0.72)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        return np.vstack([bar, image_bgr])
+    def _get_obs_value(obs, keys):
+        for key in keys:
+            value = obs.get(key)
+            if value is not None:
+                return value
+        return None
 
-    def _compose_execution_vs_demo(self, execution_bgr, target_height):
-        """Build one video frame: Robot-Execution (left) next to Human-Demonstration
-        (right, the context frames), each captioned with a label bar."""
-        execution_resized = cv2.resize(
-            execution_bgr,
-            (int(execution_bgr.shape[1] * target_height / execution_bgr.shape[0]), target_height))
+    @staticmethod
+    def _pad_to_cell(image_bgr, cell_width, cell_height):
+        if image_bgr is None:
+            return np.zeros((cell_height, cell_width, 3), dtype=np.uint8)
 
-        context_panel = self._build_context_panel(target_height)
-        if context_panel is None:
-            context_panel = np.zeros((target_height, execution_resized.shape[1], 3), dtype=np.uint8)
+        height, width = image_bgr.shape[:2]
+        canvas = np.zeros((cell_height, cell_width, 3), dtype=np.uint8)
+        canvas[:height, :width] = image_bgr
+        return canvas
 
-        execution_labeled = self._add_label_bar(execution_resized, 'Robot-Execution')
-        context_labeled = self._add_label_bar(context_panel, 'Human-Demonstration')
+    @staticmethod
+    def _put_label(image_bgr, text, color=(0, 255, 0)):
+        labeled = image_bgr.copy()
+        cv2.putText(labeled, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, color, 2, cv2.LINE_AA)
+        return labeled
 
-        return np.hstack([execution_labeled, context_labeled])
+    @staticmethod
+    def _format_array(values, precision=3, max_values=None):
+        if values is None:
+            return 'None'
+
+        array = np.asarray(values).flatten()
+        if max_values is not None:
+            array = array[:max_values]
+
+        return np.array2string(array, precision=precision, suppress_small=True, separator=', ')
+
+    @staticmethod
+    def _ensure_gray_depth_bgr(depth_image):
+        if depth_image is None:
+            return None
+
+        if isinstance(depth_image, np.ndarray) and depth_image.ndim == 1:
+            decoded = cv2.imdecode(depth_image.astype(np.uint8, copy=False), cv2.IMREAD_UNCHANGED)
+            if decoded is None:
+                return None
+            depth_image = decoded
+        elif isinstance(depth_image, (bytes, bytearray, memoryview)):
+            buffer = np.frombuffer(depth_image, dtype=np.uint8)
+            decoded = cv2.imdecode(buffer, cv2.IMREAD_UNCHANGED)
+            if decoded is None:
+                return None
+            depth_image = decoded
+
+        depth = np.asarray(depth_image)
+        if depth.ndim == 3 and depth.shape[2] == 3:
+            gray = cv2.cvtColor(depth, cv2.COLOR_BGR2GRAY)
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        if depth.ndim == 3 and depth.shape[2] == 4:
+            gray = cv2.cvtColor(depth, cv2.COLOR_BGRA2GRAY)
+            return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        if depth.ndim != 2:
+            return None
+
+        if depth.dtype == np.uint8:
+            normalized = depth
+        else:
+            depth_float = depth.astype(np.float32)
+            valid = np.isfinite(depth_float)
+            positive_valid = valid & (depth_float > 0.0)
+            if np.any(positive_valid):
+                valid_values = depth_float[positive_valid]
+            elif np.any(valid):
+                valid_values = depth_float[valid]
+            else:
+                normalized = np.zeros(depth_float.shape, dtype=np.uint8)
+                return cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+
+            vmin = float(np.percentile(valid_values, 5))
+            vmax = float(np.percentile(valid_values, 95))
+            if vmax <= vmin:
+                vmax = vmin + 1e-6
+
+            clipped = np.clip(depth_float, vmin, vmax)
+            clipped[~valid] = vmin
+            normalized = ((clipped - vmin) / (vmax - vmin) * 255.0).astype(np.uint8)
+
+        return cv2.cvtColor(normalized, cv2.COLOR_GRAY2BGR)
+
+    def _build_camera_grid(self, obs):
+        rows = []
+        rgb_width = 0
+        depth_width = 0
+        row_height = 0
+
+        for label, image_keys, depth_keys in self.CAMERA_FIELDS:
+            rgb = self._ensure_bgr_image(self._get_obs_value(obs, image_keys))
+            depth = self._ensure_gray_depth_bgr(self._get_obs_value(obs, depth_keys))
+            if rgb is not None:
+                rgb_width = max(rgb_width, rgb.shape[1])
+                row_height = max(row_height, rgb.shape[0])
+            if depth is not None:
+                depth_width = max(depth_width, depth.shape[1])
+                row_height = max(row_height, depth.shape[0])
+            rows.append((label, rgb, depth))
+
+        if rgb_width == 0:
+            rgb_width = 420
+        if depth_width == 0:
+            depth_width = 420
+        if row_height == 0:
+            row_height = 240
+
+        rendered_rows = []
+        for label, rgb, depth in rows:
+            rgb_tile = self._put_label(
+                self._pad_to_cell(rgb, rgb_width, row_height),
+                f'{label} rgb')
+            depth_tile = self._put_label(
+                self._pad_to_cell(depth, depth_width, row_height),
+                f'{label} depth',
+                color=(255, 255, 255))
+            rendered_rows.append(np.hstack([rgb_tile, depth_tile]))
+
+        return np.vstack(rendered_rows)
+
+    def _build_text_panel(self, index, step, obs, gripper_position, issues, height, width=620):
+        panel = np.zeros((height, width, 3), dtype=np.uint8)
+        action = step.get('action') if isinstance(step, dict) else None
+        raw_gripper = None
+        if action is not None and len(action) >= 8:
+            raw_gripper = float(action[7])
+
+        lines = [
+            f'Step {index + 1}/{len(self.steps)}',
+            '',
+            'EEF obs:',
+            f"pos  {self._format_array(obs.get('eef_pos'))}",
+            f"quat {self._format_array(obs.get('eef_quat'))}",
+            '',
+            'Action pose:',
+            f"pos  {self._format_array(action[:3] if action is not None and len(action) >= 3 else None)}",
+            f"quat {self._format_array(action[3:7] if action is not None and len(action) >= 7 else None)}",
+            '',
+            'Joint state:',
+            f"pos {self._format_array(obs.get('joint_pos'))}",
+            f"vel {self._format_array(obs.get('joint_vel'))}",
+            '',
+            'Gripper:',
+            f"action normalized: {raw_gripper}",
+            f'command position: {gripper_position}',
+            f"qpos {self._format_array(obs.get('gripper_qpos'))}",
+            f"qvel {self._format_array(obs.get('gripper_qvel'))}",
+            f"done={step.get('done') if isinstance(step, dict) else None}, "
+            f"reward={step.get('reward') if isinstance(step, dict) else None}",
+        ]
+
+        if issues:
+            lines += ['', 'Issues:']
+            lines += [issue[:70] for issue in issues[:6]]
+
+        y = 28
+        for line in lines:
+            if y > height - 12:
+                break
+            color = (0, 255, 255) if line.startswith('Issues') or line.startswith('missing') else (230, 230, 230)
+            cv2.putText(panel, line, (12, y), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.48, color, 1, cv2.LINE_AA)
+            y += 24 if line else 12
+
+        return panel
+
+    def _compose_preview(self, index, step, obs, gripper_position, issues):
+        camera_grid = self._build_camera_grid(obs)
+        text_panel = self._build_text_panel(
+            index, step, obs, gripper_position, issues, camera_grid.shape[0])
+        return np.hstack([camera_grid, text_panel])
+
+    def _update_preview(self, preview):
+        """Show the 4 controller RGB+depth camera pairs and the robot state fields
+        saved in this rollout step."""
+        if not self.show_images:
+            return
+
+        try:
+            cv2.imshow(self.preview_window_name, preview)
+            cv2.waitKey(self.preview_wait_ms)
+        except cv2.error as exc:
+            self.get_logger().warning(f'Preview display failed: {exc}')
+            self.show_images = False
 
     def _ensure_video_writer(self, attr_name, filename, frame):
         writer = getattr(self, attr_name)
@@ -297,85 +394,33 @@ class ReplicateRollout(Node):
             setattr(self, attr_name, writer)
         return writer
 
-    def _record_video_frames(self, obs):
-        """Append one frame to each comparison video: 'original' from the raw
-        camera_front_image, 'annotated' from cropped_image + predicted_bb — both
-        composed as Robot-Execution (left) vs Human-Demonstration (right)."""
+    def _record_video_frame(self, preview):
+        """Append one full preview frame to the controller rollout video."""
         if not self.save_video:
             return
 
-        front_image = obs.get('front_camera_image')
-        if front_image is not None:
-            original_frame = self._compose_execution_vs_demo(front_image, front_image.shape[0])
-            writer = self._ensure_video_writer(
-                'original_video_writer', f'{self._video_basename}_original.mp4', original_frame)
-            if writer:
-                writer.write(original_frame)
+        if preview is None:
+            return
 
-        cropped_image = obs.get('cropped_image')
-        if cropped_image is not None:
-            cropped_bgr = cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR)
-            annotated_execution = self._draw_predicted_bb(cropped_bgr, obs.get('predicted_bb'))
-            annotated_frame = self._compose_execution_vs_demo(annotated_execution, annotated_execution.shape[0])
-            writer = self._ensure_video_writer(
-                'annotated_video_writer', f'{self._video_basename}_annotated.mp4', annotated_frame)
-            if writer:
-                writer.write(annotated_frame)
+        writer = self._ensure_video_writer(
+            'preview_video_writer', f'{self._video_basename}_preview.mp4', preview)
+        if writer:
+            writer.write(np.ascontiguousarray(preview))
 
     def _close_video_writers(self):
-        for attr in ('original_video_writer', 'annotated_video_writer'):
-            writer = getattr(self, attr, None)
-            if writer:
-                writer.release()
-                setattr(self, attr, None)
+        writer = getattr(self, 'preview_video_writer', None)
+        if writer:
+            writer.release()
+            self.preview_video_writer = None
 
-    def _update_preview(self, index, obs):
-        """Show the original camera_front_image next to the cropped model-input image
-        with predicted_bb boxes overlaid, so a rollout can be visually inspected."""
-        if not self.show_images:
-            return
-
-        front_image = obs.get('front_camera_image')
-        cropped_image = obs.get('cropped_image')
-        if front_image is None and cropped_image is None:
-            return
-
-        if cropped_image is not None:
-            cropped_bgr = cv2.cvtColor(cropped_image, cv2.COLOR_RGB2BGR)
-            cropped_bgr = self._draw_predicted_bb(cropped_bgr, obs.get('predicted_bb'))
-        else:
-            cropped_bgr = np.zeros_like(front_image)
-
-        if front_image is None:
-            front_image = np.zeros_like(cropped_bgr)
-
-        target_height = max(front_image.shape[0], cropped_bgr.shape[0])
-        front_resized = cv2.resize(
-            front_image, (int(front_image.shape[1] * target_height / front_image.shape[0]), target_height))
-        cropped_resized = cv2.resize(
-            cropped_bgr, (int(cropped_bgr.shape[1] * target_height / cropped_bgr.shape[0]), target_height))
-
-        cv2.putText(front_resized, f'Step {index}: front_camera_image', (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        cv2.putText(cropped_resized, 'cropped_image + predicted_bb', (10, 20),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-
-        panels = [front_resized, cropped_resized]
-        context_panel = self._build_context_panel(target_height)
-        if context_panel is not None:
-            panels.append(context_panel)
-
-        combined = np.hstack(panels)
-
-        try:
-            cv2.imshow(self.preview_window_name, combined)
-            cv2.waitKey(self.preview_wait_ms)
-        except cv2.error as exc:
-            self.get_logger().warning(f'Preview display failed: {exc}')
-            self.show_images = False
+    def _controller_gripper_to_command(self, value):
+        if value >= self.gripper_closed_threshold:
+            return self.gripper_closed_position
+        return self.gripper_open_position
 
     def _check_step(self, step):
-        """Validate a single rollout step and build its PoseStamped + gripper position.
+        """Validate a single controller rollout step and build its PoseStamped +
+        gripper command position.
 
         Returns (ok, pose_stamped_or_None, gripper_position_or_None, issue_messages).
         """
@@ -390,12 +435,11 @@ class ReplicateRollout(Node):
             if obs.get(field) is None:
                 issues.append(f"missing robot-state field obs[{field!r}]")
 
-        if obs.get('front_camera_image') is None:
-            issues.append("missing obs['front_camera_image']")
-        if obs.get('cropped_image') is None:
-            issues.append("missing obs['cropped_image']")
-        if obs.get('predicted_bb') is None:
-            issues.append("missing obs['predicted_bb'] (expected for cod_controller, not openvla_controller)")
+        for label, image_keys, depth_keys in self.CAMERA_FIELDS:
+            if self._get_obs_value(obs, image_keys) is None:
+                issues.append(f"missing {label} RGB obs field: one of {image_keys}")
+            if self._get_obs_value(obs, depth_keys) is None:
+                issues.append(f"missing {label} depth obs field: one of {depth_keys}")
 
         action = step.get('action') if isinstance(step, dict) else None
         if action is None or len(action) < 8:
@@ -415,17 +459,17 @@ class ReplicateRollout(Node):
         pose.pose.orientation.y = float(action[4])
         pose.pose.orientation.z = float(action[5])
         pose.pose.orientation.w = float(action[6])
-        gripper_position = float(action[7])
+        gripper_position = self._controller_gripper_to_command(float(action[7]))
 
         return True, pose, gripper_position, issues
 
-    def replicate_rollout(self):
+    def replicate_rollout_controller(self):
         try:
-            return self._replicate_rollout()
+            return self._replicate_rollout_controller()
         finally:
             self._close_video_writers()
 
-    def _replicate_rollout(self):
+    def _replicate_rollout_controller(self):
         if not self.wait_for_moveit_services():
             return False
 
@@ -439,8 +483,9 @@ class ReplicateRollout(Node):
         for index, step in enumerate(self.steps):
             ok, pose, gripper_position, issues = self._check_step(step)
             obs = step.get('obs', {}) if isinstance(step, dict) else {}
-            self._update_preview(index, obs)
-            self._record_video_frames(obs)
+            preview = self._compose_preview(index, step, obs, gripper_position, issues)
+            self._update_preview(preview)
+            self._record_video_frame(preview)
             for issue in issues:
                 self.get_logger().warning(f'Step {index}: {issue}')
             if not ok:
@@ -557,9 +602,9 @@ def main(args=None):
     rclpy.init(args=args)
     node = None
     try:
-        node = ReplicateRollout()
-        success = node.replicate_rollout()
-        node.get_logger().info('Rollout check PASSED.' if success else 'Rollout check FAILED — see warnings above.')
+        node = ReplicateRolloutController()
+        success = node.replicate_rollout_controller()
+        node.get_logger().info('Rollout check PASSED.' if success else 'Rollout check FAILED - see warnings above.')
     except KeyboardInterrupt:
         pass
     finally:

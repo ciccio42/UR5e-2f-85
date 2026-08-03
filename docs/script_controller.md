@@ -27,12 +27,23 @@ ros2 run tf2_ros static_transform_publisher \
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run ai_controller script_controller_node --ros-args \
-    -p move_robot:=False \
+    -p move_robot:=True \
     -p task_name:="pick_place" \
     -p click_camera_name:="zed_front" \
     -p camera_calibration_path:="/home/ros2_ws/src/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml" \
     -p save_rollout_path:="/home/ros2_ws/src/ai_controller/saved_rollouts/script_controller"
-```
+
+# Replicate saved script-controller trajectories
+# add -p dry_run:=false to actually execute it once you trust the check
+docker exec -it ur_robotiq_teleoperation_container  bash
+source install/setup.bash
+ros2 run ai_controller replicate_rollout_controller --ros-args \
+    -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/script_controller/task_01/traj_000.pkl \
+    -p dry_run:=False \
+    -p show_images:=True \
+    -p save_video:=True \
+    -p video_fps:=5.0
+'''
 
 ## How target points are computed
 

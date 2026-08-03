@@ -131,7 +131,7 @@ class ScriptControllerNode(Node):
         # dataset_collector_pkg/dataset_collector.py's camera_names_obs_name_map.
         self.camera_obs_name_map = {}
         for camera_name in self.camera_names:
-            for keyword, obs_name in (('front', 'front_camera'), ('left', 'left_camera'),
+            for keyword, obs_name in (('front', 'camera_front'), ('left', 'left_camera'),
                                        ('right', 'right_camera'), ('gripper', 'gripper_camera')):
                 if keyword in camera_name:
                     self.camera_obs_name_map[camera_name] = obs_name
@@ -143,7 +143,7 @@ class ScriptControllerNode(Node):
         # recorded micro-step while the controller is running.
         self.preview_camera_names = {}
         for camera_name, obs_name in self.camera_obs_name_map.items():
-            if obs_name == 'front_camera':
+            if obs_name == 'camera_front':
                 self.preview_camera_names['front'] = camera_name
             elif obs_name == 'gripper_camera':
                 self.preview_camera_names['gripper'] = camera_name
@@ -560,7 +560,7 @@ class ScriptControllerNode(Node):
 
         self.get_logger().info(f'Target object position (base_link): {obj_pos}')
         self.get_logger().info(f'Target bin position (base_link): {bin_pos}')
-        obj_pos[1] -= 0.06  # offset to move the object y in the object
+        obj_pos[1] -= 0.04  # offset to move the object y in the object
         target_object_pose = GripperPose(obj_pos, self.grasp_orientation)
         target_bin_pose = GripperPose(bin_pos, self.grasp_orientation)
         return target_object_pose, target_bin_pose
@@ -663,7 +663,7 @@ class ScriptControllerNode(Node):
         traj.append(obs=obs, action=action, done=done, reward=1 if done else 0)
         self.get_logger().info(f'Recorded step (event={event}, gripper={gripper_command}, done={done}).')
 
-    def save_rollout(self, traj, task_id, traj_number):
+    def save_rollout(self, traj, task_id, traj_number, completed=True, abort_reason=''):
         complete_save_path = os.path.join(self.save_rollout_path, f'task_{task_id}')
         os.makedirs(complete_save_path, exist_ok=True)
         traj_name = 'traj_{:03d}'.format(traj_number)
@@ -673,12 +673,24 @@ class ScriptControllerNode(Node):
                   ai_controller_target='script_controller', task_name=self.task_name)
         self.get_logger().info(f'Saved rollout trajectory to {trajectory_path}')
 
-        res_dict = {}
-        res_dict['object_reached'] = int(input('Did the robot successfully reach the target object? [1,0]: '))
-        res_dict['object_picked'] = int(input('Did the robot successfully pick the target object? [1,0]: '))
-        res_dict['object_placed'] = int(input('Did the robot successfully place the target object? [1,0]: '))
+        res_dict = {
+            'trajectory_complete': int(completed),
+            'aborted': int(not completed),
+            'abort_reason': abort_reason,
+        }
+        if completed:
+            res_dict['object_reached'] = int(input('Did the robot successfully reach the target object? [1,0]: '))
+            res_dict['object_picked'] = int(input('Did the robot successfully pick the target object? [1,0]: '))
+            res_dict['object_placed'] = int(input('Did the robot successfully place the target object? [1,0]: '))
+        else:
+            res_dict['object_reached'] = 0
+            res_dict['object_picked'] = 0
+            res_dict['object_placed'] = 0
+
         with open(os.path.join(complete_save_path, traj_name + '.json'), 'w') as f:
             json.dump(res_dict, f)
+        
+        return trajectory_path
 
     # -- main loop -----------------------------------------------------
 
@@ -714,22 +726,37 @@ class ScriptControllerNode(Node):
 
             on_plan = self.publish_waypoint_plan
 
-            current_pose = self.get_current_gripper_pose()
-            current_pose = self.motion.reach(current_pose, target_object_pose, on_step, on_plan)
-            current_pose = self.motion.approaching(current_pose, target_object_pose, on_step, on_plan)
-            current_pose = self.motion.pick(current_pose, target_object_pose, on_step, on_plan)
-            current_pose = self.motion.lift_up(current_pose, target_object_pose, on_step, on_plan)
-            current_pose = self.motion.moving(current_pose, target_bin_pose, on_step, on_plan)
-            current_pose = self.motion.placing(current_pose, target_bin_pose, on_step, on_plan)
+            try:
+                current_pose = self.get_current_gripper_pose()
+                current_pose = self.motion.reach(current_pose, target_object_pose, on_step, on_plan)
+                current_pose = self.motion.approaching(current_pose, target_object_pose, on_step, on_plan)
+                current_pose = self.motion.pick(current_pose, target_object_pose, on_step, on_plan)
+                current_pose = self.motion.lift_up(current_pose, target_object_pose, on_step, on_plan)
+                current_pose = self.motion.moving(current_pose, target_bin_pose, on_step, on_plan)
+                current_pose = self.motion.placing(current_pose, target_bin_pose, on_step, on_plan)
 
-            # Final frame explicitly marked done=True/reward=1, mirroring the
-            # gripper close->open episode-end convention used in ai_controller_node.py.
-            self._record_step(traj, current_pose.position, current_pose.orientation,
-                               'episode_end', self.gripper_open_position, done=True)
+                # Final frame explicitly marked done=True/reward=1, mirroring the
+                # gripper close->open episode-end convention used in ai_controller_node.py.
+                self._record_step(traj, current_pose.position, current_pose.orientation,
+                                  'episode_end', self.gripper_open_position, done=True)
 
-            self.save_rollout(traj, task_id=task_id, traj_number=traj_cnt)
-            traj_cnt += 1
-
+                self.save_rollout(traj, task_id=task_id, traj_number=traj_cnt)
+                traj_cnt += 1
+            except KeyboardInterrupt:
+                self.get_logger().warning(
+                    'Execution interrupted by user. Saving incomplete rollout before shutdown...')
+                self.save_rollout(
+                    traj, task_id=task_id, traj_number=traj_cnt,
+                    completed=False, abort_reason='KeyboardInterrupt')
+                raise
+            except Exception as exc:
+                abort_reason = f'{type(exc).__name__}: {exc}'
+                self.get_logger().error(
+                    f'Scripted execution failed. Saving incomplete rollout: {abort_reason}')
+                self.save_rollout(
+                    traj, task_id=task_id, traj_number=traj_cnt,
+                    completed=False, abort_reason=abort_reason)
+                traj_cnt += 1
 
 def main(args=None):
     rclpy.init(args=args)
