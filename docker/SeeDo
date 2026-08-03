@@ -3,7 +3,7 @@
 FROM nvidia/cuda:13.0.1-devel-ubuntu24.04
 
 ARG SEEDO_REPOSITORY="https://github.com/InfanteAngelo/SeeDo.git"
-ARG SEEDO_COMMIT="48ff18827c626c196648dc92333491c9e9dd8948"
+ARG SEEDO_COMMIT="8f1e38e6571286c6c289b9356f2bb05b084302b4"
 ARG GROUNDING_DINO_REPOSITORY="https://github.com/InfanteAngelo/GroundingDINO.git"
 ARG GROUNDING_DINO_COMMIT="f5e78e5e36ad3bdd50996de4f9d25e35dde8ddc9"
 ARG SAM_REPOSITORY="https://github.com/facebookresearch/segment-anything.git"
