@@ -519,6 +519,8 @@ class ScriptControllerNode(Node):
         point_aruco = camera_point_to_aruco(point_cam, self.camera_calibration[self.click_camera_name])
         point_table0 = aruco_point_to_table0(point_aruco)
 
+        self.get_logger().info(f'Clicked pixel ({u}, {v}) -> depth {depth:.3f} m -> '
+                               f'base_link position: {point_table0} - Using table_frame_id={self.table_frame_id} and frame_id={self.frame_id}')
         trans = self._lookup_transform(self.frame_id, self.table_frame_id)
         R = _quat2mat([trans.transform.rotation.x, trans.transform.rotation.y,
                        trans.transform.rotation.z, trans.transform.rotation.w])

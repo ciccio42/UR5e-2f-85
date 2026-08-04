@@ -18,6 +18,10 @@ from control_msgs.action import GripperCommand
 from moveit_controller_srvs.srv import GoToPose
 
 from ai_controller.script_controller.geometry_utils import build_linear_waypoints
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+import time
 
 
 class MotionPrimitives:
@@ -40,6 +44,10 @@ class MotionPrimitives:
         self.gripper_max_effort = gripper_max_effort
         self.move_robot = move_robot
         self.last_gripper_command = gripper_open_position
+
+        # add tf_buffer and tf_listener attributes for transform lookups
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self.node)
 
     # -- low level -----------------------------------------------------
 
@@ -65,6 +73,48 @@ class MotionPrimitives:
         if response is None or not response.success:
             message = getattr(response, 'message', 'no response from set_pose_client')
             raise RuntimeError(f'GoToPose service call failed: {message}')
+
+        # set 1s timeout for residual motion after service call returns, to allow for settling
+        #time.sleep(1.0)
+
+        # compute error between requested and actual pose
+        target_pos = np.array([
+            request.pose.pose.position.x,
+            request.pose.pose.position.y,
+            request.pose.pose.position.z,
+        ])
+
+        # read actual pose from tf2
+        cnt = 100
+        while cnt > 0:
+            try:
+                # do a node spin_once to process any pending callbacks and update the tf buffer
+                rclpy.spin_once(self.node, timeout_sec=0.1)
+                transform = self.tf_buffer.lookup_transform(
+                    self.frame_id,
+                    'tcp_link',  # Assuming 'tcp_link' is the end-effector link
+                    rclpy.time.Time())
+                break
+            except TransformException as e:
+                cnt -= 1
+                if cnt == 0:
+                    raise RuntimeError(f'Transform lookup failed after 100 attempts: {e}')
+                self.node.get_logger().warn(f'Transform lookup failed, retrying... ({cnt} attempts left)')
+            
+        # compute error
+        actual_pos = np.array([
+            transform.transform.translation.x,
+            transform.transform.translation.y,
+            transform.transform.translation.z,
+        ])
+        error = np.linalg.norm(target_pos - actual_pos)
+        delta = target_pos - actual_pos
+        self.node.get_logger().info(f'Move completed. Target pos: {target_pos}, \nActual pos: {actual_pos}, \nError: {error:.6f} m\nDelta: {delta}')
+
+        if delta[0] > 0.002 or delta[1] > 0.002 or delta[2] > 0.002:  # 5 mm tolerance
+            self.node.get_logger().warn(f'Delta exceeds tolerance, retrying move. Delta: {delta}')
+            self._send_pose(target_pos, quat)  # retry to correct the error
+
 
     def _move_linear(self, current_pose, target_pos, target_quat, on_step=None,
                       on_plan=None, label=None):

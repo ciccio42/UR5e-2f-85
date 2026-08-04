@@ -38,7 +38,7 @@ ros2 run ai_controller script_controller_node --ros-args \
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 ros2 run ai_controller replicate_rollout_controller --ros-args \
-    -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/script_controller/task_01/traj_000.pkl \
+    -p rollout_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/script_controller/task_01/traj_006.pkl \
     -p dry_run:=False \
     -p show_images:=True \
     -p save_video:=True \

@@ -68,7 +68,8 @@ class InteractiveCameraCalibration(Node):
 
     def get_camera_intrinsics(self, camera_name):
         
-        topic_name = f'/{camera_name}/zed_node/left/color/rect/camera_info'
+        #topic_name = f'/{camera_name}/zed_node/left/color/rect/camera_info'
+        topic_name = f'/{camera_name}/zed_node/rgb/color/rect/camera_info'
         flag = False
         cnt = 5
         while not flag and cnt > 0:
@@ -172,7 +173,8 @@ class InteractiveCameraCalibration(Node):
 
             self.get_logger().info(f'Starting calibration for camera: {camera_name}')
 
-            image_topic = f'/{camera_name}/zed_node/left/color/rect/image'
+            #image_topic = f'/{camera_name}/zed_node/left/color/rect/image'
+            image_topic = f'/{camera_name}/zed_node/rgb/color/rect/image'
             self.get_logger().info(f'\tSubscribing to image topic: {image_topic}')
             
             self.estimated_position_list = []

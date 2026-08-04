@@ -14,7 +14,9 @@ from geometry_msgs.msg import PoseStamped
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from rclpy.action import ActionClient
 from rclpy.node import Node
-
+from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
 
 class RolloutUnpickler(pickle.Unpickler):
     """Resolves the 'Trajectory' class saved by dataset_collector_pkg's savers.py."""
@@ -135,6 +137,11 @@ class ReplicateRolloutController(Node):
         if self.save_video:
             os.makedirs(self.video_output_dir, exist_ok=True)
             self.get_logger().info(f'Saving full preview video to {self.video_output_dir}')
+
+        # create tf-listener
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
 
     def _load_rollout(self, rollout_path):
         if not rollout_path:
@@ -510,7 +517,7 @@ class ReplicateRolloutController(Node):
                 if not self.call_gripper(gripper_position):
                     self.get_logger().error(f'Failed while commanding gripper at rollout step {index}.')
                     return False
-
+                self.compute_pose_error(pose)
             if self.step_delay_sec > 0.0:
                 time.sleep(self.step_delay_sec)
 
@@ -537,6 +544,48 @@ class ReplicateRolloutController(Node):
 
         self.get_logger().error(response.message)
         return False
+
+    def compute_pose_error(self, target_pose):
+        # This function computes the error between the target pose and the current pose of the robot.
+        # Take the current robot pose
+        cnt = 100
+        while cnt > 0:
+            try:
+                # do a node spin_once to process any pending callbacks and update the tf buffer
+                rclpy.spin_once(self, timeout_sec=0.1)
+                transform = self.tf_buffer.lookup_transform(
+                    target_pose.header.frame_id,
+                    'tcp_link',  # Assuming 'ee_link' is the end-effector link
+                    rclpy.time.Time())
+                break
+            except Exception as e:
+                self.get_logger().warning(f'Failed to get transform: {e}')
+                cnt -= 1
+                time.sleep(0.1)
+
+        # get position from target pose
+        target_position = np.array([
+            target_pose.pose.position.x,
+            target_pose.pose.position.y,
+            target_pose.pose.position.z
+        ])
+
+        # get position from current transform
+        current_position = np.array([
+            transform.transform.translation.x,
+            transform.transform.translation.y,
+            transform.transform.translation.z
+        ])
+
+        error = np.linalg.norm(current_position - target_position)
+        delta = current_position - target_position
+        self.get_logger().info(
+            f'Pose error: target={target_position}, current={current_position}, '
+            f'delta={delta}, norm={error:.6f}'
+        )
+
+        
+
 
     def call_go_to_pose(self, pose):
         request = GoToPose.Request()
