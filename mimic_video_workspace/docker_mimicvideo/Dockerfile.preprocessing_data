@@ -1,0 +1,19 @@
+# syntax=docker/dockerfile:1.7
+
+FROM mimic-video-train:gb10-cu129
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install \
+        --python /opt/mimic-video-venv/bin/python \
+        tensorflow \
+        tensorflow-datasets \
+        pillow \
+        imageio \
+        imageio-ffmpeg
+
+RUN uv pip check \
+    --python /opt/mimic-video-venv/bin/python
+
+WORKDIR /workspace/scripts
+
+CMD ["/bin/bash"]
