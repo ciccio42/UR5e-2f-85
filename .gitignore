@@ -11,3 +11,9 @@ checkpoint_folder/
 *png
 save_images/
 saved_rollouts/
+mimic_video_workspace/outputs/
+mimic_video_workspace/checkpoints/
+mimic_video_workspace/logs/
+mimic_video_workspace/data/
+mimic_video_workspace/**/__pycache__/
+mimic_video_workspace/**/*.pyc
