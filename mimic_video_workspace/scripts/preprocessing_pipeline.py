@@ -105,14 +105,18 @@ def normalize_gripper(values: np.ndarray) -> np.ndarray:
     return (values > 0.5).astype(np.float32)
 
 
-def read_episode_actions(episode: dict) -> tuple[np.ndarray, np.ndarray]:
-    # Leggo per ogni step la delta action da predire e lo stato assoluto corrente dell'end effector.
+def read_episode_actions(episode: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    # Leggo per ogni step la delta action da predire, lo stato EEF corrente e lo stato corrente del gripper.
     actions = []
-    action_worlds = []
+    robotic_state = []
+    gripper_state = []
     for step in episode["steps"]:
         actions.append(step["action"].numpy().astype(np.float32))
-        action_worlds.append(step["observation"]["action_world"].numpy().astype(np.float32))
-    return np.stack(actions), np.stack(action_worlds)
+        robotic_state.append(step["observation"]["EEF_state"].numpy().astype(np.float32))
+        # gripper_state ha due valori; nel dataset lo stato utile e' salvato nel secondo elemento.
+        gripper_state.append(step["observation"]["gripper_state"].numpy().astype(np.float32)[1:2])
+
+    return np.stack(actions), np.stack(robotic_state), np.stack(gripper_state)
 
 
 def write_action_safetensor(
@@ -127,11 +131,12 @@ def write_action_safetensor(
     if path.exists() and not overwrite:
         return
 
-    actions, action_worlds = read_episode_actions(episode)
-    if not len(workspace_rgb) == len(actions) == len(action_worlds):
+    actions, robotic_state, gripper_state = read_episode_actions(episode)
+    if not len(workspace_rgb) == len(actions) == len(robotic_state) == len(gripper_state):
         raise ValueError(
             f"Length mismatch for {path.name}: "
-            f"workspace_rgb={len(workspace_rgb)}, actions={len(actions)}, action_world={len(action_worlds)}"
+            f"workspace_rgb={len(workspace_rgb)}, actions={len(actions)}, "
+            f"EEF_state={len(robotic_state)}, gripper_state={len(gripper_state)}"
         )
 
     timestamps = make_timestamps(len(actions), fps)
@@ -144,10 +149,11 @@ def write_action_safetensor(
     # Il modello lavora poi con rotazioni 6D, ma gli autori salvano prima una matrice e la trasformano via yaml.
     delta_rot = Rotation.from_euler(EULER_ORDER, delta_euler).as_matrix().astype(np.float32)
 
-    # action_world descrive lo stato assoluto osservato: posizione, orientamento RPY e stato gripper corrente.
-    eef_pos = action_worlds[:, :3]
-    eef_rot = Rotation.from_euler(EULER_ORDER, action_worlds[:, 3:6]).as_quat().astype(np.float32)
-    gripper = normalize_gripper(action_worlds[:, 6:7])
+    # EEF_state descrive lo stato assoluto osservato: posizione e orientamento RPY correnti.
+    eef_pos = robotic_state[:, :3]
+    eef_rot = Rotation.from_euler(EULER_ORDER, robotic_state[:, 3:6]).as_quat().astype(np.float32)
+    # Lo stato corrente del gripper non arriva da action_world, ma dal campo observation/gripper_state.
+    gripper = normalize_gripper(gripper_state)
 
     path.parent.mkdir(parents=True, exist_ok=True)
     st.save_file(
