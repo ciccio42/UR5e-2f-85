@@ -17,5 +17,3 @@ mimic_video_workspace/logs/
 mimic_video_workspace/processed_data/
 mimic_video_workspace/**/__pycache__/
 mimic_video_workspace/**/*.pyc
-
-models/seedo
