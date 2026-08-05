@@ -15,6 +15,9 @@ from ai_controller.models.seedo_controller.action_planner import (
     ActionPlanner,
 )
 
+from ai_controller.models.seedo_controller.seedo_controller import (
+    SeeDoController,
+)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -42,7 +45,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--stage",
-        choices=["keyframe", "visual_prompting", "action_planning"],
+        choices=["keyframe", "visual_prompting", "action_planning", "seedo_controller"],
         default="keyframe",
         help="Pipeline stage to test.",
     )
@@ -88,6 +91,13 @@ def parse_args() -> argparse.Namespace:
             "/opt/checkpoints/seedo/sam2/sam2_hiera_large.pt"
         ),
     )
+    
+    parser.add_argument(
+        "--model-config",
+        type=str,
+        help="Path to the SeeDo controller YAML configuration.",
+    )
+
     return parser.parse_args()
 
 
@@ -102,6 +112,9 @@ def main() -> int:
 
     if args.stage == "action_planning":
         return run_action_planning_test(args)
+
+    if args.stage == "seedo_controller":
+        return run_seedo_controller_test(args)
 
     raise ValueError(f"Unsupported stage: {args.stage}")
     
@@ -289,95 +302,183 @@ def run_visual_prompting_test(
         return 0
 
 def run_action_planning_test(
-    args: argparse.Namespace,
-) -> int:
-    if args.expected_keyframes is None:
-        raise ValueError(
-            "--expected-keyframes is required for the action_planning test."
+        args: argparse.Namespace,
+    ) -> int:
+        if args.expected_keyframes is None:
+            raise ValueError(
+                "--expected-keyframes is required for the action_planning test."
+            )
+
+        expected_keyframes = tuple(args.expected_keyframes)
+
+        visual_prompter = VisualPrompter(
+            grounding_config=args.grounding_config,
+            grounding_checkpoint=args.grounding_checkpoint,
+            bert_model=args.bert_model,
+            sam_checkpoint=args.sam_checkpoint,
+            sam2_checkpoint=args.sam2_checkpoint,
         )
 
-    expected_keyframes = tuple(args.expected_keyframes)
-
-    visual_prompter = VisualPrompter(
-        grounding_config=args.grounding_config,
-        grounding_checkpoint=args.grounding_checkpoint,
-        bert_model=args.bert_model,
-        sam_checkpoint=args.sam_checkpoint,
-        sam2_checkpoint=args.sam2_checkpoint,
-    )
-
-    visual_result = visual_prompter.run(
-        video_path=args.video,
-        keyframes=expected_keyframes,
-        artifacts_dir=(
-            Path(args.artifacts_dir)
-            / "visual_prompting"
-        ),
-    )
-
-    planner = ActionPlanner()
-
-    action_result = planner.run(
-        annotated_video_path=visual_result.annotated_video_path,
-        keyframes=expected_keyframes,
-        track_id_map=visual_result.track_id_map,
-        key_frame_coordinates=visual_result.key_frame_coordinates,
-        artifacts_dir=(
-            Path(args.artifacts_dir)
-            / "action_planning"
-        ),
-    )
-
-    print("Action planning completed")
-    print(f"Status: {action_result.status}")
-    print(
-        "Natural-language plan: "
-        f"{action_result.natural_language_plan}"
-    )
-
-    print("\nSteps:")
-    for index, step in enumerate(
-        action_result.steps,
-        start=1,
-    ):
-        print(f"  Step {index}: {step}")
-
-    print("\nAmbiguities:")
-    for ambiguity in action_result.ambiguities:
-        print(f"  - {ambiguity}")
-
-    if action_result.status not in (
-        "completed",
-        "ambiguous",
-    ):
-        raise AssertionError(
-            f"Unexpected status: {action_result.status}"
+        visual_result = visual_prompter.run(
+            video_path=args.video,
+            keyframes=expected_keyframes,
+            artifacts_dir=(
+                Path(args.artifacts_dir)
+                / "visual_prompting"
+            ),
         )
 
-    if (
-        action_result.status == "completed"
-        and len(action_result.steps) != 1
-    ):
-        raise AssertionError(
-            "A completed action plan must contain exactly one step."
+        planner = ActionPlanner()
+
+        action_result = planner.run(
+            annotated_video_path=visual_result.annotated_video_path,
+            keyframes=expected_keyframes,
+            track_id_map=visual_result.track_id_map,
+            key_frame_coordinates=visual_result.key_frame_coordinates,
+            artifacts_dir=(
+                Path(args.artifacts_dir)
+                / "action_planning"
+            ),
         )
 
-    if (
-        action_result.status == "ambiguous"
-        and not action_result.ambiguities
-    ):
-        raise AssertionError(
-            "An ambiguous action plan must explain the ambiguity."
+        print("Action planning completed")
+        print(f"Status: {action_result.status}")
+        print(
+            "Natural-language plan: "
+            f"{action_result.natural_language_plan}"
         )
 
-    if not action_result.natural_language_plan.strip():
-        raise AssertionError(
-            "Natural-language plan is empty."
+        print("\nSteps:")
+        for index, step in enumerate(
+            action_result.steps,
+            start=1,
+        ):
+            print(f"  Step {index}: {step}")
+
+        print("\nAmbiguities:")
+        for ambiguity in action_result.ambiguities:
+            print(f"  - {ambiguity}")
+
+        if action_result.status not in (
+            "completed",
+            "ambiguous",
+        ):
+            raise AssertionError(
+                f"Unexpected status: {action_result.status}"
+            )
+
+        if (
+            action_result.status == "completed"
+            and len(action_result.steps) != 1
+        ):
+            raise AssertionError(
+                "A completed action plan must contain exactly one step."
+            )
+
+        if (
+            action_result.status == "ambiguous"
+            and not action_result.ambiguities
+        ):
+            raise AssertionError(
+                "An ambiguous action plan must explain the ambiguity."
+            )
+
+        if not action_result.natural_language_plan.strip():
+            raise AssertionError(
+                "Natural-language plan is empty."
+            )
+
+        print("\nTEST PASSED")
+
+        return 0
+
+def run_seedo_controller_test(
+        args: argparse.Namespace,
+    ) -> int:
+        if not args.model_config:
+            raise ValueError(
+                "--model-config is required for the seedo_controller test."
+            )
+
+        controller = SeeDoController(
+            model_config=args.model_config,
         )
 
-    print("\nTEST PASSED")
+        controller.load_command(
+            demo_path=args.video,
+            task_id="test",
+            artifacts_dir=args.artifacts_dir,
+        )
 
-    return 0
+        result = controller.inference(
+            input_data={
+                "video_path": args.video,
+                "artifacts_dir": args.artifacts_dir,
+            },
+            t=0,
+        )
+
+        if result is not controller.last_result:
+            raise AssertionError(
+                "SeeDoController.last_result was not updated correctly."
+            )
+
+        if result.status not in (
+            "completed",
+            "ambiguous",
+        ):
+            raise AssertionError(
+                f"Unexpected status: {result.status}"
+            )
+
+        if (
+            result.status == "completed"
+            and len(result.steps) != 1
+        ):
+            raise AssertionError(
+                "A completed plan must contain exactly one action step."
+            )
+
+        if (
+            result.status == "ambiguous"
+            and not result.ambiguities
+        ):
+            raise AssertionError(
+                "An ambiguous plan must explain its ambiguities."
+            )
+
+        if not result.natural_language_plan.strip():
+            raise AssertionError(
+                "Natural-language plan is empty."
+            )
+
+        print("SeeDo controller pipeline completed")
+        print(f"Status: {result.status}")
+        print(
+            "Natural-language plan: "
+            f"{result.natural_language_plan}"
+        )
+
+        print("\nSteps:")
+        for index, step in enumerate(
+            result.steps,
+            start=1,
+        ):
+            print(f"  Step {index}: {step}")
+
+        print("\nAmbiguities:")
+        for ambiguity in result.ambiguities:
+            print(f"  - {ambiguity}")
+
+        controller.reset()
+
+        if controller.last_result is not None:
+            raise AssertionError(
+                "SeeDoController.reset() did not clear last_result."
+            )
+
+        print("\nTEST PASSED")
+        return 0
 
 if __name__ == "__main__":
     raise SystemExit(main())

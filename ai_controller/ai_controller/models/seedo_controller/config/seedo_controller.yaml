@@ -1,0 +1,19 @@
+keyframe_selector:
+  gaussian_sigma: 5.0
+  prominence: 0.8
+  expected_keyframes: 2
+  save_preview: false
+
+visual_prompter:
+  grounding_config: /opt/checkpoints/seedo/groundingdino/GroundingDINO_SwinB.cfg.py
+  grounding_checkpoint: /opt/checkpoints/seedo/groundingdino/groundingdino_swinb_cogcoor.pth
+  bert_model: /opt/checkpoints/seedo/bert-base-uncased
+  sam_checkpoint: /opt/checkpoints/seedo/sam/sam_vit_h_4b8939.pth
+  sam2_checkpoint: /opt/checkpoints/seedo/sam2/sam2_hiera_large.pt
+
+  # Leave null to use automatic recognition via OpenAI.
+  # Alternatively: "cube,cube,cube,cube,storage bin,storage bin,storage bin,storage bin"
+  objects: null
+
+action_planner:
+  model: gpt-4o-2024-08-06
