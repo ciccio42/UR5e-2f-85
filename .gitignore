@@ -11,3 +11,5 @@ checkpoint_folder/
 *png
 save_images/
 saved_rollouts/
+
+models/seedo
