@@ -56,7 +56,7 @@ class ReplicateRollout(Node):
         super().__init__('replicate_rollout')
 
         self.declare_parameter('rollout_path', '')
-        self.declare_parameter('dry_run', True)
+        self.declare_parameter('dry_run', False)
         self.declare_parameter('set_home_service', 'set_robot_to_home')
         self.declare_parameter('set_pose_service', 'set_robot_to_pose')
         self.declare_parameter('frame_id', 'base_link')
@@ -180,7 +180,7 @@ class ReplicateRollout(Node):
         frames = []
         for t in range(len(trajectory)):
             obs = trajectory[t].get('obs', {})
-            frame = obs.get('camera_front_image') if isinstance(obs, dict) else None
+            frame = obs.get('front_camera_image') if isinstance(obs, dict) else None
             if frame is not None:
                 frames.append(frame[:,:,::-1])  # convert RGB->BGR for OpenCV display
 
@@ -304,7 +304,7 @@ class ReplicateRollout(Node):
         if not self.save_video:
             return
 
-        front_image = obs.get('camera_front_image')
+        front_image = obs.get('front_camera_image')
         if front_image is not None:
             original_frame = self._compose_execution_vs_demo(front_image, front_image.shape[0])
             writer = self._ensure_video_writer(
@@ -335,7 +335,7 @@ class ReplicateRollout(Node):
         if not self.show_images:
             return
 
-        front_image = obs.get('camera_front_image')
+        front_image = obs.get('front_camera_image')
         cropped_image = obs.get('cropped_image')
         if front_image is None and cropped_image is None:
             return
@@ -355,7 +355,7 @@ class ReplicateRollout(Node):
         cropped_resized = cv2.resize(
             cropped_bgr, (int(cropped_bgr.shape[1] * target_height / cropped_bgr.shape[0]), target_height))
 
-        cv2.putText(front_resized, f'Step {index}: camera_front_image', (10, 20),
+        cv2.putText(front_resized, f'Step {index}: front_camera_image', (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
         cv2.putText(cropped_resized, 'cropped_image + predicted_bb', (10, 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
@@ -390,8 +390,8 @@ class ReplicateRollout(Node):
             if obs.get(field) is None:
                 issues.append(f"missing robot-state field obs[{field!r}]")
 
-        if obs.get('camera_front_image') is None:
-            issues.append("missing obs['camera_front_image']")
+        if obs.get('front_camera_image') is None:
+            issues.append("missing obs['front_camera_image']")
         if obs.get('cropped_image') is None:
             issues.append("missing obs['cropped_image']")
         if obs.get('predicted_bb') is None:

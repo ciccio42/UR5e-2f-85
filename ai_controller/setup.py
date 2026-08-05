@@ -33,6 +33,7 @@ setup(
         'console_scripts': [
             'ai_controller_node = ai_controller.ai_controller_node:main',
             'replicate_rollout = ai_controller.replicate_rollout:main',
+            'replicate_rollout_controller = ai_controller.replicate_rollout_controller:main',
             'script_controller_node = ai_controller.script_controller_node:main',
         ],
     },
