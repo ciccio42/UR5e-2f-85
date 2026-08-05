@@ -10,7 +10,9 @@ from pathlib import Path
 import cv2
 import imageio.v2 as imageio
 import numpy as np
+import safetensors.numpy as st
 import tensorflow_datasets as tfds
+from scipy.spatial.transform import Rotation
 
 
 DEFAULT_TFRECORD = Path(
@@ -21,7 +23,12 @@ DEFAULT_TFRECORD = Path(
 
 SHARD_RE = re.compile(r".+-train\.tfrecord-(\d{5})$")
 DEFAULT_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "processed_data" / "ur5e_pick_place_video"
+DEFAULT_ACTION_OUTPUT_DIR = Path(__file__).resolve().parents[1] / "processed_data" / "ur5e_pick_place_action"
 VIDEO_SIZE = (320, 240)
+SCALE_FACTOR = 0.05
+NS_PER_SEC = 1_000_000_000
+EULER_ORDER = "xyz"
+WORKSPACE_CAMERA_KEY = "camera_front_image"
 CAMERAS = (
     ("camera_front_image", "0"),
     ("camera_gripper_image", "1"),
@@ -84,6 +91,96 @@ def resize_with_padding(frame: np.ndarray, output_size: tuple[int, int] = VIDEO_
     return canvas
 
 
+def make_timestamps(num_steps: int, fps: int) -> np.ndarray:
+    # I tfrecord non salvano timestamp reali; assumo step equidistanti con lo stesso fps degli mp4.
+    # Il dataloader degli autori lavora in nanosecondi, quindi converto gli indici temporali in uint64.
+    if fps <= 0:
+        raise ValueError("fps must be > 0")
+    return (np.arange(num_steps) * NS_PER_SEC / fps).astype(np.uint64)
+
+
+def normalize_gripper(values: np.ndarray) -> np.ndarray:
+    # Mantengo una convenzione binaria semplice: 0 aperto, 1 chiuso.
+    # Nel tfrecord il gripper dell'action puo' essere scalato, quindi prima viene riportato in [0, 1].
+    return (values > 0.5).astype(np.float32)
+
+
+def read_episode_actions(episode: dict) -> tuple[np.ndarray, np.ndarray]:
+    # Leggo per ogni step la delta action da predire e lo stato assoluto corrente dell'end effector.
+    actions = []
+    action_worlds = []
+    for step in episode["steps"]:
+        actions.append(step["action"].numpy().astype(np.float32))
+        action_worlds.append(step["observation"]["action_world"].numpy().astype(np.float32))
+    return np.stack(actions), np.stack(action_worlds)
+
+
+def write_action_safetensor(
+    path: Path,
+    language: str,
+    workspace_rgb: np.ndarray,
+    episode: dict,
+    fps: int,
+    overwrite: bool,
+) -> None:
+    # Ogni safetensor contiene una traiettoria completa: osservazioni, azioni e relativi timestamp.
+    if path.exists() and not overwrite:
+        return
+
+    actions, action_worlds = read_episode_actions(episode)
+    if not len(workspace_rgb) == len(actions) == len(action_worlds):
+        raise ValueError(
+            f"Length mismatch for {path.name}: "
+            f"workspace_rgb={len(workspace_rgb)}, actions={len(actions)}, action_world={len(action_worlds)}"
+        )
+
+    timestamps = make_timestamps(len(actions), fps)
+
+    # Il campo action nel tfrecord e' stato diviso per SCALE_FACTOR; qui recupero il delta reale.
+    delta_pos = actions[:, :3] * SCALE_FACTOR
+    delta_euler = actions[:, 3:6] * SCALE_FACTOR
+    gripper_action = normalize_gripper(actions[:, 6:7] * SCALE_FACTOR)
+
+    # Il modello lavora poi con rotazioni 6D, ma gli autori salvano prima una matrice e la trasformano via yaml.
+    delta_rot = Rotation.from_euler(EULER_ORDER, delta_euler).as_matrix().astype(np.float32)
+
+    # action_world descrive lo stato assoluto osservato: posizione, orientamento RPY e stato gripper corrente.
+    eef_pos = action_worlds[:, :3]
+    eef_rot = Rotation.from_euler(EULER_ORDER, action_worlds[:, 3:6]).as_quat().astype(np.float32)
+    gripper = normalize_gripper(action_worlds[:, 6:7])
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    st.save_file(
+        {
+            # istruzione linguistica
+            "language_instruction": np.frombuffer(language.strip().encode("utf-8"), dtype=np.uint8)[None],
+            "language_instruction_timestamps": np.array([0], dtype=np.uint64),
+
+            # stato visivo
+            "workspace_rgb": workspace_rgb,
+            "workspace_rgb_timestamps": timestamps,
+
+            ## action in delta da predire
+            "eef_pos_ref_delta_lowdim": delta_pos.astype(np.float32), #posa
+            "eef_pos_ref_delta_lowdim_timestamps": timestamps.copy(),
+            "eef_rot_ref_delta_lowdim": delta_rot, #rotazione
+            "eef_rot_ref_delta_lowdim_timestamps": timestamps.copy(),
+            "gripper_action_lowdim": gripper_action, #gripper
+            "gripper_action_lowdim_timestamps": timestamps.copy(),
+            ##
+            ## stato robotico corrente
+            "eef_pos_lowdim": eef_pos.astype(np.float32), #posa
+            "eef_pos_lowdim_timestamps": timestamps.copy(),
+            "eef_rot_lowdim": eef_rot, #rotazione
+            "eef_rot_lowdim_timestamps": timestamps.copy(),
+            "gripper_lowdim": gripper, #gripper
+            "gripper_lowdim_timestamps": timestamps.copy(),
+            ##
+        },
+        path,
+    )
+
+
 def write_mp4(path: Path, frames: list[np.ndarray], fps: int, overwrite: bool) -> None:
     # Keep the raw temporal rate in the MP4; target_fps is chosen later by the loader.
     if path.exists() and not overwrite:
@@ -104,7 +201,14 @@ def write_meta(path: Path, language: str, overwrite: bool) -> None:
     path.write_text(language.strip() + "\n", encoding="utf-8")
 
 
-def export_episode(episode: dict, output_dir: Path, global_index: int, fps: int, overwrite: bool) -> None:
+def export_episode(
+    episode: dict,
+    output_dir: Path,
+    action_output_dir: Path,
+    global_index: int,
+    fps: int,
+    overwrite: bool,
+) -> None:
     # Example names: ep_0000000.mp4 per front, ep_0000001.mp4 per gripper, metas/ep_000000.txt unico txt associato.
     # global index fa continuare il conteggio per ogni traiettoria anche di task diversi.
     episode_name = f"ep_{global_index:06d}"
@@ -121,11 +225,18 @@ def export_episode(episode: dict, output_dir: Path, global_index: int, fps: int,
         write_mp4(video_path, frames_by_camera[camera_key], fps, overwrite)
         print(f"  wrote {video_path.name}: {len(frames_by_camera[camera_key])} frames from {camera_key}")
 
+    # Per l'action head gli autori usano una sola vista chiamata workspace_rgb: qui uso la camera frontale.
+    workspace_rgb = np.stack([resize_with_padding(frame) for frame in frames_by_camera[WORKSPACE_CAMERA_KEY]])
+    action_path = action_output_dir / f"{episode_name}.safetensors"
+    write_action_safetensor(action_path, language, workspace_rgb, episode, fps, overwrite)
+    print(f"  wrote {action_path.name}: {len(workspace_rgb)} action steps")
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tfrecord-path", type=Path, default=DEFAULT_TFRECORD)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--action-output-dir", type=Path, default=DEFAULT_ACTION_OUTPUT_DIR)
     parser.add_argument("--fps", type=int, default=15)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -149,13 +260,14 @@ def main() -> None:
     print(f"tfrecord={tfrecord_path}")
     print(f"shard={shard_index} episodes={shard_lengths[shard_index]} global_range={start}:{stop}")
     print(f"output={args.output_dir.resolve()}")
+    print(f"action_output={args.action_output_dir.resolve()}")
 
     dataset = builder.as_dataset(split=f"train[{start}:{stop}]", shuffle_files=False)
 
     for episode_index, episode in enumerate(dataset):
         global_index = start + episode_index
         print(f"\nepisode={episode_index} global={global_index}")
-        export_episode(episode, args.output_dir, global_index, args.fps, args.overwrite)
+        export_episode(episode, args.output_dir, args.action_output_dir, global_index, args.fps, args.overwrite)
 
 
 if __name__ == "__main__":

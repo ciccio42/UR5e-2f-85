@@ -2,17 +2,47 @@
 
 FROM mimic-video-train:gb10-cu129
 
+ENV PREPROCESSING_VENV=/opt/mimic-video-preprocessing-venv
+
+# Ambiente separato da quello usato per il training di Mimic Video.
+RUN uv venv "${PREPROCESSING_VENV}" --python 3.10
+
+# Versioni fissate per evitare incompatibilità tra
+# TensorFlow, TensorFlow Metadata e Protobuf.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install \
-        --python /opt/mimic-video-venv/bin/python \
-        tensorflow \
-        tensorflow-datasets \
+        --python "${PREPROCESSING_VENV}/bin/python" \
+        tensorflow==2.18.0 \
+        tensorflow-datasets==4.9.9 \
+        tensorflow-metadata==1.17.2 \
+        protobuf==4.21.12 \
         pillow \
         imageio \
-        imageio-ffmpeg
+        imageio-ffmpeg \
+        opencv-python-headless \
+        safetensors==0.8.0 \
+        scipy==1.14.1
 
+# Controllo dei requisiti dichiarati.
+RUN uv pip check \
+    --python "${PREPROCESSING_VENV}/bin/python"
+
+# Controllo reale degli import: pip check da solo non rileva
+# sempre incompatibilità tra codice Protobuf generato e runtime.
+RUN "${PREPROCESSING_VENV}/bin/python" -c "\
+import tensorflow as tf; \
+import tensorflow_datasets as tfds; \
+import tensorflow_metadata; \
+import google.protobuf; \
+print('TensorFlow:', tf.__version__); \
+print('Protobuf:', google.protobuf.__version__)"
+
+# Verifica che l'ambiente originale Mimic Video non sia stato modificato.
 RUN uv pip check \
     --python /opt/mimic-video-venv/bin/python
+
+# In questa immagine il comando python usa il venv di preprocessing.
+ENV PATH="${PREPROCESSING_VENV}/bin:${PATH}"
 
 WORKDIR /workspace/scripts
 
