@@ -1,0 +1,30 @@
+diff --git a/model/cosmos_predict2/configs/defaults/data_video.py b/model/cosmos_predict2/configs/defaults/data_video.py
+--- a/model/cosmos_predict2/configs/defaults/data_video.py
++++ b/model/cosmos_predict2/configs/defaults/data_video.py
+@@ -1,4 +1,5 @@
+ import copy
++import pathlib
+ 
+ from hydra.core.config_store import ConfigStore
+ from megatron.core import parallel_state
+@@ -31,6 +32,20 @@ train_datasets: dict[str, Dataset_] = {
+         is_multi_img=True,
+         val_ratio=0.01,
+     ),
++    "ur5e_pick_place_videmb": L(LatentDataset)(
++        dataset_dir=pathlib.Path(
++            "/workspace/UR5e-2f-85/mimic_video_workspace/processed_data/ur5e_pick_place_video"
++        ),
++        include_only_with_substrings=["0.mp4"],
++        num_frames=61,
++        obs_history=5,
++        video_height=480,
++        video_width=640,
++        target_fps=10.0,
++        is_val=False,
++        is_multi_img=True,
++        val_ratio=0.01,
++    ),
+     "libero_spatial_agentview": L(Dataset)(
+         dataset_dir=...,
+         num_frames=61,
