@@ -33,7 +33,7 @@ CAMERAS = (
     ("camera_front_image", "0"),
     ("camera_gripper_image", "1"),
 )
-
+TARGET_LENGTH = 61
 
 def shard_index_from_path(path: Path) -> int:
     # Il primo tfrecord ha traiettorie da 0 a 39, il secondo da 40 a 79.
@@ -73,6 +73,30 @@ def read_episode_frames(episode: dict) -> dict[str, list[np.ndarray]]:
             frames[camera_key].append(read_frame(step, camera_key)) # riempi le due liste prima di passare allo step successivo
     return frames
 
+def extension(episode: dict) -> dict:
+    steps = list(episode["steps"])
+    n = len(steps)
+    if n >= TARGET_LENGTH:
+        return episode
+
+    step_to_add = TARGET_LENGTH - n
+
+    # distribuzione uniforme per la selezione degli step da duplicare
+    duplicate_indxs = np.round(np.linspace(0, n-1, step_to_add)).astype(int)
+    duplicate_indxs = set(duplicate_indxs.tolist())
+
+    expanded_steps = []
+    for i, step in enumerate(steps):
+        expanded_steps.append(step)
+        if i in duplicate_indxs:
+            expanded_steps.append(step)
+
+    if len(expanded_steps) != TARGET_LENGTH:
+        raise ValueError(f"Invalid extended length: {n} -> {len(expanded_steps)}")
+
+    expanded_episode = dict(episode)
+    expanded_episode["steps"] = expanded_steps
+    return expanded_episode
 
 def resize_with_padding(frame: np.ndarray, output_size: tuple[int, int] = VIDEO_SIZE) -> np.ndarray:
     # Resize uniformly, then pad to 4:3 so the Cosmos loader can resize without distortion.
@@ -220,6 +244,11 @@ def export_episode(
     episode_name = f"ep_{global_index:06d}"
     # raccolgo istruzione testuale
     language = read_text(episode["language_instruction"])
+
+    # estendo gli step dell'episodio per conformità con il processamento degli embedding visivi. Questa soluzione permette di evitare
+    # ridondanza eccessiva sull'ultimo frame, distribuendola in modo uniforme.
+    episode = extension(episode)
+
     # raccolgo frame traiettoria dalle due camere
     frames_by_camera = read_episode_frames(episode)
 
