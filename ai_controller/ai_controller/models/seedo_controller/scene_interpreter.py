@@ -10,6 +10,7 @@ from typing import Any
 from openai import OpenAI
 from pathlib import Path
 from results import (
+    RawSceneState,
     ScenePerceptionResult,
     SceneObject,
     SceneState,
@@ -68,6 +69,18 @@ class SceneInterpreter:
 
         raw_scene = perception_result.raw_scene
 
+        if artifacts_dir is not None:
+            artifacts_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            artifacts_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
         if not raw_scene.objects:
             raise ValueError(
                 "Raw scene contains no objects."
@@ -83,11 +96,6 @@ class SceneInterpreter:
             raise FileNotFoundError(
                 "Raw scene overlay does not exist: "
                 f"{perception_result.overlay_image_path}"
-            )
-
-        if not raw_scene.objects:
-            raise ValueError(
-                "Raw scene contains no objects."
             )
 
         semantic_names = self._assign_semantic_names(

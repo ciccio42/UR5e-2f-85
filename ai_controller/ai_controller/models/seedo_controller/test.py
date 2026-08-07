@@ -6,6 +6,7 @@ import numpy as np
 import yaml
 
 from pathlib import Path
+from results import ScenePerceptionResult
 
 from ai_controller.models.seedo_controller.keyframe_selector import (
     KeyframeSelector,
@@ -461,26 +462,43 @@ def run_action_planning_test(
 
         return 0
 
-def run_scene_perceiver_test(
+def build_scene_perception_result(
     args: argparse.Namespace,
-) -> int:
+) -> ScenePerceptionResult:
+    """Build the runtime ScenePerceptionResult from an offline scene capture."""
+
     if args.scene_dir is None:
         raise ValueError(
-            "--scene-dir is required for the scene_perceiver test."
+            "--scene-dir is required for runtime scene tests."
         )
 
     if not args.model_config:
         raise ValueError(
-            "--model-config is required for the scene_perceiver test."
+            "--model-config is required for runtime scene tests."
         )
 
     if args.base_to_table_transform is None:
         raise ValueError(
-            "--base-to-table-transform is required for "
-            "the scene_perceiver test."
+            "--base-to-table-transform is required for runtime scene tests."
         )
 
-    scene_dir = args.scene_dir.expanduser().resolve()
+    scene_dir = (
+        Path(args.scene_dir)
+        .expanduser()
+        .resolve()
+    )
+
+    model_config_path = (
+        Path(args.model_config)
+        .expanduser()
+        .resolve()
+    )
+
+    transform_path = (
+        Path(args.base_to_table_transform)
+        .expanduser()
+        .resolve()
+    )
 
     rgb_path = scene_dir / "rgb.png"
     depth_path = scene_dir / "depth.npy"
@@ -490,8 +508,8 @@ def run_scene_perceiver_test(
         rgb_path,
         depth_path,
         camera_info_path,
-        args.base_to_table_transform,
-        Path(args.model_config),
+        model_config_path,
+        transform_path,
     )
 
     for path in required_paths:
@@ -526,7 +544,7 @@ def run_scene_perceiver_test(
             stream
         )
 
-    with args.base_to_table_transform.open(
+    with transform_path.open(
         "r",
         encoding="utf-8",
     ) as stream:
@@ -534,7 +552,7 @@ def run_scene_perceiver_test(
             stream
         )
 
-    with Path(args.model_config).open(
+    with model_config_path.open(
         "r",
         encoding="utf-8",
     ) as stream:
@@ -575,15 +593,37 @@ def run_scene_perceiver_test(
         ],
     )
 
-    perception_result = perceiver.run(
+    artifacts_dir = None
+
+    if args.artifacts_dir is not None:
+        artifacts_dir = (
+            Path(args.artifacts_dir)
+            .expanduser()
+            .resolve()
+        )
+
+    return perceiver.run(
         rgb_image=rgb,
         depth_image=depth,
         camera_info=camera_info,
-        base_to_table_transform=base_to_table_transform,
-        artifacts_dir=args.artifacts_dir,
+        base_to_table_transform=(
+            base_to_table_transform
+        ),
+        artifacts_dir=artifacts_dir,
     )
 
-    raw_scene = perception_result.raw_scene
+def run_scene_perceiver_test(
+    args: argparse.Namespace,
+) -> int:
+    perception_result = (
+        build_scene_perception_result(
+            args
+        )
+    )
+
+    raw_scene = (
+        perception_result.raw_scene
+    )
 
     if not raw_scene.objects:
         raise AssertionError(
@@ -633,62 +673,347 @@ def run_scene_perceiver_test(
                 f"{obj.object_id} has no segmentation mask."
             )
 
+    if args.artifacts_dir is not None:
+        if (
+            perception_result.overlay_image_path
+            is None
+        ):
+            raise AssertionError(
+                "ScenePerceiver did not return an overlay path."
+            )
+
+        if (
+            not perception_result
+            .overlay_image_path
+            .is_file()
+        ):
+            raise AssertionError(
+                "Raw scene overlay was not created: "
+                f"{perception_result.overlay_image_path}"
+            )
+
+        if (
+            perception_result.raw_scene_json_path
+            is None
+        ):
+            raise AssertionError(
+                "ScenePerceiver did not return "
+                "a raw-scene JSON path."
+            )
+
+        if (
+            not perception_result
+            .raw_scene_json_path
+            .is_file()
+        ):
+            raise AssertionError(
+                "Raw scene JSON was not created: "
+                f"{perception_result.raw_scene_json_path}"
+            )
+
     print("\n=== RAW SCENE STATE ===")
     print(
-        f"Detected objects: {len(raw_scene.objects)}"
+        f"Detected objects: "
+        f"{len(raw_scene.objects)}"
     )
 
     for obj in raw_scene.objects:
         print()
         print(
-            f"Object ID:        {obj.object_id}"
+            f"Object ID:        "
+            f"{obj.object_id}"
         )
         print(
-            f"Label:            {obj.label}"
+            f"Label:            "
+            f"{obj.label}"
         )
         print(
-            f"Pixel:            {obj.pixel_coordinates}"
+            f"Pixel:            "
+            f"{obj.pixel_coordinates}"
         )
         print(
-            f"Confidence:       {obj.confidence}"
+            f"Confidence:       "
+            f"{obj.confidence}"
         )
         print(
-            f"Camera position:  {obj.position_camera}"
+            f"Camera position:  "
+            f"{obj.position_camera}"
         )
         print(
-            f"Base position:    {obj.position_base}"
-        )
-    
-    if perception_result.overlay_image_path is None:
-        raise AssertionError(
-            "ScenePerceiver did not return an overlay path."
+            f"Base position:    "
+            f"{obj.position_base}"
         )
 
-    if not perception_result.overlay_image_path.is_file():
-        raise AssertionError(
-            "Raw scene overlay was not created: "
+    if (
+        perception_result.overlay_image_path
+        is not None
+    ):
+        print(
+            "\nOverlay: "
             f"{perception_result.overlay_image_path}"
         )
 
-    if perception_result.raw_scene_json_path is None:
-        raise AssertionError(
-            "ScenePerceiver did not return a raw-scene JSON path."
-        )
-
-    if not perception_result.raw_scene_json_path.is_file():
-        raise AssertionError(
-            "Raw scene JSON was not created: "
+    if (
+        perception_result.raw_scene_json_path
+        is not None
+    ):
+        print(
+            "Raw scene JSON: "
             f"{perception_result.raw_scene_json_path}"
         )
 
-    print(
-        "\nOverlay: "
-        f"{perception_result.overlay_image_path}"
+    print("\nTEST PASSED")
+
+    return 0
+
+def run_scene_interpreter_test(
+    args: argparse.Namespace,
+) -> int:
+    if not args.model_config:
+        raise ValueError(
+            "--model-config is required for "
+            "the scene_interpreter test."
+        )
+
+    if args.artifacts_dir is None:
+        raise ValueError(
+            "--artifacts-dir is required for "
+            "the scene_interpreter test."
+        )
+
+    model_config_path = (
+        Path(args.model_config)
+        .expanduser()
+        .resolve()
     )
-    print(
-        "Raw scene JSON: "
-        f"{perception_result.raw_scene_json_path}"
+
+    if not model_config_path.is_file():
+        raise FileNotFoundError(
+            "SeeDo controller configuration does not exist: "
+            f"{model_config_path}"
+        )
+
+    artifacts_dir = (
+        Path(args.artifacts_dir)
+        .expanduser()
+        .resolve()
     )
+
+    artifacts_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # First run the real perception stage.
+    #
+    # Its raw_scene_overlay.png and raw_scene_state.json
+    # are written to the same test artifact directory.
+    perception_result = (
+        build_scene_perception_result(
+            args
+        )
+    )
+
+    raw_scene = (
+        perception_result.raw_scene
+    )
+
+    if not raw_scene.objects:
+        raise AssertionError(
+            "ScenePerceiver returned no objects "
+            "before scene interpretation."
+        )
+
+    if (
+        perception_result.overlay_image_path
+        is None
+    ):
+        raise AssertionError(
+            "ScenePerceiver did not produce "
+            "a raw scene overlay."
+        )
+
+    if (
+        not perception_result
+        .overlay_image_path
+        .is_file()
+    ):
+        raise AssertionError(
+            "Raw scene overlay does not exist: "
+            f"{perception_result.overlay_image_path}"
+        )
+
+    with model_config_path.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        config = yaml.safe_load(
+            stream
+        )
+
+    interpreter_config = config.get(
+        "scene_interpreter",
+        {},
+    )
+
+    interpreter = SceneInterpreter(
+        model=interpreter_config.get(
+            "model",
+            "gpt-4o-2024-08-06",
+        ),
+    )
+
+    scene_state = interpreter.run(
+        perception_result=perception_result,
+        artifacts_dir=artifacts_dir,
+    )
+
+    # ------------------------------------------------------------
+    # Structural checks
+    # ------------------------------------------------------------
+
+    if len(scene_state.objects) != len(
+        raw_scene.objects
+    ):
+        raise AssertionError(
+            "SceneInterpreter changed the number of objects. "
+            f"Raw={len(raw_scene.objects)}, "
+            f"semantic={len(scene_state.objects)}."
+        )
+
+    semantic_ids = [
+        obj.object_id
+        for obj in scene_state.objects
+    ]
+
+    if len(semantic_ids) != len(
+        set(semantic_ids)
+    ):
+        raise AssertionError(
+            "SceneInterpreter produced duplicate "
+            "semantic object IDs."
+        )
+
+    for raw_obj, scene_obj in zip(
+        raw_scene.objects,
+        scene_state.objects,
+        strict=True,
+    ):
+        if raw_obj.label != scene_obj.label:
+            raise AssertionError(
+                f"{raw_obj.object_id}: detector label changed "
+                f"from '{raw_obj.label}' "
+                f"to '{scene_obj.label}'."
+            )
+
+        if (
+            raw_obj.pixel_coordinates
+            != scene_obj.pixel_coordinates
+        ):
+            raise AssertionError(
+                f"{raw_obj.object_id}: "
+                "pixel coordinates changed during "
+                "semantic interpretation."
+            )
+
+        if (
+            raw_obj.position_camera
+            != scene_obj.position_camera
+        ):
+            raise AssertionError(
+                f"{raw_obj.object_id}: "
+                "camera-space position changed during "
+                "semantic interpretation."
+            )
+
+        if (
+            raw_obj.position_base
+            != scene_obj.position_base
+        ):
+            raise AssertionError(
+                f"{raw_obj.object_id}: "
+                "base-link position changed during "
+                "semantic interpretation."
+            )
+
+        if not scene_obj.object_id.strip():
+            raise AssertionError(
+                f"{raw_obj.object_id}: "
+                "semantic object ID is empty."
+            )
+
+    # ------------------------------------------------------------
+    # Artifact checks
+    # ------------------------------------------------------------
+
+    expected_artifacts = (
+        artifacts_dir
+        / "raw_scene_overlay.png",
+
+        artifacts_dir
+        / "raw_scene_state.json",
+
+        artifacts_dir
+        / "scene_interpretation.json",
+
+        artifacts_dir
+        / "scene_state.json",
+    )
+
+    for artifact_path in expected_artifacts:
+        if not artifact_path.is_file():
+            raise AssertionError(
+                f"Missing test artifact: {artifact_path}"
+            )
+
+        if artifact_path.stat().st_size == 0:
+            raise AssertionError(
+                f"Empty test artifact: {artifact_path}"
+            )
+
+    # ------------------------------------------------------------
+    # Human-readable output
+    # ------------------------------------------------------------
+
+    print(
+        "\n=== SEMANTIC SCENE STATE ==="
+    )
+
+    print(
+        f"Objects: {len(scene_state.objects)}"
+    )
+
+    for obj in scene_state.objects:
+        print()
+        print(
+            f"Semantic ID:      "
+            f"{obj.object_id}"
+        )
+        print(
+            f"Detector label:   "
+            f"{obj.label}"
+        )
+        print(
+            f"Pixel:            "
+            f"{obj.pixel_coordinates}"
+        )
+        print(
+            f"Camera position:  "
+            f"{obj.position_camera}"
+        )
+        print(
+            f"Base position:    "
+            f"{obj.position_base}"
+        )
+
+    print(
+        "\nArtifacts:"
+    )
+
+    for artifact_path in expected_artifacts:
+        print(
+            f"  {artifact_path}"
+        )
 
     print("\nTEST PASSED")
 
