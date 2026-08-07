@@ -24,7 +24,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CMAKE_CUDA_ARCHITECTURES="121" \
     NVTE_CUDA_ARCHS="121" \
     NVTE_FRAMEWORK=pytorch \
-    NVTE_BUILD_USE_NVIDIA_WHEELS=1 \
+    NVTE_BUILD_USE_NVIDIA_WHEELS=0 \
     MAX_JOBS=4 \
     NVCC_THREADS=2
 
@@ -84,14 +84,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         --editable .
 
 # Transformer Engine recente per PyTorch/CUDA 13.
+# Su GB10/Spark siamo su aarch64: i wheel cu13 ufficiali non sono disponibili
+# per questa piattaforma, quindi lo compiliamo da sorgente contro la CUDA
+# presente nel container.
 # In questa prima immagine-probe non installiamo Apex e FlashAttention custom:
 # servono soprattutto per training/action head, mentre il test zero-shot V2W
 # ci interessa prima per verificare PyTorch sm_121 e memoria.
 RUN --mount=type=cache,target=/root/.cache/uv \
     NVTE_FRAMEWORK=pytorch \
+    NVTE_BUILD_USE_NVIDIA_WHEELS=0 \
     uv pip install \
         --python "${VIRTUAL_ENV}/bin/python" \
-        "transformer-engine[pytorch]==2.17.0"
+        --no-build-isolation \
+        "git+https://github.com/NVIDIA/TransformerEngine.git@stable"
 
 RUN uv pip check \
     --python "${VIRTUAL_ENV}/bin/python"
