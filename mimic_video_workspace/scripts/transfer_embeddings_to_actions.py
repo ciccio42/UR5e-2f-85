@@ -40,22 +40,63 @@ def read_language_embedding(path: Path) -> np.ndarray:
 def video_embedding_timestamps(action_data: dict[str, np.ndarray], video_data: dict[str, np.ndarray]) -> np.ndarray:
     # Gli embedding video sono associati agli indici ancora usati dallo script di precompute.
     # Li riallineo ai timestamp di workspace_rgb, gestendo anche gli indici oltre la fine del video.
-    video_len = int(video_data["video_len"])
+    
+    video_len = int(video_data["video_len"]) #numero di frame della traiettoria
     fps = float(video_data["fps"])
-    idxs = video_data["video_embeddings_idxs"].astype(np.int64)
-    workspace_timestamps = action_data["workspace_rgb_timestamps"]
+    idxs = video_data["video_embeddings_idxs"].astype(np.int64) #indici dei frame utilizzati come anchor nel calcolo degli embeddings
+    # questi indici possono anche eccedere i frame reali del video.
+    # questo può accadere perchè per ogni anchor frame, 4 frame precedenti vengono utilizzati come 
+    # osservazione, e su una finestra di 56 frame successivi all'anchor viene calcolato l'embedding.
+    # Al massimo l'indice quindi può superare di 4 la lunghezza totale della traiettoria, l'ultimo frame è visto come contesto e l'embedding viene calcolato sulla ripetizione del frame terminale.
+    # Cosmos dovrà produrre predizioni latenti quanto più simili agli embedding calcolati sulla traiettoria vera.
 
+    # ogni step ha un timestamp sintetico calcolato dalla pipeline di preprocess. 
+    # Il calcolo considera che l'intera sequenza è a 10 fps, quindi i frame si sussegiono ogni 0.1 secondi.
+    # Lo step inziale ha timestamp 0, il primo dopo 0.1 secondi ha timestamp 0.1, il secondo 0.2 e così via. 
+    workspace_timestamps = action_data["workspace_rgb_timestamps"]
+    # in realtà i timestamps sono riportati in nanosecondi, quindi:
+    # [0, 200_000_000, 400_000_000, 500_000_000, 700_000_000]
+    
+    # la lunghezza del video calcolata dallo script video embedding, deve corrispondere con la lunghezza della traiettoria memorizzata nel safetensor dell'action
+    # L'embedding è stato calcolato su quel video. Le lunghezze devono corrispondere.
     if len(action_data["workspace_rgb"]) != video_len:
         raise ValueError(
             f"Video/action length mismatch: workspace_rgb={len(action_data['workspace_rgb'])}, video_len={video_len}"
         )
 
-    padding_idx = idxs - video_len + 1
+    # fase di allineamento tra i timestamp degli action safetensor e video safetensor.
+    # Ex: 
+    #frame:      0    1    2    3    4
+    #timestamp: 0.0  0.1  0.2  0.3  0.4 secondi = workspace_timestamps
+    #idxs = [0, 2, 4, 5, 7] anchor scelti dal video encoder
+    # video_len - 1 = 4 = ultimo indice valido
+    padding_idx = idxs - (video_len - 1) 
+    #padding_idx: -4  -2   0   1   3
+    #padding_idx < 0  -> anchor interno al video
+    #padding_idx = 0  -> ultimo frame reale
+    #padding_idx = 1  -> un frame oltre la fine
+    #padding_idx = 3  -> tre frame oltre la fine
+
+    # np.clip pone a 0 i padding_idx negativi
+    # workspace_timestamps[-1] è 0.4
     extrapolated = (
         workspace_timestamps[-1] + NS_PER_SEC * np.clip(padding_idx, 0, None) / fps
     ).astype(np.uint64)
+    # extrapolated: 0.4 0.4 0.4 0.5 0.7
+
+    # ora si lavora sui timestamps della traiettoria
+    # si selezionano solo i timestamps indicati dagli idxs, clippando al valore massimo quelli che lo superano.
+    # idxs:             0   2   4   5   7
+    # indici limitati:  0   2   4   4   4 questo accade con clip
     aligned = workspace_timestamps[np.clip(idxs, 0, video_len - 1)]
+    #aligned: 0.0  0.2  0.4  0.4  0.4 secondi
+
+    # si restituisce extrapolated per gli anchor oltre il video
+    # timestamp reale altrimenti
     return np.where(padding_idx > 0, extrapolated, aligned).astype(np.uint64)
+    # return 0.0 0.2 0.4 0.5 0.7 (in nanosecondi)
+    # nel caso di timestamps sintetici calcolati in base agli fps tutto questo poteva essere
+    # return indxs / fps * NS_PER_SEC
 
 
 def add_embeddings(
@@ -87,8 +128,16 @@ def add_embeddings(
         video_data = st_np.load_file(vid_path)
         action_data["workspace_rgb_embedding"] = np.ascontiguousarray(video_data["video_embeddings"])
         action_data["workspace_rgb_embedding_timestamps"] = video_embedding_timestamps(action_data, video_data)
+        
+        # num_conditional_frames indica il numero di frame latenti che condizionano la predizione.
+        # sono 5 frame RGB incluso l'anchor frame, ma che risultano in 2 frame latenti a causa della compressione eseguita dal tokenizer VAE
         action_data["num_conditional_frames"] = np.array([int(video_data["num_conditional_frames"])])
         action_data["num_conditional_frames_timestamps"] = np.array([0], dtype=np.uint64)
+        #Video RGB:
+        #    [5 frame osservati | 56 frame futuri]
+
+        #Latente:
+        #    [2 condizionanti | 14 da predire]
 
     st_np.save_file(action_data, action_path)
     return f"ok: {action_path.name}"
