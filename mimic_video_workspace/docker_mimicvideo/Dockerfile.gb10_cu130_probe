@@ -1,0 +1,113 @@
+# syntax=docker/dockerfile:1.7
+
+ARG UV_VERSION=0.11.3
+
+# Stage usato solo per recuperare uv.
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
+# Immagine sperimentale per GB10/sm_121.
+# L'obiettivo e' verificare se PyTorch CUDA 13.0 gestisce meglio la GPU GB10
+# rispetto all'immagine cu129 che viene compilata fino a sm_120.
+FROM nvidia/cuda:13.0.2-cudnn-devel-ubuntu24.04
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    CUDA_HOME=/usr/local/cuda \
+    CUDA_PATH=/usr/local/cuda \
+    VIRTUAL_ENV=/opt/mimic-video-venv \
+    UV_PROJECT_ENVIRONMENT=/opt/mimic-video-venv \
+    UV_LINK_MODE=copy \
+    UV_PYTHON=3.10 \
+    PATH="/opt/mimic-video-venv/bin:/usr/local/cuda/bin:${PATH}" \
+    TORCH_CUDA_ARCH_LIST="12.1+PTX" \
+    CMAKE_CUDA_ARCHITECTURES="121" \
+    NVTE_CUDA_ARCHS="121" \
+    NVTE_FRAMEWORK=pytorch \
+    NVTE_BUILD_USE_NVIDIA_WHEELS=1 \
+    MAX_JOBS=4 \
+    NVCC_THREADS=2
+
+# Dipendenze Linux per compilazione, immagini e video.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    ca-certificates \
+    cmake \
+    curl \
+    ffmpeg \
+    git \
+    libgl1 \
+    libglib2.0-0 \
+    libjpeg-dev \
+    libpng-dev \
+    ninja-build \
+    pkg-config \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+# Python 3.10 e virtualenv dedicato a Mimic Video.
+RUN uv python install 3.10 && \
+    uv venv "${VIRTUAL_ENV}" --python 3.10
+
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install \
+        --python "${VIRTUAL_ENV}/bin/python" \
+        setuptools==80.9.0 \
+        wheel \
+        packaging \
+        ninja \
+        cmake \
+        pybind11 \
+        psutil \
+        pip
+
+# PyTorch 2.13 usa CUDA 13.0 come variante stabile.
+# Questo e' il test principale rispetto a torch 2.8.0+cu129.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install \
+        --python "${VIRTUAL_ENV}/bin/python" \
+        torch==2.13.0 \
+        torchvision==0.28.0 \
+        --index-url https://download.pytorch.org/whl/cu130
+
+# Codice ufficiale Mimic Video.
+COPY external/mimic-video /workspace/mimic-video
+
+WORKDIR /workspace/mimic-video/model
+
+# Dipendenze Python del progetto, senza gli extra cu126/cu129 degli autori.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install \
+        --python "${VIRTUAL_ENV}/bin/python" \
+        --editable .
+
+# Transformer Engine recente per PyTorch/CUDA 13.
+# In questa prima immagine-probe non installiamo Apex e FlashAttention custom:
+# servono soprattutto per training/action head, mentre il test zero-shot V2W
+# ci interessa prima per verificare PyTorch sm_121 e memoria.
+RUN --mount=type=cache,target=/root/.cache/uv \
+    NVTE_FRAMEWORK=pytorch \
+    uv pip install \
+        --python "${VIRTUAL_ENV}/bin/python" \
+        "transformer-engine[pytorch]==2.17.0"
+
+RUN uv pip check \
+    --python "${VIRTUAL_ENV}/bin/python"
+
+# Controllo import a build-time. Il controllo vero su sm_121 va fatto runtime,
+# perche' durante docker build non abbiamo accesso alla GPU.
+RUN "${VIRTUAL_ENV}/bin/python" -c "\
+import torch; \
+import torchvision; \
+import transformer_engine; \
+import transformer_engine.pytorch; \
+print('torch:', torch.__version__); \
+print('torch cuda:', torch.version.cuda); \
+print('torchvision:', torchvision.__version__); \
+print('transformer_engine:', transformer_engine.__version__)"
+
+WORKDIR /workspace/mimic-video/model
+
+CMD ["/bin/bash"]
