@@ -12,4 +12,4 @@ checkpoint_folder/
 save_images/
 saved_rollouts/
 
-models/seedo
+/ai_controller/ai_controller/models/seedo_controller/models/seedo/**

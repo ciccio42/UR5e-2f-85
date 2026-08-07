@@ -7,7 +7,13 @@ cd "${ROS_WS}"
 UR_APPLICATION_ROOT="${ROS_WS}/src/UR5e-2f-85"
 
 if [ -d "${UR_APPLICATION_ROOT}" ]; then
-    export PYTHONPATH="${UR_APPLICATION_ROOT}/ai_controller:${UR_APPLICATION_ROOT}/models/SeeDo:/opt/models:/opt/models/GroundingDINO:${PYTHONPATH:-}"
+    export PYTHONPATH="\
+        ${UR_APPLICATION_ROOT}/ai_controller:\
+        ${UR_APPLICATION_ROOT}/ai_controller/ai_controller/models/seedo_controller/models/SeeDo:\
+        ${UR_APPLICATION_ROOT}/ai_controller/ai_controller/models/seedo_controller/models/SeeDo/VLM_CaP:\
+        /opt/models:\
+        /opt/models/GroundingDINO:\
+        ${PYTHONPATH:-}"
 fi
 
 if [ -d "${ROS_WS}/src" ] && \
