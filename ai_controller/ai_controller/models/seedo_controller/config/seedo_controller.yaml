@@ -17,3 +17,19 @@ visual_prompter:
 
 action_planner:
   model: gpt-4o-2024-08-06
+
+scene_perceiver:
+  camera_calibration_path: /home/ros2_ws/src/UR5e-2f-85/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml
+  camera_name: zed_front
+  workspace_bottom_left: [0.0, 0.0]
+  workspace_top_right: [1.0, 1.0]
+
+  detector_labels:
+    - cube
+    - storage bin
+
+lmp_generator:
+  model: gpt-4o-2024-08-06
+
+scene_interpreter:
+  model: gpt-4o-2024-08-06

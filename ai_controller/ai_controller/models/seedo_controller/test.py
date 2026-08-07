@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import cv2
+import numpy as np
+import yaml
+
 from pathlib import Path
 
 from ai_controller.models.seedo_controller.keyframe_selector import (
@@ -19,6 +23,16 @@ from ai_controller.models.seedo_controller.seedo_controller import (
     SeeDoController,
 )
 
+from ai_controller.models.seedo_controller.scene_perceiver import (
+    ScenePerceiver,
+)
+from ai_controller.models.seedo_controller.scene_interpreter import (
+    SceneInterpreter,
+)
+from ai_controller.models.seedo_controller.lmp_generator import (
+    LMPGenerator,
+)
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Standalone test for the SeeDo keyframe selector."
@@ -26,13 +40,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--video",
         type=Path,
-        required=True,
+        default=None,
         help="Path to the input demonstration video.",
     )
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
-        default=None,
+        default=Path("artifacts"),
         help="Optional directory for debug artifacts and previews.",
     )
     parser.add_argument(
@@ -45,7 +59,15 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--stage",
-        choices=["keyframe", "visual_prompting", "action_planning", "seedo_controller"],
+        choices=[
+            "keyframe",
+            "visual_prompting",
+            "action_planning",
+            "scene_perceiver",
+            "scene_interpreter",
+            "lmp_generator",
+            "seedo_controller",
+        ],
         default="keyframe",
         help="Pipeline stage to test.",
     )
@@ -98,6 +120,26 @@ def parse_args() -> argparse.Namespace:
         help="Path to the SeeDo controller YAML configuration.",
     )
 
+    parser.add_argument(
+        "--scene-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing the offline runtime scene "
+            "(rgb.png, depth.npy, camera_info.yaml)."
+        ),
+    )
+
+    parser.add_argument(
+        "--base-to-table-transform",
+        type=Path,
+        default=None,
+        help=(
+            "YAML file containing the base_link/table_0 "
+            "transform used for offline runtime tests."
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -113,6 +155,15 @@ def main() -> int:
     if args.stage == "action_planning":
         return run_action_planning_test(args)
 
+    if args.stage == "scene_perceiver":
+        return run_scene_perceiver_test(args)
+
+    if args.stage == "scene_interpreter":
+        return run_scene_interpreter_test(args)
+
+    if args.stage == "lmp_generator":
+        return run_lmp_generator_test(args)
+
     if args.stage == "seedo_controller":
         return run_seedo_controller_test(args)
 
@@ -120,6 +171,12 @@ def main() -> int:
     
 
 def run_keyframe_test(args: argparse.Namespace) -> int:
+
+    if args.video is None:
+        raise ValueError(
+            "--video is required for the keyframe test."
+        )
+
     selector = KeyframeSelector(
         gaussian_sigma=5.0,
         prominence=0.8,
@@ -181,6 +238,12 @@ def run_keyframe_test(args: argparse.Namespace) -> int:
 def run_visual_prompting_test(
         args: argparse.Namespace,
     ) -> int:
+
+        if args.video is None:
+            raise ValueError(
+                "--video is required for the visual prompting test."
+            )
+
         if args.expected_keyframes is None:
             raise ValueError(
                 "--expected-keyframes is required for the visual_prompting test."
@@ -304,6 +367,12 @@ def run_visual_prompting_test(
 def run_action_planning_test(
         args: argparse.Namespace,
     ) -> int:
+
+        if args.video is None:
+            raise ValueError(
+                "--video is required for the action_planning test."
+            )
+
         if args.expected_keyframes is None:
             raise ValueError(
                 "--expected-keyframes is required for the action_planning test."
@@ -392,9 +461,248 @@ def run_action_planning_test(
 
         return 0
 
+def run_scene_perceiver_test(
+    args: argparse.Namespace,
+) -> int:
+    if args.scene_dir is None:
+        raise ValueError(
+            "--scene-dir is required for the scene_perceiver test."
+        )
+
+    if not args.model_config:
+        raise ValueError(
+            "--model-config is required for the scene_perceiver test."
+        )
+
+    if args.base_to_table_transform is None:
+        raise ValueError(
+            "--base-to-table-transform is required for "
+            "the scene_perceiver test."
+        )
+
+    scene_dir = args.scene_dir.expanduser().resolve()
+
+    rgb_path = scene_dir / "rgb.png"
+    depth_path = scene_dir / "depth.npy"
+    camera_info_path = scene_dir / "camera_info.yaml"
+
+    required_paths = (
+        rgb_path,
+        depth_path,
+        camera_info_path,
+        args.base_to_table_transform,
+        Path(args.model_config),
+    )
+
+    for path in required_paths:
+        if not path.is_file():
+            raise FileNotFoundError(
+                f"Required test input does not exist: {path}"
+            )
+
+    rgb_bgr = cv2.imread(
+        str(rgb_path)
+    )
+
+    if rgb_bgr is None:
+        raise RuntimeError(
+            f"Could not read RGB image: {rgb_path}"
+        )
+
+    rgb = cv2.cvtColor(
+        rgb_bgr,
+        cv2.COLOR_BGR2RGB,
+    )
+
+    depth = np.load(
+        depth_path
+    )
+
+    with camera_info_path.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        camera_info = yaml.safe_load(
+            stream
+        )
+
+    with args.base_to_table_transform.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        base_to_table_transform = yaml.safe_load(
+            stream
+        )
+
+    with Path(args.model_config).open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        config = yaml.safe_load(
+            stream
+        )
+
+    visual_config = config[
+        "visual_prompter"
+    ]
+
+    perception_config = config[
+        "scene_perceiver"
+    ]
+
+    perceiver = ScenePerceiver(
+        camera_calibration_path=perception_config[
+            "camera_calibration_path"
+        ],
+        camera_name=perception_config.get(
+            "camera_name",
+            "zed_front",
+        ),
+        grounding_config=visual_config[
+            "grounding_config"
+        ],
+        grounding_checkpoint=visual_config[
+            "grounding_checkpoint"
+        ],
+        bert_model=visual_config[
+            "bert_model"
+        ],
+        sam_checkpoint=visual_config[
+            "sam_checkpoint"
+        ],
+        detector_labels=perception_config[
+            "detector_labels"
+        ],
+    )
+
+    perception_result = perceiver.run(
+        rgb_image=rgb,
+        depth_image=depth,
+        camera_info=camera_info,
+        base_to_table_transform=base_to_table_transform,
+        artifacts_dir=args.artifacts_dir,
+    )
+
+    raw_scene = perception_result.raw_scene
+
+    if not raw_scene.objects:
+        raise AssertionError(
+            "ScenePerceiver returned no objects."
+        )
+
+    raw_ids = [
+        obj.object_id
+        for obj in raw_scene.objects
+    ]
+
+    if len(raw_ids) != len(
+        set(raw_ids)
+    ):
+        raise AssertionError(
+            "ScenePerceiver produced duplicate object IDs."
+        )
+
+    for obj in raw_scene.objects:
+        if not obj.object_id.strip():
+            raise AssertionError(
+                "Detected object has an empty object ID."
+            )
+
+        if not obj.label.strip():
+            raise AssertionError(
+                f"{obj.object_id} has an empty detector label."
+            )
+
+        if len(obj.pixel_coordinates) != 2:
+            raise AssertionError(
+                f"{obj.object_id} has invalid pixel coordinates."
+            )
+
+        if len(obj.position_camera) != 3:
+            raise AssertionError(
+                f"{obj.object_id} has invalid camera coordinates."
+            )
+
+        if len(obj.position_base) != 3:
+            raise AssertionError(
+                f"{obj.object_id} has invalid base coordinates."
+            )
+
+        if obj.mask is None:
+            raise AssertionError(
+                f"{obj.object_id} has no segmentation mask."
+            )
+
+    print("\n=== RAW SCENE STATE ===")
+    print(
+        f"Detected objects: {len(raw_scene.objects)}"
+    )
+
+    for obj in raw_scene.objects:
+        print()
+        print(
+            f"Object ID:        {obj.object_id}"
+        )
+        print(
+            f"Label:            {obj.label}"
+        )
+        print(
+            f"Pixel:            {obj.pixel_coordinates}"
+        )
+        print(
+            f"Confidence:       {obj.confidence}"
+        )
+        print(
+            f"Camera position:  {obj.position_camera}"
+        )
+        print(
+            f"Base position:    {obj.position_base}"
+        )
+    
+    if perception_result.overlay_image_path is None:
+        raise AssertionError(
+            "ScenePerceiver did not return an overlay path."
+        )
+
+    if not perception_result.overlay_image_path.is_file():
+        raise AssertionError(
+            "Raw scene overlay was not created: "
+            f"{perception_result.overlay_image_path}"
+        )
+
+    if perception_result.raw_scene_json_path is None:
+        raise AssertionError(
+            "ScenePerceiver did not return a raw-scene JSON path."
+        )
+
+    if not perception_result.raw_scene_json_path.is_file():
+        raise AssertionError(
+            "Raw scene JSON was not created: "
+            f"{perception_result.raw_scene_json_path}"
+        )
+
+    print(
+        "\nOverlay: "
+        f"{perception_result.overlay_image_path}"
+    )
+    print(
+        "Raw scene JSON: "
+        f"{perception_result.raw_scene_json_path}"
+    )
+
+    print("\nTEST PASSED")
+
+    return 0
+
 def run_seedo_controller_test(
         args: argparse.Namespace,
     ) -> int:
+
+        if args.video is None:
+            raise ValueError(
+                "--video is required for the integration test."
+            )
+        
         if not args.model_config:
             raise ValueError(
                 "--model-config is required for the seedo_controller test."

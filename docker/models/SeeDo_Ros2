@@ -233,7 +233,7 @@ RUN rm -rf \
 
 ENV UR_APPLICATION_ROOT="${ROS_WS}/src/UR5e-2f-85"
 
-ENV PYTHONPATH="/opt/ros/${ROS_DISTRO}/lib/python3.12/site-packages:${UR_APPLICATION_ROOT}/ai_controller:${UR_APPLICATION_ROOT}/models/SeeDo:/opt/models:${GROUNDING_DINO_ROOT}:${SAM_ROOT}:${SAM2_ROOT}"
+ENV PYTHONPATH="/opt/ros/${ROS_DISTRO}/lib/python3.12/site-packages:${UR_APPLICATION_ROOT}/ai_controller:${UR_APPLICATION_ROOT}/models/SeeDo:${UR_APPLICATION_ROOT}/models/SeeDo/VLM_CaP:/opt/models:${GROUNDING_DINO_ROOT}:${SAM_ROOT}:${SAM2_ROOT}"
 WORKDIR ${ROS_WS}
 
 RUN python -c "\
