@@ -144,16 +144,18 @@ def main() -> None:
         resize=True,
     )
 
-    video = pipe.generate_video(
-        vid_input=vid_input,
-        is_video_embedding=False,
-        num_latent_conditional_frames=num_latent_conditional_frames,
-        prompt_embedding=prompt_embedding,
-        guidance=args.guidance,
-        num_sampling_step=args.num_sampling_step,
-        seed=args.seed,
-        use_cuda_graphs=args.use_cuda_graphs,
-    )
+    # Durante l'inferenza non costruisco il grafo dei gradienti per i vari step di denoising.
+    with torch.inference_mode():
+        video = pipe.generate_video(
+            vid_input=vid_input,
+            is_video_embedding=False,
+            num_latent_conditional_frames=num_latent_conditional_frames,
+            prompt_embedding=prompt_embedding,
+            guidance=args.guidance,
+            num_sampling_step=args.num_sampling_step,
+            seed=args.seed,
+            use_cuda_graphs=args.use_cuda_graphs,
+        )
 
     save_image_or_video(video, str(output_video), fps=args.fps)
     print(f"saved: {output_video}")
