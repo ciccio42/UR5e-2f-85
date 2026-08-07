@@ -3,7 +3,10 @@ from __future__ import annotations
 import numpy as np
 import copy
 import shapely
+from pathlib import Path
+import json
 
+from dataclasses import asdict
 from typing import Any
 from openai import OpenAI
 from shapely.geometry import *
@@ -389,6 +392,7 @@ class LMPGenerator:
         scene_state: SceneState,
         workspace_bottom_left: tuple[float, float],
         workspace_top_right: tuple[float, float],
+        artifacts_dir: Path | None = None,
     ) -> PrimitivePlan:
         if action_plan.status != "completed":
             raise ValueError(
@@ -425,10 +429,50 @@ class LMPGenerator:
                 "CAP did not generate any robot primitive."
             )
 
-        return PrimitivePlan(
+        primitive_plan = PrimitivePlan(
             steps=tuple(wrapper.primitive_steps),
             source_code=lmp.exec_hist.strip(),
         )
+
+        if artifacts_dir is not None:
+            artifacts_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            artifacts_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            generated_program_path = (
+                artifacts_dir
+                / "generated_program.py"
+            )
+
+            generated_program_path.write_text(
+                primitive_plan.source_code,
+                encoding="utf-8",
+            )
+
+            primitive_plan_path = (
+                artifacts_dir
+                / "primitive_plan.json"
+            )
+
+            with primitive_plan_path.open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+                json.dump(
+                    asdict(primitive_plan),
+                    stream,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+        return primitive_plan
     
     def _setup_lmp(
         self,

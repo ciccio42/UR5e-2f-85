@@ -4,6 +4,7 @@ import argparse
 import cv2
 import numpy as np
 import yaml
+import torch
 
 from pathlib import Path
 from results import ScenePerceptionResult
@@ -364,6 +365,118 @@ def run_visual_prompting_test(
 
         print("\nTEST PASSED")
         return 0
+
+def build_action_planning_result(
+    args: argparse.Namespace,
+    artifacts_dir: Path,
+) -> ActionPlanningResult:
+    """Run the real visual-prompting and action-planning stages."""
+
+    if args.video is None:
+        raise ValueError(
+            "--video is required to build the action plan."
+        )
+
+    if args.expected_keyframes is None:
+        raise ValueError(
+            "--expected-keyframes is required to build the action plan."
+        )
+
+    expected_keyframes = tuple(
+        int(frame)
+        for frame in args.expected_keyframes
+    )
+
+    if len(expected_keyframes) != 2:
+        raise ValueError(
+            "Exactly two expected keyframes are required."
+        )
+
+    if expected_keyframes[0] >= expected_keyframes[1]:
+        raise ValueError(
+            "The first expected keyframe must precede "
+            "the second one."
+        )
+
+    artifacts_dir = (
+        Path(artifacts_dir)
+        .expanduser()
+        .resolve()
+    )
+
+    visual_artifacts_dir = (
+        artifacts_dir
+        / "visual_prompting"
+    )
+
+    action_artifacts_dir = (
+        artifacts_dir
+        / "action_planning"
+    )
+
+    visual_prompter = VisualPrompter(
+        grounding_config=args.grounding_config,
+        grounding_checkpoint=args.grounding_checkpoint,
+        bert_model=args.bert_model,
+        sam_checkpoint=args.sam_checkpoint,
+        sam2_checkpoint=args.sam2_checkpoint,
+    )
+
+    visual_result = visual_prompter.run(
+        video_path=args.video,
+        keyframes=expected_keyframes,
+        artifacts_dir=visual_artifacts_dir,
+    )
+
+    if not visual_result.annotated_video_path.is_file():
+        raise AssertionError(
+            "VisualPrompter did not produce an annotated video: "
+            f"{visual_result.annotated_video_path}"
+        )
+
+    if not visual_result.track_id_map:
+        raise AssertionError(
+            "VisualPrompter returned an empty track_id_map."
+        )
+
+    if not visual_result.key_frame_coordinates:
+        raise AssertionError(
+            "VisualPrompter returned empty key-frame coordinates."
+        )
+
+    planner = ActionPlanner()
+
+    action_result = planner.run(
+        annotated_video_path=(
+            visual_result.annotated_video_path
+        ),
+        keyframes=expected_keyframes,
+        track_id_map=visual_result.track_id_map,
+        key_frame_coordinates=(
+            visual_result.key_frame_coordinates
+        ),
+        artifacts_dir=action_artifacts_dir,
+    )
+
+    if action_result.status != "completed":
+        raise AssertionError(
+            "LMP integration requires a completed action plan, "
+            f"but ActionPlanner returned "
+            f"'{action_result.status}'. "
+            f"Ambiguities: {action_result.ambiguities}"
+        )
+
+    if not action_result.steps:
+        raise AssertionError(
+            "Completed ActionPlanningResult contains no steps."
+        )
+
+    if not action_result.natural_language_plan.strip():
+        raise AssertionError(
+            "ActionPlanner returned an empty natural-language plan."
+        )
+
+    return action_result
 
 def run_action_planning_test(
         args: argparse.Namespace,
@@ -766,6 +879,135 @@ def run_scene_perceiver_test(
 
     return 0
 
+def build_scene_state(
+    args: argparse.Namespace,
+    artifacts_dir: Path,
+) -> SceneState:
+    """Run the real runtime perception and semantic interpretation stages."""
+
+    if not args.model_config:
+        raise ValueError(
+            "--model-config is required to build SceneState."
+        )
+
+    artifacts_dir = (
+        Path(artifacts_dir)
+        .expanduser()
+        .resolve()
+    )
+
+    perception_artifacts_dir = (
+        artifacts_dir
+        / "scene_perception"
+    )
+
+    interpretation_artifacts_dir = (
+        artifacts_dir
+        / "scene_interpretation"
+    )
+
+    original_artifacts_dir = (
+        args.artifacts_dir
+    )
+
+    try:
+        args.artifacts_dir = (
+            perception_artifacts_dir
+        )
+
+        perception_result = (
+            build_scene_perception_result(
+                args
+            )
+        )
+
+    finally:
+        args.artifacts_dir = (
+            original_artifacts_dir
+        )
+
+    if not perception_result.raw_scene.objects:
+        raise AssertionError(
+            "ScenePerceiver returned no objects."
+        )
+
+    if (
+        perception_result.overlay_image_path
+        is None
+    ):
+        raise AssertionError(
+            "ScenePerceiver did not produce "
+            "the semantic-interpreter overlay."
+        )
+
+    if (
+        not perception_result
+        .overlay_image_path
+        .is_file()
+    ):
+        raise AssertionError(
+            "ScenePerceiver overlay does not exist: "
+            f"{perception_result.overlay_image_path}"
+        )
+
+    model_config_path = (
+        Path(args.model_config)
+        .expanduser()
+        .resolve()
+    )
+
+    if not model_config_path.is_file():
+        raise FileNotFoundError(
+            "SeeDo controller configuration does not exist: "
+            f"{model_config_path}"
+        )
+
+    with model_config_path.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        config = yaml.safe_load(
+            stream
+        )
+
+    interpreter_config = config.get(
+        "scene_interpreter",
+        {},
+    )
+
+    interpreter = SceneInterpreter(
+        model=interpreter_config.get(
+            "model",
+            "gpt-4o-2024-08-06",
+        ),
+    )
+
+    scene_state = interpreter.run(
+        perception_result=perception_result,
+        artifacts_dir=(
+            interpretation_artifacts_dir
+        ),
+    )
+
+    if not scene_state.objects:
+        raise AssertionError(
+            "SceneInterpreter returned no semantic objects."
+        )
+
+    object_ids = [
+        obj.object_id
+        for obj in scene_state.objects
+    ]
+
+    if len(object_ids) != len(
+        set(object_ids)
+    ):
+        raise AssertionError(
+            "SceneInterpreter produced duplicate semantic IDs."
+        )
+
+    return scene_state
+
 def run_scene_interpreter_test(
     args: argparse.Namespace,
 ) -> int:
@@ -1016,6 +1258,383 @@ def run_scene_interpreter_test(
         )
 
     print("\nTEST PASSED")
+
+    return 0
+
+def run_lmp_generator_test(
+    args: argparse.Namespace,
+) -> int:
+    """Integration test from demo interpretation to CAP primitive generation."""
+
+    if args.artifacts_dir is None:
+        raise ValueError(
+            "--artifacts-dir is required for "
+            "the lmp_generator test."
+        )
+
+    if not args.model_config:
+        raise ValueError(
+            "--model-config is required for "
+            "the lmp_generator test."
+        )
+
+    artifacts_dir = (
+        Path(args.artifacts_dir)
+        .expanduser()
+        .resolve()
+    )
+
+    artifacts_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    upstream_artifacts_dir = (
+        artifacts_dir
+        / "_upstream"
+    )
+
+    upstream_artifacts_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # ------------------------------------------------------------
+    # 1. Demo-side planning
+    # ------------------------------------------------------------
+
+    print(
+        "\n=== BUILDING ACTION PLAN ==="
+    )
+
+    action_plan = (
+        build_action_planning_result(
+            args=args,
+            artifacts_dir=(
+                upstream_artifacts_dir
+            ),
+        )
+    )
+
+    print(
+        "CUDA autocast active after VisualPrompter:",
+        torch.is_autocast_enabled("cuda"),
+    )
+
+    print(
+        "Action-plan status: "
+        f"{action_plan.status}"
+    )
+
+    print(
+        "Natural-language plan: "
+        f"{action_plan.natural_language_plan}"
+    )
+
+    # ------------------------------------------------------------
+    # 2. Runtime scene understanding
+    # ------------------------------------------------------------
+
+    print(
+        "\n=== BUILDING SEMANTIC SCENE ==="
+    )
+
+    scene_state = build_scene_state(
+        args=args,
+        artifacts_dir=(
+            upstream_artifacts_dir
+        ),
+    )
+
+    print(
+        f"Scene objects: "
+        f"{len(scene_state.objects)}"
+    )
+
+    for obj in scene_state.objects:
+        print(
+            f"  - {obj.object_id} "
+            f"[{obj.label}] "
+            f"@ {obj.position_base}"
+        )
+
+    # ------------------------------------------------------------
+    # 3. Configuration
+    # ------------------------------------------------------------
+
+    model_config_path = (
+        Path(args.model_config)
+        .expanduser()
+        .resolve()
+    )
+
+    if not model_config_path.is_file():
+        raise FileNotFoundError(
+            "SeeDo controller configuration does not exist: "
+            f"{model_config_path}"
+        )
+
+    with model_config_path.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        config = yaml.safe_load(
+            stream
+        )
+
+    lmp_config = config.get(
+        "lmp_generator",
+        {},
+    )
+
+    perception_config = config.get(
+        "scene_perceiver",
+        {},
+    )
+
+    if "workspace_bottom_left" not in perception_config:
+        raise KeyError(
+            "Missing scene_perceiver.workspace_bottom_left "
+            "in model configuration."
+        )
+
+    if "workspace_top_right" not in perception_config:
+        raise KeyError(
+            "Missing scene_perceiver.workspace_top_right "
+            "in model configuration."
+        )
+
+    workspace_bottom_left = tuple(
+        float(value)
+        for value in perception_config[
+            "workspace_bottom_left"
+        ]
+    )
+
+    workspace_top_right = tuple(
+        float(value)
+        for value in perception_config[
+            "workspace_top_right"
+        ]
+    )
+
+    # ------------------------------------------------------------
+    # 4. Real CAP / LMP generation
+    # ------------------------------------------------------------
+
+    print(
+        "\n=== RUNNING LMP GENERATOR ==="
+    )
+
+    generator = LMPGenerator(
+        model=lmp_config.get(
+            "model",
+            "gpt-4o-2024-08-06",
+        ),
+    )
+
+    primitive_plan = generator.run(
+        action_plan=action_plan,
+        scene_state=scene_state,
+        workspace_bottom_left=(
+            workspace_bottom_left
+        ),
+        workspace_top_right=(
+            workspace_top_right
+        ),
+        artifacts_dir=artifacts_dir,
+    )
+
+    # ------------------------------------------------------------
+    # 5. Structural validation
+    # ------------------------------------------------------------
+
+    if not primitive_plan.steps:
+        raise AssertionError(
+            "LMPGenerator returned an empty PrimitivePlan."
+        )
+
+    if not primitive_plan.source_code.strip():
+        raise AssertionError(
+            "LMPGenerator returned empty CAP source code."
+        )
+
+    allowed_primitives = {
+        "reach",
+        "approaching",
+        "pick",
+        "lift_up",
+        "moving",
+        "placing",
+    }
+
+    scene_object_ids = {
+        obj.object_id
+        for obj in scene_state.objects
+    }
+
+    for index, step in enumerate(
+        primitive_plan.steps,
+        start=1,
+    ):
+        if step.name not in allowed_primitives:
+            raise AssertionError(
+                "CAP generated an unsupported primitive "
+                f"at step {index}: '{step.name}'."
+            )
+
+        if "target" not in step.arguments:
+            raise AssertionError(
+                "Primitive step does not contain a target: "
+                f"{step}"
+            )
+
+        target = step.arguments[
+            "target"
+        ]
+
+        if not isinstance(target, str):
+            raise AssertionError(
+                "Primitive target must be a string: "
+                f"{step}"
+            )
+
+        if target not in scene_object_ids:
+            raise AssertionError(
+                "CAP generated a primitive targeting an object "
+                "that does not exist in SceneState: "
+                f"'{target}'."
+            )
+
+    # ------------------------------------------------------------
+    # 6. Pick/place sequence sanity checks
+    # ------------------------------------------------------------
+
+    primitive_names = [
+        step.name
+        for step in primitive_plan.steps
+    ]
+
+    if "pick" not in primitive_names:
+        raise AssertionError(
+            "PrimitivePlan does not contain a pick primitive."
+        )
+
+    if "placing" not in primitive_names:
+        raise AssertionError(
+            "PrimitivePlan does not contain a placing primitive."
+        )
+
+    first_pick_index = (
+        primitive_names.index(
+            "pick"
+        )
+    )
+
+    first_placing_index = (
+        primitive_names.index(
+            "placing"
+        )
+    )
+
+    if first_pick_index >= first_placing_index:
+        raise AssertionError(
+            "The first placing primitive occurs before "
+            "the first pick primitive."
+        )
+
+    # ------------------------------------------------------------
+    # 7. Artifact validation
+    # ------------------------------------------------------------
+
+    generated_program_path = (
+        artifacts_dir
+        / "generated_program.py"
+    )
+
+    primitive_plan_path = (
+        artifacts_dir
+        / "primitive_plan.json"
+    )
+
+    required_artifacts = (
+        generated_program_path,
+        primitive_plan_path,
+    )
+
+    for artifact_path in required_artifacts:
+        if not artifact_path.is_file():
+            raise AssertionError(
+                "Missing LMPGenerator artifact: "
+                f"{artifact_path}"
+            )
+
+        if artifact_path.stat().st_size == 0:
+            raise AssertionError(
+                "Empty LMPGenerator artifact: "
+                f"{artifact_path}"
+            )
+
+    generated_program = (
+        generated_program_path
+        .read_text(
+            encoding="utf-8",
+        )
+        .strip()
+    )
+
+    if (
+        generated_program
+        != primitive_plan.source_code.strip()
+    ):
+        raise AssertionError(
+            "generated_program.py does not match "
+            "PrimitivePlan.source_code."
+        )
+
+    # ------------------------------------------------------------
+    # 8. Human-readable result
+    # ------------------------------------------------------------
+
+    print(
+        "\n=== PRIMITIVE PLAN ==="
+    )
+
+    print(
+        f"Primitive count: "
+        f"{len(primitive_plan.steps)}"
+    )
+
+    for index, step in enumerate(
+        primitive_plan.steps,
+        start=1,
+    ):
+        print(
+            f"  {index}. "
+            f"{step.name}"
+            f"({step.arguments})"
+        )
+
+    print(
+        "\n=== GENERATED CAP PROGRAM ==="
+    )
+
+    print(
+        primitive_plan.source_code
+    )
+
+    print(
+        "\nArtifacts:"
+    )
+
+    for artifact_path in required_artifacts:
+        print(
+            f"  {artifact_path}"
+        )
+
+    print(
+        "\nTEST PASSED"
+    )
 
     return 0
 
