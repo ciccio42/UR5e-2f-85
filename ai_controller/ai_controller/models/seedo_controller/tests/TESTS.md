@@ -4,6 +4,11 @@ The following tests validate the modular SeeDo controller pipeline.
 
 Each stage can be executed independently or as part of the complete end-to-end pipeline.
 
+Artifact storage supports two modes:
+
+- **Persistent mode**: when `--artifacts-dir` is provided, generated artifacts are stored in the specified directory and preserved after execution.
+- **Temporary mode**: when `--artifacts-dir` is omitted, `SeeDoController` automatically creates a temporary directory under `/tmp`. The temporary artifacts remain available during execution and are automatically removed when the controller is reset.
+
 ---
 
 # 1. Keyframe Selection
@@ -182,6 +187,10 @@ The test first processes the demonstration video through `load_command()`. It th
 
 Finally, the generated primitive plan is consumed step by step through subsequent calls to `inference(t)`.
 
+## Persistent artifact mode
+
+Providing `--artifacts-dir` stores and preserves all generated artifacts.
+
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage seedo_controller \
@@ -192,7 +201,44 @@ python -m ai_controller.models.seedo_controller.tests \
   --artifacts-dir /seedo_tests/seedo_controller
 ```
 
-Pipeline:
+The resulting artifact structure is:
+
+```text
+/seedo_tests/seedo_controller/
+├── keyframe_selection/
+├── visual_prompting/
+├── action_planning/
+├── scene_perceiver/
+├── scene_interpreter/
+└── lmp_generator/
+```
+
+Calling `controller.reset()` clears the controller state but does not remove these files.
+
+## Temporary artifact mode
+
+Omitting `--artifacts-dir` enables automatic temporary artifact storage.
+
+```bash
+python -m ai_controller.models.seedo_controller.tests \
+  --stage seedo_controller \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+  --scene-dir /scene_capture \
+  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml
+```
+
+During execution, the controller automatically creates a directory similar to:
+
+```text
+/tmp/seedo_xxxxxxxx/
+```
+
+All pipeline stages use this directory exactly as in persistent mode.
+
+When `controller.reset()` is called, the temporary directory and its contents are automatically removed.
+
+## Controller pipeline
 
 ```text
 Demonstration Video
@@ -219,29 +265,13 @@ SeeDoController.inference(t=0)
     ▼
 PrimitivePlan
     │
-    ▼
-SeeDoController.inference(t=1)
+    ├── inference(t=1) → PrimitiveStep #1
+    ├── inference(t=2) → PrimitiveStep #2
+    ├── ...
+    └── inference(t=N) → PrimitiveStep #N
     │
     ▼
-PrimitiveStep #1
-    │
-    ▼
-SeeDoController.inference(t=2)
-    │
-    ▼
-PrimitiveStep #2
-    │
-    ▼
-...
-    │
-    ▼
-SeeDoController.inference(t=N)
-    │
-    ▼
-PrimitiveStep #N
-    │
-    ▼
-SeeDoController.inference(t=N+1)
+inference(t=N+1)
     │
     ▼
 Completed
@@ -260,19 +290,8 @@ The test validates:
 - step-by-step primitive retrieval through `inference(t)`
 - consistency between returned primitive steps and the generated `PrimitivePlan`
 - transition to the `completed` execution state
-- persistent artifact generation
+- persistent artifact generation and preservation
+- temporary artifact generation and automatic cleanup
 - controller reset
 
-With `--artifacts-dir /seedo_tests/seedo_controller`, the complete controller test stores persistent artifacts under:
-
-```text
-/seedo_tests/seedo_controller/
-├── keyframe_selection/
-├── visual_prompting/
-├── action_planning/
-├── scene_perceiver/
-├── scene_interpreter/
-└── lmp_generator/
-```
-
-The test does not execute physical robot motion. The primitive sequence is generated and consumed step by step through the controller interface, while actual robot execution is left to the motion/execution layer.
+The test does not execute physical robot motion. The primitive sequence is generated and consumed step by step through the controller interface. Actual robot execution is left to the motion/execution layer.

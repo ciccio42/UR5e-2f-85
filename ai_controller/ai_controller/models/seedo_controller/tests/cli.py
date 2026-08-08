@@ -24,8 +24,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--artifacts-dir",
         type=Path,
-        default=Path("artifacts"),
-        help="Optional directory for debug artifacts and previews.",
+        default=None,
+        help=(
+            "Optional directory for persistent debug artifacts. "
+            "If omitted, temporary artifact storage is used."
+        ),
     )
     parser.add_argument(
         "--expected-keyframes",
