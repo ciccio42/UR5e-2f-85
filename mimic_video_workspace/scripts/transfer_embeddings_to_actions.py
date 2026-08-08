@@ -175,3 +175,86 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+
+
+# Verifica dell'aggiornamento degli action safetensor da terminale dopo l'esecuzione.
+'''
+python - <<'PY'
+from pathlib import Path
+
+import numpy as np
+from safetensors.numpy import load_file
+
+path = Path(
+    "mimic_video_workspace/processed_data/"
+    "ur5e_pick_place_action/ep_000000.safetensors"
+)
+
+data = load_file(path)
+
+required = [
+    "language_embedding",
+    "language_embedding_timestamps",
+    "workspace_rgb_embedding",
+    "workspace_rgb_embedding_timestamps",
+    "num_conditional_frames",
+    "num_conditional_frames_timestamps",
+]
+
+print(f"\nFile: {path.resolve()}")
+print(f"Dimensione: {path.stat().st_size / 1024**2:.2f} MiB")
+
+print("\n========== CHIAVI EMBEDDING ==========")
+for key in required:
+    if key not in data:
+        print(f"MISSING  {key}")
+        continue
+
+    value = data[key]
+    print(f"OK       {key:42s} shape={value.shape}, dtype={value.dtype}")
+
+missing = [key for key in required if key not in data]
+if missing:
+    raise RuntimeError(f"Chiavi mancanti: {missing}")
+
+video_embeddings = data["workspace_rgb_embedding"]
+video_timestamps = data["workspace_rgb_embedding_timestamps"]
+
+assert len(video_embeddings) == len(video_timestamps), (
+    f"Embedding/timestamp non allineati: "
+    f"{len(video_embeddings)} != {len(video_timestamps)}"
+)
+
+assert len(data["language_embedding"]) == len(
+    data["language_embedding_timestamps"]
+)
+
+assert len(data["num_conditional_frames"]) == len(
+    data["num_conditional_frames_timestamps"]
+)
+
+assert np.all(np.diff(video_timestamps.astype(np.int64)) >= 0), (
+    "I timestamp degli embedding video non sono ordinati"
+)
+
+print("\n========== VALORI ==========")
+print(f"Numero embedding video:    {len(video_embeddings)}")
+print(f"Timestamp embedding:       {video_timestamps.tolist()}")
+print(
+    "Num conditional frames:  "
+    f"{data['num_conditional_frames'].tolist()}"
+)
+print(
+    "Timestamp testo:         "
+    f"{data['language_embedding_timestamps'].tolist()}"
+)
+print(
+    "Timestamp metadata:      "
+    f"{data['num_conditional_frames_timestamps'].tolist()}"
+)
+
+print("\nControllo completato correttamente.")
+PY
+'''

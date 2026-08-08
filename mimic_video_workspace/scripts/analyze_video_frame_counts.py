@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Analyze frame-count distribution for preprocessed UR5e mp4 videos."""
+# Codice utile solo come diagnosi prima di estendere i video mp4 a 64 frame minimo.
 
 from __future__ import annotations
 

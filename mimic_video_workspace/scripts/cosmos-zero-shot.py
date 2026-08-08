@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 """Run Cosmos zero-shot generation from the first frames and precomputed T5 embedding."""
+# Rispetto al codice degli autori questo codice di zero shot permette di non caricare
+# ed eseguire T5 per gli embeddings testuali ma usa embedding già precalcolati.
+# Inoltre di un video usato come traiettoria, estrae solo i primi 5 frame iniziali
+# che sono la base che utilizzerà Cosmos per predire il resto della traiettoria
+
 
 from __future__ import annotations
 
