@@ -6,6 +6,7 @@ Run the following command from the repository root (`UR5e-2f-85`):
 
 ```bash
 docker build \
+    --build-arg BASE_IMAGE=ur_robotiq_teleoperation:latest \
     -f docker/models/SeeDo_Ros2 \
     -t seedo_ros2:latest \
     .
@@ -17,12 +18,15 @@ docker build \
 
 ```bash
 docker run --rm -it \
+    --name seedo_ros2_container \
     --gpus all \
     --network host \
     -v /home/mivia/Desktop/UR-Application/UR5e-2f-85:/home/ros2_ws/src/UR5e-2f-85 \
     -v /home/mivia/Desktop/UR-Application/test_dataset:/test_dataset:ro \
     -v /home/mivia/Desktop/UR-Application/seedo_tests:/seedo_tests \
-    -e OPENAI_API_KEY=$OPENAI_API_KEY \
+    -v /home/mivia/Desktop/UR-Application/scene_capture:/scene_capture:ro \
+    -e OPENAI_API_KEY="$OPENAI_API_KEY" \
+    -e BUILD_SEEDO_ROS=1 \
     seedo_ros2:latest
 ```
 

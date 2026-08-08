@@ -16,7 +16,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image as RosImage, JointState
+from sensor_msgs.msg import Image as RosImage, JointState, CameraInfo
 from PIL import Image
 import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
@@ -90,7 +90,27 @@ class AIControllerNode(Node):
         self.declare_parameter('eef_frame_name', 'tcp_link')
         self.declare_parameter('move_robot', False)
 
-
+        # SeeDo-specific parameters
+        self.declare_parameter(
+            'seedo_depth_topic',
+            '/zed_front/zed_node/depth/depth_registered',
+        )
+        self.declare_parameter(
+            'seedo_camera_info_topic',
+            '/zed_front/zed_node/rgb/color/rect/camera_info',
+        )
+        self.declare_parameter(
+            'seedo_rgb_topic',
+            '/zed_front/zed_node/rgb/color/rect/image',
+        )
+        self.declare_parameter(
+            'seedo_table_frame',
+            'table_0',
+        )
+        self.declare_parameter(
+            'seedo_artifacts_dir',
+            '',
+        )
 
         # get parameters
         self.ai_controller_target = self.get_parameter('ai_controller_target').get_parameter_value().string_value
@@ -111,6 +131,27 @@ class AIControllerNode(Node):
         self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
         self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
         self.move_robot = self.get_parameter('move_robot').get_parameter_value().bool_value
+
+        self.seedo_depth_topic = self.get_parameter(
+            'seedo_depth_topic'
+        ).get_parameter_value().string_value
+
+        self.seedo_camera_info_topic = self.get_parameter(
+            'seedo_camera_info_topic'
+        ).get_parameter_value().string_value
+
+        self.seedo_rgb_topic = self.get_parameter(
+            'seedo_rgb_topic'
+        ).get_parameter_value().string_value
+
+        self.seedo_table_frame = self.get_parameter(
+            'seedo_table_frame'
+        ).get_parameter_value().string_value
+
+        self.seedo_artifacts_dir = self.get_parameter(
+            'seedo_artifacts_dir'
+        ).get_parameter_value().string_value
+
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
@@ -124,9 +165,20 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'openvla_controller':
             from ai_controller.models.openvla_controller.openvla_controller import OpenVLAController
             self.controller = OpenVLAController(self.model_config_path, self.task_name)
+
         elif self.ai_controller_target == 'tinyvla_controller':
             from ai_controller.models.tinyvla_controller.tinyvla_controller import TinyVLAController
             self.controller = TinyVLAController(self.model_config_path, self.task_name)
+
+        elif self.ai_controller_target == 'seedo_controller':
+            from ai_controller.models.seedo_controller.seedo_controller import (
+                SeeDoController,
+            )
+
+            self.controller = SeeDoController(
+                model_config=self.model_config_path,
+            )
+
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -143,23 +195,24 @@ class AIControllerNode(Node):
         os.makedirs(self.save_rollout_path, exist_ok=True)
         
         # 2. Set up ROS2 interfaces (publishers, subscribers, services)
-        self.get_logger().info(f'Waiting for service {self.set_home_service}...')
-        self.set_home_client = self.create_client(GoHome, self.set_home_service)
-        self.set_home_client.wait_for_service()
-        self.get_logger().info(f'Service {self.set_home_service} is available.')
-        
-        self.get_logger().info(f'Waiting for service {self.set_pose_service}...')
-        self.set_pose_client = self.create_client(GoToPose, self.set_pose_service)
-        self.set_pose_client.wait_for_service()
-        self.get_logger().info(f'Service {self.set_pose_service} is available.')
-        
-        self.get_logger().info(f"Creating publisher for gripper action on topic {self.gripper_action_topic}...")
-        self.gripper_action_client = ActionClient(
-            self,
-            GripperCommand,
-            self.gripper_action_topic,
-        )
-        self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
+        if self.ai_controller_target != 'seedo_controller':
+            self.get_logger().info(f'Waiting for service {self.set_home_service}...')
+            self.set_home_client = self.create_client(GoHome, self.set_home_service)
+            self.set_home_client.wait_for_service()
+            self.get_logger().info(f'Service {self.set_home_service} is available.')
+            
+            self.get_logger().info(f'Waiting for service {self.set_pose_service}...')
+            self.set_pose_client = self.create_client(GoToPose, self.set_pose_service)
+            self.set_pose_client.wait_for_service()
+            self.get_logger().info(f'Service {self.set_pose_service} is available.')
+            
+            self.get_logger().info(f"Creating publisher for gripper action on topic {self.gripper_action_topic}...")
+            self.gripper_action_client = ActionClient(
+                self,
+                GripperCommand,
+                self.gripper_action_topic,
+            )
+            self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
 
         # Robot-state capture: joint states + TF (base_link -> eef_frame_name), used to
         # record the actually-executed rollout as a Trajectory (see save_rollout()).
@@ -174,31 +227,39 @@ class AIControllerNode(Node):
             )
             self._load_debug_trajectory(self.debug_trajectory_path)
         else:
-            # 3. Wait for camera topics to be available
-            self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
-            for camera_topic in self.camera_topic:
-                self.get_logger().info(f'Waiting for camera topic: {camera_topic}')
-                # wait for the topic to be available
-                find = False
-                while not find:
-                    topics_info = self.get_topic_names_and_types()
-                    for topic_info in topics_info:
-                        topic_name = topic_info[0]
-                        if topic_name == camera_topic:
-                            self.get_logger().info(f'Camera topic {camera_topic} is available.')
-                            find = True
-                            break
+            if self.ai_controller_target != 'seedo_controller':
+                # 3. Wait for camera topics to be available
+                self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
+                for camera_topic in self.camera_topic:
+                    self.get_logger().info(f'Waiting for camera topic: {camera_topic}')
+                    # wait for the topic to be available
+                    find = False
+                    while not find:
+                        topics_info = self.get_topic_names_and_types()
+                        for topic_info in topics_info:
+                            topic_name = topic_info[0]
+                            if topic_name == camera_topic:
+                                self.get_logger().info(f'Camera topic {camera_topic} is available.')
+                                find = True
+                                break
 
-                    if not find:
-                        self.get_logger().info(f'Camera topic {camera_topic} not available yet. Waiting...')
-                        rclpy.spin_once(self, timeout_sec=1.0)
+                        if not find:
+                            self.get_logger().info(f'Camera topic {camera_topic} not available yet. Waiting...')
+                            rclpy.spin_once(self, timeout_sec=1.0)
 
-                self.get_logger().info(f'Camera topic {camera_topic} is available.')
+                    self.get_logger().info(f'Camera topic {camera_topic} is available.')
 
             # 4. Set up synchronized camera subscribers
             self.bridge = CvBridge()
             self.latest_synced_images = None
             self.synced_images_event = threading.Event()
+
+            # SeeDo runtime perception state
+            self.seedo_rgb_msg = None
+            self.seedo_depth_msg = None
+            self.seedo_camera_info_msg = None
+
+            self.seedo_rgbd_event = threading.Event()
 
             self.camera_subs = [
                 message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
@@ -209,13 +270,247 @@ class AIControllerNode(Node):
             )
             self.camera_sync.registerCallback(self.synced_images_callback)
 
+            # SeeDo RGB-D subscribers
+            if self.ai_controller_target == 'seedo_controller':
+                self.seedo_rgb_sub = message_filters.Subscriber(
+                    self,
+                    RosImage,
+                    self.seedo_rgb_topic,
+                    qos_profile=qos_profile_sensor_data,
+                )
+
+                self.seedo_depth_sub = message_filters.Subscriber(
+                    self,
+                    RosImage,
+                    self.seedo_depth_topic,
+                    qos_profile=qos_profile_sensor_data,
+                )
+
+                self.seedo_rgbd_sync = (
+                    message_filters.ApproximateTimeSynchronizer(
+                        [
+                            self.seedo_rgb_sub,
+                            self.seedo_depth_sub,
+                        ],
+                        queue_size=10,
+                        slop=0.1,
+                    )
+                )
+
+                self.seedo_rgbd_sync.registerCallback(
+                    self._seedo_rgbd_callback
+                )
+
+                self.seedo_camera_info_sub = self.create_subscription(
+                    CameraInfo,
+                    self.seedo_camera_info_topic,
+                    self._seedo_camera_info_callback,
+                    qos_profile_sensor_data,
+                )
+
         self.traj_cnt = 0
         self.max_step = 90
         self.gripper_closed = False
         self.previous_gripper_position = 0.0    
 
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
-        self.control_loop()
+        # self.control_loop()
+
+    def _lookup_transform(
+        self,
+        target_frame,
+        source_frame,
+        max_attempts=100,
+    ):
+        last_exc = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return self.tf_buffer.lookup_transform(
+                    target_frame,
+                    source_frame,
+                    rclpy.time.Time(),
+                )
+            except (
+                tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException,
+            ) as exc:
+                last_exc = exc
+
+                self.get_logger().warning(
+                    f'lookup_transform('
+                    f'{target_frame} -> {source_frame}) failed '
+                    f'(attempt {attempt}/{max_attempts}): {exc}'
+                )
+
+                rclpy.spin_once(
+                    self,
+                    timeout_sec=0.1,
+                )
+
+        raise RuntimeError(
+            f'Failed to look up transform '
+            f'{target_frame} -> {source_frame} after '
+            f'{max_attempts} attempts: {last_exc}'
+        )
+
+    def _get_seedo_base_to_table_transform(self):
+        """Return the current table_0 -> base_link transform in SeeDo format.
+
+        The returned transform maps points expressed in table_0 coordinates
+        into base_link coordinates:
+
+            p_base = R_base_table @ p_table + t_base_table
+
+        Returns
+        -------
+        dict
+            {
+                "rotation": np.ndarray shape (3, 3),
+                "translation": np.ndarray shape (3,)
+            }
+        """
+        transform = self._lookup_transform(
+            self.frame_id,          # base_link
+            self.seedo_table_frame  # table_0
+        )
+
+        t = transform.transform.translation
+        q = transform.transform.rotation
+
+        quat = np.array(
+            [q.x, q.y, q.z, q.w],
+            dtype=np.float64,
+        )
+
+        return {
+            "rotation": _quat2mat(quat),
+            "translation": np.array(
+                [t.x, t.y, t.z],
+                dtype=np.float64,
+            ),
+        }
+
+    def _seedo_rgbd_callback(
+        self,
+        rgb_msg: RosImage,
+        depth_msg: RosImage,
+    ):
+        self.seedo_rgb_msg = rgb_msg
+        self.seedo_depth_msg = depth_msg
+        self.seedo_rgbd_event.set()
+
+
+    def _seedo_camera_info_callback(
+        self,
+        msg: CameraInfo,
+    ):
+        self.seedo_camera_info_msg = msg
+
+    def _get_seedo_artifacts_dir(self):
+        if not self.seedo_artifacts_dir.strip():
+            return None
+
+        return self.seedo_artifacts_dir
+
+    def _wait_for_seedo_runtime_data(
+        self,
+        timeout: float = 10.0,
+    ) -> None:
+        if not self.seedo_rgbd_event.wait(timeout=timeout):
+            raise TimeoutError(
+                "Timed out waiting for synchronized SeeDo RGB-D data."
+            )
+
+        if self.seedo_camera_info_msg is None:
+            raise RuntimeError(
+                "RGB-D data is available, but CameraInfo "
+                "has not been received yet."
+            )
+
+    def _get_seedo_runtime_input(
+        self,
+        base_to_table_transform,
+    ):
+        if self.seedo_rgb_msg is None:
+            raise RuntimeError(
+                "No synchronized SeeDo RGB frame is available."
+            )
+
+        if self.seedo_depth_msg is None:
+            raise RuntimeError(
+                "No synchronized SeeDo depth frame is available."
+            )
+
+        if self.seedo_camera_info_msg is None:
+            raise RuntimeError(
+                "No SeeDo CameraInfo message is available."
+            )
+
+        rgb_image = self.bridge.imgmsg_to_cv2(
+            self.seedo_rgb_msg,
+            desired_encoding="rgb8",
+        )
+
+        depth_image = self.bridge.imgmsg_to_cv2(
+            self.seedo_depth_msg,
+            desired_encoding="passthrough",
+        )
+
+        camera_info_msg = self.seedo_camera_info_msg
+
+        camera_info = {
+            "height": camera_info_msg.height,
+            "width": camera_info_msg.width,
+            "distortion_model": camera_info_msg.distortion_model,
+            "d": list(camera_info_msg.d),
+            "k": list(camera_info_msg.k),
+            "r": list(camera_info_msg.r),
+            "p": list(camera_info_msg.p),
+        }
+
+        return self._build_seedo_runtime_input(
+            rgb_image=rgb_image,
+            depth_image=depth_image,
+            camera_info=camera_info,
+            base_to_table_transform=base_to_table_transform,
+        )
+
+    def _build_seedo_runtime_input(
+        self,
+        rgb_image,
+        depth_image,
+        camera_info,
+        base_to_table_transform,
+    ):
+        if rgb_image is None:
+            raise ValueError(
+                "SeeDo runtime input is missing the RGB image."
+            )
+
+        if depth_image is None:
+            raise ValueError(
+                "SeeDo runtime input is missing the depth image."
+            )
+
+        if camera_info is None:
+            raise ValueError(
+                "SeeDo runtime input is missing camera_info."
+            )
+
+        if base_to_table_transform is None:
+            raise ValueError(
+                "SeeDo runtime input is missing "
+                "base_to_table_transform."
+            )
+
+        return {
+            "rgb": rgb_image,
+            "depth": depth_image,
+            "camera_info": camera_info,
+            "base_to_table_transform": base_to_table_transform,
+        }
 
     def synced_images_callback(self, *image_msgs):
         """Called once per cycle when all camera topics have a message within the sync window."""
@@ -509,12 +804,76 @@ class AIControllerNode(Node):
             
             # create a new trajectory
             traj = Trajectory()
+
+            # SeeDo runtime state
+            seedo_runtime_input = None
+            seedo_primitive_count = None
             
             for step in range(self.max_step):
                 
                 if step == 0:
                     # resetting controller state for the new task
                     self.controller.reset()
+
+                    if self.ai_controller_target == 'seedo_controller':
+                        self.get_logger().info(
+                            f'Loading SeeDo demo data for task ID: {enter_task_id}'
+                        )
+
+                        self.controller.load_command(
+                            demo_path=self.demo_path,
+                            task_id=enter_task_id,
+                            artifacts_dir=self._get_seedo_artifacts_dir(),
+                        )
+
+                        self.get_logger().info(
+                            'Waiting for SeeDo runtime RGB-D data...'
+                        )
+
+                        self._wait_for_seedo_runtime_data()
+
+                        base_to_table_transform = (
+                            self._get_seedo_base_to_table_transform()
+                        )
+
+                        seedo_runtime_input = self._get_seedo_runtime_input(
+                            base_to_table_transform
+                        )
+
+                        self.get_logger().info(
+                            'Running SeeDo runtime perception and planning...'
+                        )
+
+                        result = self.controller.inference(
+                            input_data=seedo_runtime_input,
+                            t=0,
+                        )
+
+                        if result is not None:
+                            raise RuntimeError(
+                                'SeeDo inference(t=0) must return None.'
+                            )
+
+                        if self.controller.primitive_plan is None:
+                            raise RuntimeError(
+                                'SeeDo did not generate a PrimitivePlan.'
+                            )
+
+                        seedo_primitive_count = len(
+                            self.controller.primitive_plan.steps
+                        )
+
+                        if seedo_primitive_count == 0:
+                            raise RuntimeError(
+                                'SeeDo generated an empty PrimitivePlan.'
+                            )
+
+                        self.get_logger().info(
+                            f'SeeDo generated {seedo_primitive_count} primitives.'
+                        )
+
+                        continue
+
                     self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
                     # call service to set robot to home position
                     # wait for the service to complete
@@ -571,14 +930,34 @@ class AIControllerNode(Node):
 
                 # 3. Perform inference using the AI controller
                 step_save_path = f'{save_path}/step_{step}'
-                out = self.controller.inference(
-                                                input_data=[images, states],
-                                                t=step,
-                                                save_path=step_save_path)
+
+                if self.ai_controller_target == 'seedo_controller':
+                    out = self.controller.inference(
+                        input_data={},
+                        t=step,
+                    )
+                else:
+                    out = self.controller.inference(
+                                                    input_data=[images, states],
+                                                    t=step,
+                                                    save_path=step_save_path)
                 
                 predicted_bb = None
                 target_obj_prediction = None
-                if self.ai_controller_target == 'cod_controller':
+
+                if self.ai_controller_target == 'seedo_controller':
+                    if out is None:
+                        raise RuntimeError(
+                            f'SeeDo returned None before completing the '
+                            f'PrimitivePlan at t={step}.'
+                        )
+
+                    actions = [{
+                        'name': out.name,
+                        'arguments': dict(out.arguments),
+                        'source_code': out.source_code,
+                    }]
+                elif self.ai_controller_target == 'cod_controller':
                     pred_action, predicted_bb, target_obj_prediction = out
                     actions = [pred_action]
                 elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
@@ -597,6 +976,17 @@ class AIControllerNode(Node):
 
                 for indx, action in enumerate(actions):
                     self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
+
+                    if self.ai_controller_target == 'seedo_controller':
+                        self.get_logger().info(
+                            f"[SeeDo] t={step}: "
+                            f"{action['name']}({action['arguments']})"
+                        )
+
+                        # The SeeDo Motion Layer will later translate this
+                        # symbolic PrimitiveStep into executable robot motion.
+                        continue
+
                     if self.move_robot:
                         # 5. Send commands to the robot (e.g., set pose, control gripper)
                         # call service to set robot to the desired pose
@@ -645,22 +1035,30 @@ class AIControllerNode(Node):
 
                 # check if a transiction close->open has been made
                 episode_done = False
-                if self.gripper_closed and gripper_goal.command.position == 0.0:
-                    self.get_logger().info(f'Gripper is opening at step {step}')
-                    self.gripper_closed = False
-                    episode_done = True
+
+                if self.ai_controller_target == 'seedo_controller':
+                    episode_done = (
+                        seedo_primitive_count is not None
+                        and step == seedo_primitive_count
+                    )
+                else:
+                    if self.gripper_closed and gripper_goal.command.position == 0.0:
+                        self.get_logger().info(f'Gripper is opening at step {step}')
+                        self.gripper_closed = False
+                        episode_done = True
 
                 # 7. Record this step (observation image, cropped model input, predicted
                 # bounding boxes, computed action and robot state) into the rollout Trajectory
                 step_obs = dict(robot_state)
                 step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
 
-                cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
-                if os.path.isfile(cropped_image_path):
-                    step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
-                else:
-                    self.get_logger().warning(
-                        f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+                if self.ai_controller_target != 'seedo_controller':
+                    cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
+                    if os.path.isfile(cropped_image_path):
+                        step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                    else:
+                        self.get_logger().warning(
+                            f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
 
                 if predicted_bb is not None:
                     step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
@@ -671,6 +1069,32 @@ class AIControllerNode(Node):
                     done=episode_done,
                     reward=1 if episode_done else 0,
                 )
+
+                if (
+                    self.ai_controller_target == 'seedo_controller'
+                    and episode_done
+                ):
+                    completion_result = self.controller.inference(
+                        input_data={},
+                        t=step + 1,
+                    )
+
+                    if completion_result is not None:
+                        raise RuntimeError(
+                            'SeeDo must return None after the '
+                            'PrimitivePlan has been consumed.'
+                        )
+
+                    if self.controller.execution_status != 'completed':
+                        raise RuntimeError(
+                            'SeeDo did not enter completed state. '
+                            f'Current status: '
+                            f'{self.controller.execution_status}'
+                        )
+
+                    self.get_logger().info(
+                        'SeeDo PrimitivePlan consumed successfully.'
+                    )
 
                 if episode_done:
                     break  # exit the loop if the gripper has opened after being closed
