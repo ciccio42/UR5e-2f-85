@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 from ai_controller.utils.ai_controller import AIController
@@ -42,12 +43,15 @@ class SeeDoController(AIController):
         # Demonstration / task configuration.
         self.demo_path: Path | None = None
         self.task_id: str | None = None
+
+        # Artifact management.
         self.artifacts_dir: Path | None = None
+        self._temporary_artifacts_dir: TemporaryDirectory[str] | None = None
 
         # Result of the SeeDo demonstration-understanding pipeline.
         self.action_plan: ActionPlanningResult | None = None
 
-        # Runtime state. These will be populated later by perception and CAP.
+        # Runtime state.
         self.scene_state: SceneState | None = None
         self.primitive_plan: PrimitivePlan | None = None
 
@@ -227,6 +231,49 @@ class SeeDoController(AIController):
     ) -> None:
         self.device = device
 
+    def _cleanup_temporary_artifacts(self) -> None:
+        """Remove artifacts created for a temporary runtime session."""
+
+        if self._temporary_artifacts_dir is not None:
+            self._temporary_artifacts_dir.cleanup()
+            self._temporary_artifacts_dir = None
+
+        self.artifacts_dir = None
+
+
+    def _prepare_artifacts_dir(
+        self,
+        artifacts_dir: str | Path | None,
+    ) -> Path:
+        """Prepare persistent or temporary storage for pipeline artifacts."""
+
+        self._cleanup_temporary_artifacts()
+
+        if artifacts_dir is not None:
+            normalized_artifacts_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            normalized_artifacts_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            self.artifacts_dir = normalized_artifacts_dir
+            return normalized_artifacts_dir
+
+        self._temporary_artifacts_dir = TemporaryDirectory(
+            prefix="seedo_"
+        )
+
+        self.artifacts_dir = Path(
+            self._temporary_artifacts_dir.name
+        ).resolve()
+
+        return self.artifacts_dir
+
     def reset(self) -> None:
         self.action_plan = None
         self.scene_state = None
@@ -234,6 +281,11 @@ class SeeDoController(AIController):
 
         self.execution_status = "idle"
         self.execution_error = None
+
+        self.demo_path = None
+        self.task_id = None
+
+        self._cleanup_temporary_artifacts()
 
     def pre_process(
         self,
@@ -278,6 +330,11 @@ class SeeDoController(AIController):
                 "load_command() must be called before inference()."
             )
 
+        if self.artifacts_dir is None:
+            raise RuntimeError(
+                "Artifact storage has not been initialized."
+            )
+
         if t < 0:
             raise ValueError(
                 f"Invalid timestep: {t}. "
@@ -313,22 +370,25 @@ class SeeDoController(AIController):
             try:
                 self.execution_status = "perceiving"
 
-                raw_scene = self.scene_perceiver.run(
+                perception_result = self.scene_perceiver.run(
                     rgb_image=processed_input["rgb"],
                     depth_image=processed_input["depth"],
                     camera_info=processed_input["camera_info"],
                     base_to_table_transform=processed_input[
                         "base_to_table_transform"
                     ],
+                    artifacts_dir=(
+                        self.artifacts_dir
+                        / "scene_perceiver"
+                    ),
                 )
 
                 self.execution_status = "interpreting_scene"
 
                 self.scene_state = self.scene_interpreter.run(
-                    raw_scene=raw_scene,
-                    rgb_image=processed_input["rgb"],
+                    perception_result=perception_result,
                     artifacts_dir=(
-                        artifacts_dir
+                        self.artifacts_dir
                         / "scene_interpreter"
                     ),
                 )
@@ -340,6 +400,10 @@ class SeeDoController(AIController):
                     scene_state=self.scene_state,
                     workspace_bottom_left=self.workspace_bottom_left,
                     workspace_top_right=self.workspace_top_right,
+                    artifacts_dir=(
+                        self.artifacts_dir
+                        / "lmp_generator"
+                    ),
                 )
 
             except Exception as exc:
@@ -437,68 +501,62 @@ class SeeDoController(AIController):
         self.demo_path = normalized_demo_path
         self.task_id = str(task_id)
 
-        artifacts_dir = kwargs.get(
-            "artifacts_dir",
-            self.artifacts_dir,
+        requested_artifacts_dir = kwargs.get(
+            "artifacts_dir"
         )
 
-        if artifacts_dir is None:
-            raise ValueError(
-                "artifacts_dir has not been specified."
-            )
-
-        self.artifacts_dir = (
-            Path(artifacts_dir)
-            .expanduser()
-            .resolve()
+        artifacts_dir = self._prepare_artifacts_dir(
+            requested_artifacts_dir
         )
 
-        self.artifacts_dir.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        # Reset only runtime/execution state for the new demonstration.
+        # Reset runtime/execution state for the new demonstration.
         self.action_plan = None
         self.scene_state = None
         self.primitive_plan = None
+
         self.execution_status = "planning"
         self.execution_error = None
 
-        keyframe_result = self.keyframe_selector.run(
-            video_path=self.demo_path,
-            artifacts_dir=(
-                self.artifacts_dir
-                / "keyframe_selection"
-            ),
-        )
+        try:
+            keyframe_result = self.keyframe_selector.run(
+                video_path=self.demo_path,
+                artifacts_dir=(
+                    artifacts_dir
+                    / "keyframe_selection"
+                ),
+            )
 
-        visual_result = self.visual_prompter.run(
-            video_path=self.demo_path,
-            keyframes=keyframe_result.keyframes,
-            artifacts_dir=(
-                self.artifacts_dir
-                / "visual_prompting"
-            ),
-        )
+            visual_result = self.visual_prompter.run(
+                video_path=self.demo_path,
+                keyframes=keyframe_result.keyframes,
+                artifacts_dir=(
+                    artifacts_dir
+                    / "visual_prompting"
+                ),
+            )
 
-        action_result = self.action_planner.run(
-            annotated_video_path=(
-                visual_result.annotated_video_path
-            ),
-            keyframes=keyframe_result.keyframes,
-            track_id_map=visual_result.track_id_map,
-            key_frame_coordinates=(
-                visual_result.key_frame_coordinates
-            ),
-            artifacts_dir=(
-                self.artifacts_dir
-                / "action_planning"
-            ),
-        )
+            action_result = self.action_planner.run(
+                annotated_video_path=(
+                    visual_result.annotated_video_path
+                ),
+                keyframes=keyframe_result.keyframes,
+                track_id_map=visual_result.track_id_map,
+                key_frame_coordinates=(
+                    visual_result.key_frame_coordinates
+                ),
+                artifacts_dir=(
+                    artifacts_dir
+                    / "action_planning"
+                ),
+            )
 
-        self.action_plan = self.post_process(
-            action_result
-        )
+            self.action_plan = self.post_process(
+                action_result
+            )
+
+        except Exception as exc:
+            self.execution_status = "failed"
+            self.execution_error = str(exc)
+            raise
 
         self.execution_status = "plan_ready"

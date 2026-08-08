@@ -2,25 +2,38 @@ from __future__ import annotations
 
 import argparse
 
+from .common import load_scene_runtime_input
 from ai_controller.models.seedo_controller.seedo_controller import SeeDoController
 
 def run_seedo_controller_test(
         args: argparse.Namespace,
     ) -> int:
-
         if args.video is None:
             raise ValueError(
                 "--video is required for the integration test."
             )
-        
+
         if not args.model_config:
             raise ValueError(
                 "--model-config is required for the seedo_controller test."
             )
 
+        if args.scene_dir is None:
+            raise ValueError(
+                "--scene-dir is required for the seedo_controller test."
+            )
+
+        if args.base_to_table_transform is None:
+            raise ValueError(
+                "--base-to-table-transform is required for the "
+                "seedo_controller test."
+            )
+
         controller = SeeDoController(
             model_config=args.model_config,
         )
+
+        print("=== LOADING DEMONSTRATION ===")
 
         controller.load_command(
             demo_path=args.video,
@@ -28,72 +41,152 @@ def run_seedo_controller_test(
             artifacts_dir=args.artifacts_dir,
         )
 
+        if controller.action_plan is None:
+            raise AssertionError(
+                "SeeDoController did not generate an action plan."
+            )
+
+        if controller.execution_status != "plan_ready":
+            raise AssertionError(
+                "Unexpected controller status after load_command(): "
+                f"{controller.execution_status}"
+            )
+
+        print(
+            "Action plan: "
+            f"{controller.action_plan.natural_language_plan}"
+        )
+
+        print("\n=== LOADING RUNTIME SCENE ===")
+
+        runtime_input = load_scene_runtime_input(
+            args
+        )
+
+        print("\n=== RUNNING INITIAL INFERENCE ===")
+
         result = controller.inference(
-            input_data={
-                "video_path": args.video,
-                "artifacts_dir": args.artifacts_dir,
-            },
+            input_data=runtime_input,
             t=0,
         )
 
-        if result is not controller.last_result:
+        if result is not None:
             raise AssertionError(
-                "SeeDoController.last_result was not updated correctly."
+                "inference(t=0) must return None."
             )
 
-        if result.status not in (
-            "completed",
-            "ambiguous",
-        ):
+        if controller.scene_state is None:
             raise AssertionError(
-                f"Unexpected status: {result.status}"
+                "SeeDoController did not generate a semantic scene."
             )
 
-        if (
-            result.status == "completed"
-            and len(result.steps) != 1
-        ):
+        if controller.primitive_plan is None:
             raise AssertionError(
-                "A completed plan must contain exactly one action step."
+                "SeeDoController did not generate a primitive plan."
             )
 
-        if (
-            result.status == "ambiguous"
-            and not result.ambiguities
-        ):
+        if controller.execution_status != "plan_ready":
             raise AssertionError(
-                "An ambiguous plan must explain its ambiguities."
+                "Unexpected controller status after inference(t=0): "
+                f"{controller.execution_status}"
             )
 
-        if not result.natural_language_plan.strip():
-            raise AssertionError(
-                "Natural-language plan is empty."
-            )
-
-        print("SeeDo controller pipeline completed")
-        print(f"Status: {result.status}")
         print(
-            "Natural-language plan: "
-            f"{result.natural_language_plan}"
+            f"Scene objects: {len(controller.scene_state.objects)}"
         )
 
-        print("\nSteps:")
-        for index, step in enumerate(
-            result.steps,
-            start=1,
-        ):
-            print(f"  Step {index}: {step}")
+        print(
+            "Primitive count: "
+            f"{len(controller.primitive_plan.steps)}"
+        )
 
-        print("\nAmbiguities:")
-        for ambiguity in result.ambiguities:
-            print(f"  - {ambiguity}")
+        print("\n=== CONSUMING PRIMITIVE PLAN ===")
+
+        returned_steps = []
+
+        for t in range(
+            1,
+            len(controller.primitive_plan.steps) + 1,
+        ):
+            step = controller.inference(
+                input_data=runtime_input,
+                t=t,
+            )
+
+            if step is None:
+                raise AssertionError(
+                    "SeeDoController returned None before all "
+                    f"primitive steps were consumed at t={t}."
+                )
+
+            expected_step = controller.primitive_plan.steps[
+                t - 1
+            ]
+
+            if step != expected_step:
+                raise AssertionError(
+                    "Returned primitive does not match the "
+                    f"generated plan at t={t}."
+                )
+
+            returned_steps.append(step)
+
+            print(
+                f"  t={t}: "
+                f"{step.name}({step.arguments})"
+            )
+
+        if tuple(returned_steps) != controller.primitive_plan.steps:
+            raise AssertionError(
+                "The primitive sequence returned by inference() "
+                "does not match PrimitivePlan."
+            )
+
+        completion_t = (
+            len(controller.primitive_plan.steps) + 1
+        )
+
+        completion_result = controller.inference(
+            input_data=runtime_input,
+            t=completion_t,
+        )
+
+        if completion_result is not None:
+            raise AssertionError(
+                "SeeDoController must return None after the "
+                "primitive plan has been consumed."
+            )
+
+        if controller.execution_status != "completed":
+            raise AssertionError(
+                "Controller did not enter completed state. "
+                f"Current status: {controller.execution_status}"
+            )
+
+        print("\n=== RESETTING CONTROLLER ===")
 
         controller.reset()
 
-        if controller.last_result is not None:
+        if controller.action_plan is not None:
             raise AssertionError(
-                "SeeDoController.reset() did not clear last_result."
+                "reset() did not clear action_plan."
+            )
+
+        if controller.scene_state is not None:
+            raise AssertionError(
+                "reset() did not clear scene_state."
+            )
+
+        if controller.primitive_plan is not None:
+            raise AssertionError(
+                "reset() did not clear primitive_plan."
+            )
+
+        if controller.execution_status != "idle":
+            raise AssertionError(
+                "reset() did not restore idle status."
             )
 
         print("\nTEST PASSED")
+
         return 0

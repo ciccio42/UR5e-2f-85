@@ -125,34 +125,24 @@ def build_action_planning_result(
 
     return action_result
 
-def build_scene_perception_result(
+def load_scene_runtime_input(
     args: argparse.Namespace,
-) -> ScenePerceptionResult:
-    """Build the runtime ScenePerceptionResult from an offline scene capture."""
+) -> dict[str, object]:
+    """Load raw runtime inputs from an offline scene capture."""
 
     if args.scene_dir is None:
         raise ValueError(
             "--scene-dir is required for runtime scene tests."
         )
 
-    if not args.model_config:
-        raise ValueError(
-            "--model-config is required for runtime scene tests."
-        )
-
     if args.base_to_table_transform is None:
         raise ValueError(
-            "--base-to-table-transform is required for runtime scene tests."
+            "--base-to-table-transform is required for "
+            "runtime scene tests."
         )
 
     scene_dir = (
         Path(args.scene_dir)
-        .expanduser()
-        .resolve()
-    )
-
-    model_config_path = (
-        Path(args.model_config)
         .expanduser()
         .resolve()
     )
@@ -165,20 +155,23 @@ def build_scene_perception_result(
 
     rgb_path = scene_dir / "rgb.png"
     depth_path = scene_dir / "depth.npy"
-    camera_info_path = scene_dir / "camera_info.yaml"
+    camera_info_path = (
+        scene_dir
+        / "camera_info.yaml"
+    )
 
     required_paths = (
         rgb_path,
         depth_path,
         camera_info_path,
-        model_config_path,
         transform_path,
     )
 
     for path in required_paths:
         if not path.is_file():
             raise FileNotFoundError(
-                f"Required test input does not exist: {path}"
+                "Required runtime input does not exist: "
+                f"{path}"
             )
 
     rgb_bgr = cv2.imread(
@@ -214,6 +207,41 @@ def build_scene_perception_result(
         base_to_table_transform = yaml.safe_load(
             stream
         )
+
+    return {
+        "rgb": rgb,
+        "depth": depth,
+        "camera_info": camera_info,
+        "base_to_table_transform": (
+            base_to_table_transform
+        ),
+    }
+
+def build_scene_perception_result(
+    args: argparse.Namespace,
+) -> ScenePerceptionResult:
+    """Build the runtime ScenePerceptionResult from an offline scene capture."""
+
+    if not args.model_config:
+        raise ValueError(
+            "--model-config is required for runtime scene tests."
+        )
+
+    model_config_path = (
+        Path(args.model_config)
+        .expanduser()
+        .resolve()
+    )
+
+    if not model_config_path.is_file():
+        raise FileNotFoundError(
+            "Required test input does not exist: "
+            f"{model_config_path}"
+        )
+
+    runtime_input = load_scene_runtime_input(
+        args
+    )
 
     with model_config_path.open(
         "r",
@@ -266,12 +294,12 @@ def build_scene_perception_result(
         )
 
     return perceiver.run(
-        rgb_image=rgb,
-        depth_image=depth,
-        camera_info=camera_info,
-        base_to_table_transform=(
-            base_to_table_transform
-        ),
+        rgb_image=runtime_input["rgb"],
+        depth_image=runtime_input["depth"],
+        camera_info=runtime_input["camera_info"],
+        base_to_table_transform=runtime_input[
+            "base_to_table_transform"
+        ],
         artifacts_dir=artifacts_dir,
     )
 
