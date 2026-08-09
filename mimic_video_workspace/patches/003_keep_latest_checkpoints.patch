@@ -1,0 +1,76 @@
+diff --git a/model/cosmos_predict2/callbacks/video_eval.py b/model/cosmos_predict2/callbacks/video_eval.py
+--- a/model/cosmos_predict2/callbacks/video_eval.py
++++ b/model/cosmos_predict2/callbacks/video_eval.py
+@@ -1,5 +1,7 @@
+ from __future__ import annotations
+ 
++import os
++
+ from imaginaire.utils import distributed
+ from imaginaire.utils.callback import Callback
+ from scripts.fuse_lora_ckpt import fuse_ckpt
+@@ -15,7 +17,12 @@ class VideoEvalCallback(Callback):
+     def on_save_checkpoint_success(
+         self, iteration: int = 0, elapsed_time: float = 0, checkpoint_path: str | None = None
+     ) -> None:
+-        if self._fuse_lora:
++        is_model_checkpoint = (
++            checkpoint_path is not None
++            and os.path.basename(os.path.dirname(checkpoint_path)) == "model"
++        )
++
++        if self._fuse_lora and is_model_checkpoint:
+             checkpoint_path = fuse_ckpt(checkpoint_path)
+ 
+         try:
+diff --git a/model/cosmos_predict2/checkpointer.py b/model/cosmos_predict2/checkpointer.py
+--- a/model/cosmos_predict2/checkpointer.py
++++ b/model/cosmos_predict2/checkpointer.py
+@@ -34,6 +34,10 @@ if TYPE_CHECKING:
+     from imaginaire.config import CheckpointConfig, JobConfig
+ 
+ 
++CHECKPOINT_FOLDERS = ("model", "optim", "scheduler", "trainer")
++KEEP_LAST_CHECKPOINTS = 2
++
++
+ class Checkpointer:
+     """The checkpointer class. Supports checkpoint saving/loading to local disk."""
+ 
+@@ -139,10 +143,36 @@ class Checkpointer:
+             log.success(f"Saved checkpoint (local): {checkpoint_path}")
+             iteration = int(checkpoint_file.replace("iter_", "").replace(".pt", ""))
+             self.callbacks.on_save_checkpoint_success(iteration=iteration, checkpoint_path=checkpoint_path)
++            if os.path.basename(os.path.dirname(checkpoint_path)) == "trainer":
++                self._prune_old_checkpoints()
+         except Exception as e:
+             log.exception(f"Checkpoint failed to save (local): {e}")
+ 
++    def _prune_old_checkpoints(self) -> None:
++        checkpoint_sets = []
++        for folder in CHECKPOINT_FOLDERS:
++            folder_path = os.path.join(self.checkpoint_dir_local, folder)
++            if not os.path.isdir(folder_path):
++                return
++            checkpoint_sets.append({
++                filename
++                for filename in os.listdir(folder_path)
++                if filename.startswith("iter_")
++                and filename.endswith(".pt")
++                and not filename.endswith("_fused.pt")
++            })
++
++        complete_checkpoints = sorted(set.intersection(*checkpoint_sets))
++        for checkpoint_file in complete_checkpoints[:-KEEP_LAST_CHECKPOINTS]:
++            fused_file = checkpoint_file.replace(".pt", "_fused.pt")
++            for folder in CHECKPOINT_FOLDERS:
++                for filename in (checkpoint_file, fused_file):
++                    path = os.path.join(self.checkpoint_dir_local, folder, filename)
++                    if os.path.isfile(path):
++                        os.remove(path)
++                        log.info(f"Removed old checkpoint: {path}")
++
+     @misc.timer("checkpoint loading")
+     def load(
+         self,
+         model: ImaginaireModel,

@@ -1,0 +1,18 @@
+diff --git a/model/cosmos_predict2/configs/experiment/video2world.py b/model/cosmos_predict2/configs/experiment/video2world.py
+--- a/model/cosmos_predict2/configs/experiment/video2world.py
++++ b/model/cosmos_predict2/configs/experiment/video2world.py
+@@ -101,6 +101,14 @@ for rank in ranks:
+                 cfg["optimizer"]["lr"] = lr.item()
+                 cfg["job"]["name"] = name
+                 cfg["dataloader_train"] = {"batch_size": L(get_local_batch_size)(global_bsz=bsz)}
++
++                if dataset == "ur5e_pick_place_videmb":
++                    cfg["trainer"]["max_iter"] = 5_000
++                    cfg["trainer"]["logging_iter"] = 100
++                    cfg["trainer"]["callbacks"]["wandb"].update(
++                        mode="offline",
++                        entity_name="",
++                    )
+ 
+                 if rank is not None:
+                     cfg["model"]["config"].update(

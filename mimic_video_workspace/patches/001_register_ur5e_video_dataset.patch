@@ -7,7 +7,7 @@ diff --git a/model/cosmos_predict2/configs/defaults/data_video.py b/model/cosmos
  
  from hydra.core.config_store import ConfigStore
  from megatron.core import parallel_state
-@@ -31,6 +32,20 @@ train_datasets: dict[str, Dataset_] = {
+@@ -31,6 +32,33 @@ train_datasets: dict[str, Dataset_] = {
          is_multi_img=True,
          val_ratio=0.01,
      ),
@@ -23,7 +23,20 @@ diff --git a/model/cosmos_predict2/configs/defaults/data_video.py b/model/cosmos
 +        target_fps=10.0,
 +        is_val=False,
 +        is_multi_img=True,
-+        val_ratio=0.01,
++        validation_episode_stems=[
++            "ep_000001", "ep_000007",
++            "ep_000055", "ep_000057",
++            "ep_000088", "ep_000094",
++            "ep_000126", "ep_000154",
++            "ep_000165", "ep_000197",
++            "ep_000202", "ep_000227",
++            "ep_000241", "ep_000245",
++            "ep_000293", "ep_000294",
++            "ep_000352", "ep_000358",
++            "ep_000361", "ep_000395",
++            "ep_000412", "ep_000434",
++            "ep_000454", "ep_000466",
++        ],
 +    ),
      "libero_spatial_agentview": L(Dataset)(
          dataset_dir=...,

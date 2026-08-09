@@ -1,0 +1,58 @@
+diff --git a/model/cosmos_predict2/data/dataset_video_latent.py b/model/cosmos_predict2/data/dataset_video_latent.py
+--- a/model/cosmos_predict2/data/dataset_video_latent.py
++++ b/model/cosmos_predict2/data/dataset_video_latent.py
+@@ -44,6 +44,7 @@ class LatentDataset(Dataset):
+         exclude_with_substring: str | None = None,
+         is_multi_img: bool = False,
+         val_ratio: float = 0.0,
++        validation_episode_stems: list[str] | None = None,
+     ) -> None:
+         """Dataset class for loading image-text-to-video generation data with precomputed video embeddings."""
+ 
+@@ -72,6 +73,9 @@ class LatentDataset(Dataset):
+             and (exclude_with_substring is None or exclude_with_substring not in str(video))
+         ])
+ 
++        def episode_stem(video_path: pathlib.Path) -> str:
++            return video_path.stem[:-1] if is_multi_img else video_path.stem
++
+         for video_path in video_paths:
+             assert video_path.exists(), video_path
+             ep_name = video_path.stem[:-1] if is_multi_img else video_path.stem
+@@ -79,13 +83,30 @@ class LatentDataset(Dataset):
+ 
+         log.info(f"{len(video_paths)} videos in total")
+ 
+-        # make val set deterministic even if list of paths changes minorly
+-        denom = 10_000
+-        thresh = round(val_ratio * denom)
+-        if is_val:
+-            self._video_paths = [p for p in video_paths if _stable_hash_int(p.stem) % denom < thresh]
++        if validation_episode_stems is not None:
++            if val_ratio != 0.0:
++                msg = "Use either validation_episode_stems or val_ratio, not both."
++                raise ValueError(msg)
++
++            validation_episodes = set(validation_episode_stems)
++            available_episodes = {episode_stem(path) for path in video_paths}
++            missing_episodes = validation_episodes - available_episodes
++            if missing_episodes:
++                msg = f"Validation episodes not found: {sorted(missing_episodes)}"
++                raise ValueError(msg)
++
++            if is_val:
++                self._video_paths = [p for p in video_paths if episode_stem(p) in validation_episodes]
++            else:
++                self._video_paths = [p for p in video_paths if episode_stem(p) not in validation_episodes]
+         else:
+-            self._video_paths = [p for p in video_paths if _stable_hash_int(p.stem) % denom >= thresh]
++            # make val set deterministic even if list of paths changes minorly
++            denom = 10_000
++            thresh = round(val_ratio * denom)
++            if is_val:
++                self._video_paths = [p for p in video_paths if _stable_hash_int(p.stem) % denom < thresh]
++            else:
++                self._video_paths = [p for p in video_paths if _stable_hash_int(p.stem) % denom >= thresh]
+ 
+         log.info(f"{len(self._video_paths)} videos in {'val' if is_val else 'train'}.")
+ 
