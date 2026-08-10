@@ -1,0 +1,8 @@
+[submodule "ai_controller/ai_controller/models/seedo_controller/models/SeeDo"]
+	path = ai_controller/ai_controller/models/seedo_controller/models/SeeDo
+	url = https://github.com/InfanteAngelo/SeeDo.git
+	branch = ros2-integration
+[submodule "ai_controller/ai_controller/models/seedo_controller/models/GroundingDINO"]
+	path = ai_controller/ai_controller/models/seedo_controller/models/GroundingDINO
+	url = https://github.com/InfanteAngelo/GroundingDINO.git
+	branch = seedo-compat
