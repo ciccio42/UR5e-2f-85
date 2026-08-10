@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import numpy as np
 
+from ai_controller.utils.utils import (
+    EEF_POS_NAME,
+    EEF_QUAT_NAME,
+)
 from .common import load_scene_runtime_input
 from ai_controller.models.seedo_controller.seedo_controller import SeeDoController
 
@@ -134,54 +139,136 @@ def run_seedo_controller_test(
         f"{len(controller.primitive_plan.steps)}"
     )
 
-    print("\n=== CONSUMING PRIMITIVE PLAN ===")
+    if not controller.primitive_plan.steps:
+        raise AssertionError(
+            "SeeDoController generated an empty PrimitivePlan."
+        )
 
-    returned_steps = []
+    print("\n=== VALIDATING PRIMITIVE PLAN ===")
+
+    for index, primitive_step in enumerate(
+        controller.primitive_plan.steps,
+        start=1,
+    ):
+        print(
+            f"  t={index}: "
+            f"{primitive_step.name}"
+            f"({primitive_step.arguments})"
+        )
+
+    print("\n=== INITIALIZING MOTION RUNTIME STATE ===")
+
+    robot_state = {
+        EEF_POS_NAME: np.array(
+            [
+                -0.15552094619366708,
+                0.34869994018501943,
+                0.1532803451753288,
+            ],
+            dtype=np.float64,
+        ),
+        EEF_QUAT_NAME: np.array(
+            [
+                0.9994452044624775,
+                0.03161651380119412,
+                0.0021438049655468088,
+                0.010251021036213035,
+            ],
+            dtype=np.float64,
+        ),
+    }
+
+    motion_runtime_input = dict(
+        runtime_input
+    )
+
+    motion_runtime_input["robot_state"] = (
+        robot_state
+    )
+
+    print("\n=== TRANSLATING PRIMITIVE PLAN ===")
+
+    returned_actions = []
 
     for t in range(
         1,
         len(controller.primitive_plan.steps) + 1,
     ):
-        step = controller.inference(
-            input_data=runtime_input,
-            t=t,
-        )
-
-        if step is None:
-            raise AssertionError(
-                "SeeDoController returned None before all "
-                f"primitive steps were consumed at t={t}."
-            )
-
-        expected_step = (
+        primitive_step = (
             controller.primitive_plan.steps[
                 t - 1
             ]
         )
 
-        if step != expected_step:
+        actions = controller.inference(
+            input_data=motion_runtime_input,
+            t=t,
+        )
+
+        if actions is None:
             raise AssertionError(
-                "Returned primitive does not match the "
-                f"generated plan at t={t}."
+                "SeeDoController returned None before all "
+                f"primitive steps were translated at t={t}."
             )
 
-        returned_steps.append(
-            step
+        if not isinstance(actions, list):
+            raise AssertionError(
+                "SeeDoController inference() must return a list "
+                f"of actions at t={t}; received "
+                f"{type(actions).__name__}."
+            )
+
+        if not actions:
+            raise AssertionError(
+                "SeeDoController returned an empty action list "
+                f"for primitive {primitive_step.name!r} at t={t}."
+            )
+
+        for action_index, action in enumerate(
+            actions
+        ):
+            if not isinstance(action, np.ndarray):
+                raise AssertionError(
+                    "SeeDoController returned a non-array action "
+                    f"for primitive {primitive_step.name!r}, "
+                    f"action index {action_index}: "
+                    f"{type(action).__name__}."
+                )
+
+            if action.shape != (8,):
+                raise AssertionError(
+                    "SeeDo low-level action has invalid shape "
+                    f"{action.shape} for primitive "
+                    f"{primitive_step.name!r}; expected (8,)."
+                )
+
+            if not np.all(np.isfinite(action)):
+                raise AssertionError(
+                    "SeeDo low-level action contains non-finite "
+                    f"values for primitive "
+                    f"{primitive_step.name!r}: {action}"
+                )
+
+        returned_actions.extend(
+            actions
         )
 
         print(
             f"  t={t}: "
-            f"{step.name}({step.arguments})"
+            f"{primitive_step.name}"
+            f"({primitive_step.arguments}) "
+            f"-> {len(actions)} low-level action(s)"
         )
 
-    if (
-        tuple(returned_steps)
-        != controller.primitive_plan.steps
-    ):
+    if not returned_actions:
         raise AssertionError(
-            "The primitive sequence returned by inference() "
-            "does not match PrimitivePlan."
+            "SeeDoController did not produce any low-level actions."
         )
+
+    print(
+        "\nTotal low-level actions generated: "
+        f"{len(returned_actions)}"
+    )
 
     completion_t = (
         len(controller.primitive_plan.steps)
@@ -189,7 +276,7 @@ def run_seedo_controller_test(
     )
 
     completion_result = controller.inference(
-        input_data=runtime_input,
+        input_data=motion_runtime_input,
         t=completion_t,
     )
 

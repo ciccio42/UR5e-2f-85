@@ -4,6 +4,7 @@ import math
 import pickle
 import sys
 import threading
+import time
 from pathlib import Path
 
 import message_filters
@@ -418,16 +419,25 @@ class AIControllerNode(Node):
         self,
         timeout: float = 10.0,
     ) -> None:
-        if not self.seedo_rgbd_event.wait(timeout=timeout):
+        deadline = time.monotonic() + timeout
+
+        while time.monotonic() < deadline:
+            rgbd_ready = self.seedo_rgbd_event.is_set()
+            camera_info_ready = self.seedo_camera_info_msg is not None
+
+            if rgbd_ready and camera_info_ready:
+                return
+
+            time.sleep(0.01)
+
+        if not self.seedo_rgbd_event.is_set():
             raise TimeoutError(
                 "Timed out waiting for synchronized SeeDo RGB-D data."
             )
 
-        if self.seedo_camera_info_msg is None:
-            raise RuntimeError(
-                "RGB-D data is available, but CameraInfo "
-                "has not been received yet."
-            )
+        raise TimeoutError(
+            "Timed out waiting for SeeDo CameraInfo data."
+        )
 
     def _get_seedo_runtime_input(
         self,

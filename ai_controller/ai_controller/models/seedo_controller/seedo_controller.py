@@ -24,10 +24,17 @@ from ai_controller.models.seedo_controller.lmp_generator import (
 from ai_controller.models.seedo_controller.scene_interpreter import (
     SceneInterpreter,
 )
+from ai_controller.models.seedo_controller.motion_layer import (
+    SeeDoMotionLayer,
+)
 from results import (
     ActionPlanningResult,
     SceneState,
     PrimitivePlan,
+)
+from ai_controller.utils.utils import (
+    EEF_POS_NAME,
+    EEF_QUAT_NAME,
 )
 
 
@@ -101,6 +108,11 @@ class SeeDoController(AIController):
 
         scene_interpreter_config = config.get(
             "scene_interpreter",
+            {},
+        )
+
+        motion_config = config.get(
+            "motion_layer",
             {},
         )
 
@@ -214,6 +226,66 @@ class SeeDoController(AIController):
             ),
         )
 
+        self.motion_layer = SeeDoMotionLayer(
+            grasp_orientation=motion_config.get(
+                "grasp_orientation",
+                [
+                    0.9994452044624775,
+                    0.03161651380119412,
+                    0.0021438049655468088,
+                    0.010251021036213035,
+                ],
+            ),
+            min_step=float(
+                motion_config.get(
+                    "min_step",
+                    0.02,
+                )
+            ),
+            reach_hover_height=float(
+                motion_config.get(
+                    "reach_hover_height",
+                    0.15,
+                )
+            ),
+            approach_z_offset=float(
+                motion_config.get(
+                    "approach_z_offset",
+                    0.0,
+                )
+            ),
+            release_height_offset=float(
+                motion_config.get(
+                    "release_height_offset",
+                    0.10,
+                )
+            ),
+            lift_height=float(
+                motion_config.get(
+                    "lift_height",
+                    0.15,
+                )
+            ),
+            gripper_open_position=float(
+                motion_config.get(
+                    "gripper_open_position",
+                    0.1,
+                )
+            ),
+            gripper_closed_position=float(
+                motion_config.get(
+                    "gripper_closed_position",
+                    0.8,
+                )
+            ),
+            object_y_offset=float(
+                motion_config.get(
+                    "object_y_offset",
+                    -0.06,
+                )
+            ),
+        )
+
         self.pipeline_config = config
 
         return {
@@ -223,6 +295,7 @@ class SeeDoController(AIController):
             "scene_perceiver": self.scene_perceiver,
             "scene_interpreter": self.scene_interpreter,
             "lmp_generator": self.lmp_generator,
+            "motion_layer": self.motion_layer,
         }
 
     def move_model_to_device(
@@ -315,6 +388,11 @@ class SeeDoController(AIController):
         if "base_to_table_transform" in input_data:
             processed_input["base_to_table_transform"] = (
                 input_data["base_to_table_transform"]
+            )
+
+        if "robot_state" in input_data:
+            processed_input["robot_state"] = (
+                input_data["robot_state"]
             )
 
         return processed_input
@@ -421,17 +499,78 @@ class SeeDoController(AIController):
                 "The perception/CAP step at t=0 must complete first."
             )
 
+        if self.scene_state is None:
+            raise RuntimeError(
+                "No SceneState is available for motion translation."
+            )
+
         primitive_index = t - 1
 
         if primitive_index >= len(self.primitive_plan.steps):
             self.execution_status = "completed"
             return None
 
-        self.execution_status = "executing"
+        #
+        # Initialize the Motion Layer exactly once, before translating
+        # the first primitive.
+        #
+        if primitive_index == 0:
+            robot_state = processed_input.get(
+                "robot_state"
+            )
 
-        return self.primitive_plan.steps[
+            if robot_state is None:
+                raise ValueError(
+                    "SeeDo inference(t=1) requires robot_state "
+                    "to initialize the Motion Layer."
+                )
+
+            current_position = robot_state.get(
+                EEF_POS_NAME
+            )
+
+            current_orientation = robot_state.get(
+                EEF_QUAT_NAME
+            )
+
+            if current_position is None:
+                raise ValueError(
+                    "SeeDo robot_state does not contain "
+                    f"{EEF_POS_NAME!r}."
+                )
+
+            if current_orientation is None:
+                raise ValueError(
+                    "SeeDo robot_state does not contain "
+                    f"{EEF_QUAT_NAME!r}."
+                )
+
+            self.motion_layer.reset(
+                current_position=current_position,
+                current_orientation=current_orientation,
+                artifacts_dir=(
+                    self.artifacts_dir
+                    / "motion_layer"
+                ),
+            )
+
+        primitive_step = self.primitive_plan.steps[
             primitive_index
         ]
+
+        self.execution_status = "executing"
+
+        try:
+            actions = self.motion_layer.translate(
+                primitive_step=primitive_step,
+                scene_state=self.scene_state,
+            )
+        except Exception as exc:
+            self.execution_status = "failed"
+            self.execution_error = str(exc)
+            raise
+
+        return actions
 
     def post_process(
         self,

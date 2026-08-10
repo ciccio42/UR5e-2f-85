@@ -33,3 +33,21 @@ lmp_generator:
 
 scene_interpreter:
   model: gpt-4o-2024-08-06
+
+motion_layer:
+  grasp_orientation:
+    - 0.9994452044624775
+    - 0.03161651380119412
+    - 0.0021438049655468088
+    - 0.010251021036213035
+
+  min_step: 0.02
+  reach_hover_height: 0.15
+  approach_z_offset: 0.0
+  release_height_offset: 0.10
+  lift_height: 0.15
+
+  gripper_open_position: 0.1
+  gripper_closed_position: 0.8
+
+  object_y_offset: -0.06
