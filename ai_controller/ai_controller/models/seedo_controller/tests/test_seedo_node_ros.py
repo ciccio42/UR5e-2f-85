@@ -9,6 +9,14 @@ import cv2
 import numpy as np
 import rclpy
 import yaml
+from unittest.mock import patch
+
+import ai_controller.ai_controller_node as ai_controller_node_module
+
+from ai_controller.utils.utils import (
+    EEF_POS_NAME,
+    EEF_QUAT_NAME,
+)
 
 from cv_bridge import CvBridge
 from geometry_msgs.msg import TransformStamped
@@ -397,7 +405,52 @@ class SeeDoRuntimePublisher(Node):
             camera_info_msg
         )
 
+INITIAL_EEF_POSITION = np.array(
+    [
+        -0.15552094619366708,
+        0.34869994018501943,
+        0.1532803451753288,
+    ],
+    dtype=np.float64,
+)
 
+INITIAL_EEF_ORIENTATION = np.array(
+    [
+        0.9994452044624775,
+        0.03161651380119412,
+        0.0021438049655468088,
+        0.010251021036213035,
+    ],
+    dtype=np.float64,
+)
+
+
+class _ControlLoopFinished(Exception):
+    """Stop the control loop after one ROS test trajectory."""
+
+
+class _RosTestTrajectory:
+    """Minimal trajectory used by the ROS integration test."""
+
+    def __init__(self) -> None:
+        self.entries: list[dict] = []
+
+    def append(
+        self,
+        obs,
+        action,
+        done,
+        reward,
+    ) -> None:
+        self.entries.append(
+            {
+                "obs": obs,
+                "action": action,
+                "done": done,
+                "reward": reward,
+            }
+        )
+        
 def run_test(
     args: argparse.Namespace,
 ) -> int:
@@ -435,6 +488,14 @@ def run_test(
                 "AIControllerNode is not using "
                 "seedo_controller."
             )
+
+        if controller_node.move_robot:
+            raise AssertionError(
+                "ROS SeeDo test must run with "
+                "move_robot=False."
+            )
+
+        controller_node.demo_path = args.video
 
         print(
             "AIControllerNode initialized successfully"
@@ -617,64 +678,169 @@ def run_test(
         )
 
         print(
-            "\n=== LOADING DEMONSTRATION ==="
+            "\n=== PREPARING CONTROL LOOP TEST ==="
         )
 
-        controller_node.controller.reset()
+        robot_state = {
+            EEF_POS_NAME: INITIAL_EEF_POSITION.copy(),
+            EEF_QUAT_NAME: INITIAL_EEF_ORIENTATION.copy(),
+        }
 
-        controller_node.controller.load_command(
-            demo_path=args.video,
-            task_id=args.task_id,
-            artifacts_dir=(
-                controller_node
-                ._get_seedo_artifacts_dir()
+        original_inference = (
+            controller_node.controller.inference
+        )
+
+        inference_results: dict[
+            int,
+            object,
+        ] = {}
+
+        def tracked_inference(
+            input_data,
+            t=0,
+            save_path=None,
+        ):
+            result = original_inference(
+                input_data=input_data,
+                t=t,
+                save_path=save_path,
+            )
+
+            inference_results[t] = result
+
+            return result
+
+        saved_trajectory = None
+
+        def fake_save_rollout(
+            traj,
+            save_path,
+            task_id,
+            traj_number,
+        ):
+            nonlocal saved_trajectory
+
+            saved_trajectory = traj
+
+            print(
+                "\n=== CONTROL LOOP REACHED "
+                "SAVE_ROLLOUT ==="
+            )
+
+            raise _ControlLoopFinished()
+
+        input_values = iter(
+            [
+                "0",
+                "",
+                str(args.task_id),
+            ]
+        )
+
+        def fake_input(prompt=""):
+            try:
+                value = next(input_values)
+            except StopIteration as exc:
+                raise AssertionError(
+                    "control_loop() requested more "
+                    "interactive inputs than expected."
+                ) from exc
+
+            print(
+                f"[ROS test input] {prompt}{value}"
+            )
+
+            return value
+
+        def fake_get_synced_images():
+            return [
+                publisher_node.rgb
+            ]
+
+        def fake_capture_robot_state():
+            return {
+                EEF_POS_NAME: (
+                    robot_state[
+                        EEF_POS_NAME
+                    ].copy()
+                ),
+                EEF_QUAT_NAME: (
+                    robot_state[
+                        EEF_QUAT_NAME
+                    ].copy()
+                ),
+            }
+
+        print(
+            "\n=== RUNNING REAL CONTROL LOOP "
+            "WITH ROS INPUT ==="
+        )
+
+        with (
+            patch(
+                "builtins.input",
+                side_effect=fake_input,
             ),
+            patch.object(
+                ai_controller_node_module,
+                "_get_trajectory_cls",
+                return_value=_RosTestTrajectory,
+            ),
+            patch.object(
+                controller_node,
+                "get_synced_images",
+                side_effect=fake_get_synced_images,
+            ),
+            patch.object(
+                controller_node,
+                "_capture_robot_state",
+                side_effect=fake_capture_robot_state,
+            ),
+            patch.object(
+                controller_node,
+                "save_rollout",
+                side_effect=fake_save_rollout,
+            ),
+            patch.object(
+                controller_node.controller,
+                "inference",
+                side_effect=tracked_inference,
+            ),
+        ):
+            try:
+                controller_node.control_loop()
+            except _ControlLoopFinished:
+                pass
+
+        print(
+            "\n=== VALIDATING ROS CONTROL LOOP ==="
         )
 
         if (
-            controller_node
-            .controller
-            .action_plan
+            controller_node.controller.action_plan
             is None
         ):
             raise AssertionError(
-                "SeeDo did not generate "
+                "control_loop() did not generate "
                 "an ActionPlan."
             )
 
-        print(
-            "Action plan: "
-            f"{controller_node.controller.action_plan.natural_language_plan}"
-        )
-
-        print(
-            "\n=== RUNNING ROS-FED t=0 INFERENCE ==="
-        )
-
-        result = (
-            controller_node
-            .controller
-            .inference(
-                input_data=runtime_input,
-                t=0,
-            )
-        )
-
-        if result is not None:
+        if (
+            controller_node.controller.scene_state
+            is None
+        ):
             raise AssertionError(
-                "SeeDo inference(t=0) "
-                "must return None."
+                "control_loop() did not generate "
+                "a SceneState."
             )
 
         primitive_plan = (
-            controller_node
-            .controller
-            .primitive_plan
+            controller_node.controller.primitive_plan
         )
 
         if primitive_plan is None:
             raise AssertionError(
-                "SeeDo did not generate "
+                "control_loop() did not generate "
                 "a PrimitivePlan."
             )
 
@@ -692,48 +858,119 @@ def run_test(
             f"Primitive count: {primitive_count}"
         )
 
+        if 0 not in inference_results:
+            raise AssertionError(
+                "control_loop() did not execute "
+                "inference(t=0)."
+            )
+
+        if inference_results[0] is not None:
+            raise AssertionError(
+                "SeeDo inference(t=0) "
+                "must return None."
+            )
+
         print(
-            "\n=== CONSUMING PRIMITIVE PLAN ==="
+            "\n=== VALIDATING LOW-LEVEL ACTIONS ==="
         )
+
+        total_low_level_actions = 0
 
         for t in range(
             1,
             primitive_count + 1,
         ):
-            primitive_step = (
-                controller_node
-                .controller
-                .inference(
-                    input_data={},
-                    t=t,
+            if t not in inference_results:
+                raise AssertionError(
+                    "control_loop() did not execute "
+                    f"inference(t={t})."
                 )
-            )
 
-            if primitive_step is None:
+            actions = inference_results[t]
+
+            if actions is None:
                 raise AssertionError(
                     "SeeDo returned None before "
                     f"completion at t={t}."
                 )
 
-            print(
-                f"  t={t}: "
-                f"{primitive_step.name}"
-                f"({primitive_step.arguments})"
+            if not isinstance(
+                actions,
+                list,
+            ):
+                raise AssertionError(
+                    "SeeDo inference() must return "
+                    f"a list at t={t}."
+                )
+
+            if not actions:
+                raise AssertionError(
+                    "SeeDo returned an empty action "
+                    f"list at t={t}."
+                )
+
+            primitive_step = (
+                primitive_plan.steps[t - 1]
             )
 
-        completion_result = (
-            controller_node
-            .controller
-            .inference(
-                input_data={},
-                t=primitive_count + 1,
+            for action_index, action in enumerate(
+                actions
+            ):
+                if not isinstance(
+                    action,
+                    np.ndarray,
+                ):
+                    raise AssertionError(
+                        "Invalid action type at "
+                        f"t={t}, index={action_index}."
+                    )
+
+                if action.shape != (8,):
+                    raise AssertionError(
+                        "Invalid action shape at "
+                        f"t={t}, index={action_index}: "
+                        f"{action.shape}."
+                    )
+
+                if not np.all(
+                    np.isfinite(action)
+                ):
+                    raise AssertionError(
+                        "Non-finite action at "
+                        f"t={t}, index={action_index}."
+                    )
+
+            total_low_level_actions += len(
+                actions
             )
+
+            print(
+                f"[PASS] t={t}: "
+                f"{primitive_step.name}"
+                f"({primitive_step.arguments}) "
+                f"-> {len(actions)} action(s)"
+            )
+
+        print(
+            "Total low-level actions processed: "
+            f"{total_low_level_actions}"
         )
 
-        if completion_result is not None:
+        completion_t = primitive_count + 1
+
+        if completion_t not in inference_results:
             raise AssertionError(
-                "SeeDo must return None after "
-                "PrimitivePlan completion."
+                "control_loop() did not execute "
+                "the completion inference."
+            )
+
+        if (
+            inference_results[completion_t]
+            is not None
+        ):
+            raise AssertionError(
+                "Completion inference must "
+                "return None."
             )
 
         if (
@@ -743,12 +980,61 @@ def run_test(
             != "completed"
         ):
             raise AssertionError(
-                "SeeDoController did not "
-                "enter completed state."
+                "SeeDoController did not enter "
+                "completed state."
+            )
+
+        print("[PASS] completion state")
+
+        if saved_trajectory is None:
+            raise AssertionError(
+                "control_loop() did not reach "
+                "save_rollout()."
+            )
+
+        if len(
+            saved_trajectory.entries
+        ) != primitive_count:
+            raise AssertionError(
+                "Expected one trajectory entry "
+                "per SeeDo primitive. "
+                f"Expected {primitive_count}, "
+                f"found "
+                f"{len(saved_trajectory.entries)}."
+            )
+
+        if not saved_trajectory.entries[-1][
+            "done"
+        ]:
+            raise AssertionError(
+                "Final trajectory entry is not "
+                "marked done."
             )
 
         print(
-            "\nROS INPUT PIPELINE TEST PASSED"
+            "[PASS] control_loop reached "
+            "trajectory completion"
+        )
+
+        motion_artifact_path = (
+            Path(args.artifacts_dir)
+            / "motion_layer"
+            / "motion_plan.json"
+        )
+
+        if not motion_artifact_path.is_file():
+            raise AssertionError(
+                "Motion Layer artifact was not "
+                f"generated: {motion_artifact_path}"
+            )
+
+        print(
+            "[PASS] Motion Layer artifact: "
+            f"{motion_artifact_path}"
+        )
+
+        print(
+            "\nROS CONTROL LOOP TEST PASSED"
         )
 
         return 0
@@ -805,7 +1091,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--task-id",
-        default="test",
+        default="1",
     )
 
     return parser

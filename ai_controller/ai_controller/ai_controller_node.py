@@ -943,7 +943,9 @@ class AIControllerNode(Node):
 
                 if self.ai_controller_target == 'seedo_controller':
                     out = self.controller.inference(
-                        input_data={},
+                        input_data={
+                            "robot_state": robot_state,
+                        },
                         t=step,
                     )
                 else:
@@ -962,11 +964,7 @@ class AIControllerNode(Node):
                             f'PrimitivePlan at t={step}.'
                         )
 
-                    actions = [{
-                        'name': out.name,
-                        'arguments': dict(out.arguments),
-                        'source_code': out.source_code,
-                    }]
+                    actions = out
                 elif self.ai_controller_target == 'cod_controller':
                     pred_action, predicted_bb, target_obj_prediction = out
                     actions = [pred_action]
@@ -986,16 +984,6 @@ class AIControllerNode(Node):
 
                 for indx, action in enumerate(actions):
                     self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
-
-                    if self.ai_controller_target == 'seedo_controller':
-                        self.get_logger().info(
-                            f"[SeeDo] t={step}: "
-                            f"{action['name']}({action['arguments']})"
-                        )
-
-                        # The SeeDo Motion Layer will later translate this
-                        # symbolic PrimitiveStep into executable robot motion.
-                        continue
 
                     if self.move_robot:
                         # 5. Send commands to the robot (e.g., set pose, control gripper)
@@ -1043,6 +1031,26 @@ class AIControllerNode(Node):
                             self.get_logger().info(f'Gripper is closing at step {step}')
                             self.gripper_closed = True
 
+                    if self.ai_controller_target == 'seedo_controller':
+                        seedo_action_done = (
+                            seedo_primitive_count is not None
+                            and step == seedo_primitive_count
+                            and indx == len(actions) - 1
+                        )
+
+                        seedo_step_obs = dict(robot_state)
+                        seedo_step_obs['camera_front_image'] = cv2.cvtColor(
+                            images[0],
+                            cv2.COLOR_RGB2BGR,
+                        )
+
+                        traj.append(
+                            obs=seedo_step_obs,
+                            action=action,
+                            done=seedo_action_done,
+                            reward=1 if seedo_action_done else 0,
+                        )
+
                 # check if a transiction close->open has been made
                 episode_done = False
 
@@ -1057,28 +1065,29 @@ class AIControllerNode(Node):
                         self.gripper_closed = False
                         episode_done = True
 
-                # 7. Record this step (observation image, cropped model input, predicted
-                # bounding boxes, computed action and robot state) into the rollout Trajectory
-                step_obs = dict(robot_state)
-                step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
-
                 if self.ai_controller_target != 'seedo_controller':
-                    cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
-                    if os.path.isfile(cropped_image_path):
-                        step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
-                    else:
-                        self.get_logger().warning(
-                            f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+                    # 7. Record this step (observation image, cropped model input, predicted
+                    # bounding boxes, computed action and robot state) into the rollout Trajectory
+                    step_obs = dict(robot_state)
+                    step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
 
-                if predicted_bb is not None:
-                    step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
+                    if self.ai_controller_target != 'seedo_controller':
+                        cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
+                        if os.path.isfile(cropped_image_path):
+                            step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                        else:
+                            self.get_logger().warning(
+                                f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
 
-                traj.append(
-                    obs=step_obs,
-                    action=action,
-                    done=episode_done,
-                    reward=1 if episode_done else 0,
-                )
+                    if predicted_bb is not None:
+                        step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
+
+                    traj.append(
+                        obs=step_obs,
+                        action=action,
+                        done=episode_done,
+                        reward=1 if episode_done else 0,
+                    )
 
                 if (
                     self.ai_controller_target == 'seedo_controller'

@@ -476,3 +476,285 @@ The test validates:
 The test does not execute physical robot motion.
 
 The complete controller currently generates the symbolic primitive plan and translates each primitive into low-level actions. Actual transmission of these actions to the robot is performed by the ROS2 `AIControllerNode` execution layer.
+
+---
+
+# 9. AIControllerNode Offline Integration
+
+Runs the real `AIControllerNode.control_loop()` through an offline integration test.
+
+The test validates the SeeDo integration at node level while keeping robot motion disabled.
+
+It exercises:
+
+- the real `control_loop()`
+- SeeDo controller reset and demo loading
+- `inference(t=0)` runtime planning
+- primitive-by-primitive execution
+- iteration over every low-level action returned by the Motion Layer
+- SeeDo completion detection
+- rollout control-flow integration
+
+Physical robot motion is disabled with `move_robot=False`.
+
+The test is intended to validate the node integration without requiring live ROS sensor topics or robot hardware.
+
+---
+
+# 10. AIControllerNode ROS Integration
+
+Runs the real `AIControllerNode.control_loop()` with a synthetic ROS2 runtime.
+
+The test publishes simulated RGB-D data, `CameraInfo`, and the required TF transform so that the node consumes the runtime scene through its normal ROS interfaces.
+
+Run with:
+
+```bash
+python -m ai_controller.models.seedo_controller.tests.test_seedo_node_ros \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+  --scene-dir /scene_capture \
+  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --artifacts-dir /seedo_tests/ai_controller_node_ros
+```
+
+The test validates:
+
+- `AIControllerNode` initialization with `seedo_controller`
+- ROS RGB-D publication and subscription
+- `CameraInfo` publication and subscription
+- TF lookup for `base_link <- table_0`
+- SeeDo demo processing
+- runtime perception and semantic interpretation
+- CAP primitive generation
+- Motion Layer translation
+- iteration over every generated low-level action
+- SeeDo completion handling inside `control_loop()`
+- Motion Layer artifact generation
+
+For the current pick-and-place example, the CAP plan is:
+
+```text
+reach("green cube")
+approaching("green cube")
+pick("green cube")
+lift_up("green cube")
+moving("first bin from the left")
+placing("first bin from the left")
+```
+
+and the current Motion Layer output is:
+
+```text
+reach        -> 19 low-level actions
+approaching  ->  7 low-level actions
+pick         ->  1 low-level action
+lift_up      ->  7 low-level actions
+moving       -> 19 low-level actions
+placing      ->  5 low-level actions
+```
+
+for a total of:
+
+```text
+58 low-level actions
+```
+
+The test does not execute physical robot motion.
+
+---
+
+# 11. Interactive ROS Dry-Run
+
+Runs a production-like interactive dry-run of the real `AIControllerNode.control_loop()`.
+
+Unlike the previous ROS integration test, this test keeps the normal interactive workflow and the real rollout-saving logic.
+
+The synthetic ROS runtime publishes:
+
+- SeeDo RGB image
+- depth image
+- `CameraInfo`
+- legacy camera images used by `get_synced_images()`
+- `/joint_states`
+- TF `base_link -> table_0`
+- TF `base_link -> tcp_link`
+
+Therefore the following node functions are exercised without replacing them with mocked values:
+
+```text
+get_synced_images()
+_capture_robot_state()
+```
+
+The test keeps:
+
+```text
+move_robot=False
+```
+
+so no `GoToPose` or gripper command is physically sent.
+
+Run with:
+
+```bash
+python -m ai_controller.models.seedo_controller.tests.test_seedo_node_interactive \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+  --scene-dir /scene_capture \
+  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --artifacts-dir /seedo_tests/ai_controller_node_interactive \
+  --rollouts-dir /seedo_tests/ai_controller_node_interactive/rollouts
+```
+
+The normal `control_loop()` interaction is preserved:
+
+```text
+trajectory count
+    │
+    ▼
+Press Enter to start
+    │
+    ▼
+task ID
+    │
+    ▼
+SeeDo execution
+    │
+    ▼
+save_rollout()
+    │
+    ▼
+rollout outcome questions
+```
+
+After one trajectory has completed and the rollout outcome questions have been answered, the control loop asks again:
+
+```text
+Press Enter to start the control loop. Make sure the robot is in a safe position.
+```
+
+At that point the dry-run can be stopped with `Ctrl+C`.
+
+The test then validates that the rollout and SeeDo artifacts were generated successfully.
+
+For task `00` and trajectory `000`, the rollout files are stored under:
+
+```text
+/seedo_tests/ai_controller_node_interactive/rollouts/
+└── seedo_controller/
+    └── pick_place/
+        └── task_00/
+            ├── traj_000.pkl
+            └── traj_000.json
+```
+
+The Motion Layer artifact is stored at:
+
+```text
+/seedo_tests/ai_controller_node_interactive/
+└── motion_layer/
+    └── motion_plan.json
+```
+
+## Rollout recording behavior
+
+For SeeDo, the `Trajectory` now records every low-level action produced by the Motion Layer.
+
+Therefore:
+
+```text
+1 PrimitiveStep = N low-level actions = N Trajectory entries
+```
+
+For the current pick-and-place example:
+
+```text
+6 symbolic primitives
+        ↓
+58 low-level actions
+        ↓
+58 saved Trajectory entries
+```
+
+Each saved action follows:
+
+```text
+[x, y, z, qx, qy, qz, qw, gripper_position]
+```
+
+Only the final low-level action of the final primitive is marked as:
+
+```text
+done=True
+reward=1
+```
+
+All previous low-level actions are stored with:
+
+```text
+done=False
+reward=0
+```
+
+The observation stored with each rollout entry contains:
+
+```text
+joint_pos
+joint_vel
+gripper_qpos
+gripper_qvel
+eef_pos
+eef_quat
+camera_front_image
+```
+
+In the current synthetic dry-run, the robot state remains constant because the simulated robot does not physically move.
+
+---
+
+# 12. Saved Rollout Inspection
+
+The saved SeeDo rollout can be inspected independently with:
+
+```bash
+python -m ai_controller.models.seedo_controller.tests.inspect_seedo_rollout
+```
+
+The default inspected trajectory is:
+
+```text
+/seedo_tests/ai_controller_node_interactive/rollouts/
+└── seedo_controller/
+    └── pick_place/
+        └── task_00/
+            └── traj_000.pkl
+```
+
+The inspector validates:
+
+- top-level rollout metadata
+- `savers.Trajectory` deserialization
+- number of recorded trajectory entries
+- observation keys
+- robot-state array shapes
+- front-camera image shape
+- low-level action shape `(8,)`
+- finite action values
+- rollout termination flags
+- final reward
+
+For the current pick-and-place test, the expected result is:
+
+```text
+Number of recorded steps: 58
+Valid 8D actions: 58/58
+First step done: False
+First step reward: 0
+Last step done: True
+Last step reward: 1
+
+ROLLOUT INSPECTION PASSED
+```
+
+This verifies that every low-level action generated by the SeeDo Motion Layer is preserved in the saved `.pkl` rollout.
