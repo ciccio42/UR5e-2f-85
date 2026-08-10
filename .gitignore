@@ -6,6 +6,8 @@ install/
 traj_tmp/
 *.pkl
 resource/
+!ai_controller/resource/
+!ai_controller/resource/ai_controller
 test/
 checkpoint_folder/
 *png
