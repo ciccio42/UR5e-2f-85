@@ -1,0 +1,9 @@
+defaults:
+  - dataset: ur5e
+  - policy_io: ur5e_videmb
+  - _self_
+
+dataset:
+  dataset:
+    data_dir: /workspace/UR5e-2f-85/mimic_video_workspace/processed_data/ur5e_pick_place_action
+    timestep_anchor: workspace_rgb_embedding
