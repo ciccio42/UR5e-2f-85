@@ -35,7 +35,7 @@ apply_patches() {
     local patch
 
     git config --global --add safe.directory "$submodule"
-    for patch in "$WORKSPACE"/patches/*.patch; do
+    for patch in "$WORKSPACE"/patches/cosmos/*.patch; do
         if git -C "$submodule" apply --check "$patch" 2>/dev/null; then
             git -C "$submodule" apply "$patch"
             echo "Applicata: $(basename "$patch")"
