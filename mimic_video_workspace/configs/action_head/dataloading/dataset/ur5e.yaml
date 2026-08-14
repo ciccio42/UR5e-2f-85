@@ -48,4 +48,34 @@ dataset:
   policy_io: ${policy_io.policy_io}
   should_include_padded_tails: true
   seed: 42
-  num_val_episodes: 24
+  num_val_episodes: 0
+  validation_anchor_seed: 42
+  validation_episode_sampling:
+    ep_000001: first_half
+    ep_000007: second_half
+    ep_000055: first_half
+    ep_000057: second_half
+    ep_000088: first_half
+    ep_000094: second_half
+    ep_000126: first_half
+    ep_000154: second_half
+    ep_000165: first_half
+    ep_000197: second_half
+    ep_000202: first_half
+    ep_000227: second_half
+    ep_000241: first_half
+    ep_000245: second_half
+    ep_000293: first_half
+    ep_000294: second_half
+    ep_000352: first_half
+    ep_000358: second_half
+    ep_000361: first_half
+    ep_000395: second_half
+    ep_000412: first_half
+    ep_000434: second_half
+    ep_000454: first_half
+    ep_000466: second_half
+  statistics_batch_size: 4
+  statistics_num_workers: 2
+  statistics_prefetch_factor: 1
+  episode_scan_num_workers: 2

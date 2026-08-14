@@ -1,0 +1,147 @@
+# Configura MimicDataset per il fine tuning dell'action head UR5e.
+#
+# La patch:
+# - permette uno split train/validation esplicito tramite gli stem degli episodi;
+# - associa a ogni episodio di validation il campionamento nella prima meta,
+#   nella seconda meta oppure su tutti gli anchor disponibili;
+# - mantiene come fallback lo split casuale originale degli autori;
+# - rende configurabili batch size, worker e prefetch usati per le statistiche;
+# - passa al ChunkReader il limite dei processi e la selezione deterministica
+#   degli anchor, che vengono implementati dalla patch successiva;
+# - include split e seed nell'identificatore della cache delle statistiche.
+#
+# Questa patch richiede la successiva patch del ChunkReader prima di poter
+# istanziare MimicDataset con i nuovi parametri.
+
+diff --git a/model/cosmos_predict2/data/action/dataset_action.py b/model/cosmos_predict2/data/action/dataset_action.py
+--- a/model/cosmos_predict2/data/action/dataset_action.py
++++ b/model/cosmos_predict2/data/action/dataset_action.py
+@@ -37,11 +37,34 @@ class MimicDataset(torch.utils.data.Dataset):
+         should_include_padded_tails: bool,
+         seed: int = 42,
+         num_val_episodes: int = 1,
++        validation_episode_sampling: dict[str, str] | None = None,
++        validation_anchor_seed: int = 42,
++        statistics_batch_size: int = 4,
++        statistics_num_workers: int = 2,
++        statistics_prefetch_factor: int = 1,
++        episode_scan_num_workers: int = 2,
+         train: bool = True,
+         verbose: bool = False,
+     ) -> None:
+         self._data_dir = pathlib.Path(data_dir)
+         self._episode_paths = get_paths(self._data_dir)
++        self._statistics_batch_size = statistics_batch_size
++        self._statistics_num_workers = statistics_num_workers
++        self._statistics_prefetch_factor = statistics_prefetch_factor
++
++        if statistics_batch_size <= 0:
++            raise ValueError("statistics_batch_size must be positive.")
++        if statistics_num_workers < 0:
++            raise ValueError("statistics_num_workers must be non-negative.")
++        if statistics_prefetch_factor <= 0:
++            raise ValueError("statistics_prefetch_factor must be positive.")
++        if episode_scan_num_workers < 0:
++            raise ValueError("episode_scan_num_workers must be non-negative.")
++
++        if validation_episode_sampling is not None and num_val_episodes != 0:
++            raise ValueError(
++                "Set num_val_episodes=0 when validation_episode_sampling is provided."
++            )
+ 
+         def get_source_component(key: str, spec: dict, prefix: str) -> tuple[str, ObsMeta]:
+             source_name = source_component_names.get(f"{prefix}/{key}", key)
+@@ -63,8 +86,17 @@ class MimicDataset(torch.utils.data.Dataset):
+ 
+         reader_data_components = copy.deepcopy(self._data_components)
+ 
+-        val_mask = self.get_val_mask(n_episodes=len(self._episode_paths), n_val_episodes=num_val_episodes, seed=seed)
++        if validation_episode_sampling is None:
++            val_mask = self.get_val_mask(
++                n_episodes=len(self._episode_paths), n_val_episodes=num_val_episodes, seed=seed
++            )
++        else:
++            val_mask = self.get_explicit_val_mask(
++                episode_paths=self._episode_paths,
++                validation_episode_sampling=validation_episode_sampling,
++            )
+         val_mask = ~val_mask if train else val_mask
++        episode_anchor_selection = None if train else validation_episode_sampling
+ 
+         self._stats_id = hashlib.sha256(
+             "".join(
+@@ -76,6 +108,8 @@ class MimicDataset(torch.utils.data.Dataset):
+                     str(should_include_padded_tails),
+                     str(seed),
+                     str(num_val_episodes),
++                    str(sorted((validation_episode_sampling or {}).items())),
++                    str(validation_anchor_seed),
+                     inspect.getsource(chunk_reader),
+                     inspect.getsource(data_transforms_mod),
+                     inspect.getsource(data_spec),
+@@ -91,6 +125,9 @@ class MimicDataset(torch.utils.data.Dataset):
+             should_include_padded_tails=should_include_padded_tails,
+             episode_mask=val_mask,
+             verbose=verbose,
++            episode_scan_num_workers=episode_scan_num_workers,
++            episode_anchor_selection=episode_anchor_selection,
++            anchor_selection_seed=validation_anchor_seed,
+             stats_id=self._stats_id,
+             data_dir=self.data_dir,
+         )
+@@ -129,8 +166,9 @@ class MimicDataset(torch.utils.data.Dataset):
+         with self.restrict_chunk_reader() as normed_keys, normed_keys.ignore_transforms() as dataset:
+             dataloader = torch.utils.data.DataLoader(
+                 dataset=dataset,
+-                batch_size=(os.cpu_count() or 4) // 4,
+-                num_workers=(os.cpu_count() or 4) // 4,
++                batch_size=self._statistics_batch_size,
++                num_workers=self._statistics_num_workers,
++                prefetch_factor=self._statistics_prefetch_factor if self._statistics_num_workers > 0 else None,
+             )
+             for batch in tqdm.tqdm(dataloader, desc="Iterating dataset to get normalization"):
+                 for key, values in batch.items():
+@@ -173,11 +211,43 @@ class MimicDataset(torch.utils.data.Dataset):
+             should_ignore_transforms_for_norm=self._should_ignore_transforms_for_norm,
+         )
+ 
++    @staticmethod
++    def get_explicit_val_mask(
++        episode_paths: list[pathlib.Path], validation_episode_sampling: dict[str, str]
++    ) -> np.ndarray:
++        if not validation_episode_sampling:
++            raise ValueError("validation_episode_sampling cannot be empty.")
++
++        valid_sampling_modes = {"first_half", "second_half", "all"}
++        invalid_modes = set(validation_episode_sampling.values()) - valid_sampling_modes
++        if invalid_modes:
++            raise ValueError(
++                f"Invalid validation anchor sampling modes: {sorted(invalid_modes)}"
++            )
++
++        episode_indices = {path.stem: idx for idx, path in enumerate(episode_paths)}
++        if len(episode_indices) != len(episode_paths):
++            raise ValueError("Episode stems must be unique.")
++
++        requested_episodes = set(validation_episode_sampling)
++        missing_episodes = requested_episodes - set(episode_indices)
++        if missing_episodes:
++            raise ValueError(f"Validation episodes not found: {sorted(missing_episodes)}")
++
++        val_mask = np.zeros(len(episode_paths), dtype=bool)
++        for episode_stem in requested_episodes:
++            val_mask[episode_indices[episode_stem]] = True
++        return val_mask
++
+     @staticmethod
+     def get_val_mask(n_episodes, n_val_episodes, seed=0) -> np.ndarray:
+         val_mask = np.zeros(n_episodes, dtype=bool)
+         if n_val_episodes <= 0:
+             return val_mask
++        if n_val_episodes > n_episodes:
++            raise ValueError(
++                f"Cannot select {n_val_episodes} validation episodes from {n_episodes}."
++            )
+ 
+         rng = np.random.default_rng(seed=seed)
+         val_idxs = rng.choice(n_episodes, size=n_val_episodes, replace=False)
