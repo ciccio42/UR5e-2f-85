@@ -500,13 +500,12 @@ def run_test(args: argparse.Namespace) -> int:
 
         if len(
             saved_trajectory.entries
-        ) != primitive_count:
+        ) != total_low_level_actions:
             raise AssertionError(
-                "control_loop() did not record exactly one "
-                "trajectory entry per SeeDo primitive. "
-                f"Expected {primitive_count}, "
-                f"found "
-                f"{len(saved_trajectory.entries)}."
+                "Expected one trajectory entry "
+                "per SeeDo low-level action. "
+                f"Expected {total_low_level_actions}, "
+                f"found {len(saved_trajectory.entries)}."
             )
 
         final_entry = (

@@ -21,10 +21,10 @@ docker run --rm -it \
     --name seedo_ros2_container \
     --gpus all \
     --network host \
-    -v /home/mivia/Desktop/UR-Application/UR5e-2f-85:/home/ros2_ws/src/UR5e-2f-85 \
-    -v /home/mivia/Desktop/UR-Application/test_dataset:/test_dataset:ro \
-    -v /home/mivia/Desktop/UR-Application/seedo_tests:/seedo_tests \
-    -v /home/mivia/Desktop/UR-Application/scene_capture:/scene_capture:ro \
+    -v "$(pwd)":/home/ros2_ws/src/UR5e-2f-85 \
+    -v "$(pwd)/../test_dataset":/test_dataset:ro \
+    -v "$(pwd)/../seedo_tests":/seedo_tests \
+    -v "$(pwd)/../scene_capture":/scene_capture:ro \
     -e OPENAI_API_KEY="$OPENAI_API_KEY" \
     -e BUILD_SEEDO_ROS=1 \
     seedo_ros2:latest

@@ -994,13 +994,12 @@ def run_test(
 
         if len(
             saved_trajectory.entries
-        ) != primitive_count:
+        ) != total_low_level_actions:
             raise AssertionError(
                 "Expected one trajectory entry "
-                "per SeeDo primitive. "
-                f"Expected {primitive_count}, "
-                f"found "
-                f"{len(saved_trajectory.entries)}."
+                "per SeeDo low-level action. "
+                f"Expected {total_low_level_actions}, "
+                f"found {len(saved_trajectory.entries)}."
             )
 
         if not saved_trajectory.entries[-1][

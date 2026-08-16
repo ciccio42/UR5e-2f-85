@@ -211,8 +211,8 @@ Run the test with:
 
 ```bash
 python -m ai_controller.models.seedo_controller.tests.test_motion_layer \
-  --scene-state /seedo_tests/ai_controller_node_ros/scene_interpreter/scene_state.json \
-  --primitive-plan /seedo_tests/ai_controller_node_ros/lmp_generator/primitive_plan.json
+  --scene-state /seedo_tests/scene_interpreter/scene_state.json \
+  --primitive-plan /seedo_tests/lmp_generator/primitive_plan.json
 ```
 
 The test validates:
@@ -482,6 +482,17 @@ The complete controller currently generates the symbolic primitive plan and tran
 # 9. AIControllerNode Offline Integration
 
 Runs the real `AIControllerNode.control_loop()` through an offline integration test.
+
+Run with:
+
+```bash
+python -m ai_controller.models.seedo_controller.tests.test_seedo_node_offline \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+  --scene-dir /scene_capture \
+  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --artifacts-dir /seedo_tests/ai_controller_node_offline
+```
 
 The test validates the SeeDo integration at node level while keeping robot motion disabled.
 
