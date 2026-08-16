@@ -1,0 +1,100 @@
+# Riduce la validation dell'action head alla sola loss standard di training.
+#
+# La patch:
+# - mantiene validation_step in torch.inference_mode;
+# - riusa training_step per calcolare la flow-matching loss sul validation batch;
+# - elimina lo sweep aggiuntivo sui 35 livelli di rumore;
+# - elimina la generazione Cosmos completa usata per le metriche genvid;
+# - non modifica training, predict, checkpoint o pipeline di inferenza.
+
+diff --git a/model/cosmos_predict2/models/world2action_model.py b/model/cosmos_predict2/models/world2action_model.py
+--- a/model/cosmos_predict2/models/world2action_model.py
++++ b/model/cosmos_predict2/models/world2action_model.py
+@@ -410,86 +410,7 @@ class World2ActionModel(ImaginaireModel):
+ 
+     @torch.inference_mode()
+     def validation_step(self, data_batch: dict, iteration: int):
+-        output_batch, loss = self.training_step(data_batch, iteration)
+-        unnormed_x0_B_HA_A = data_batch["action/lowdim_concat"]
+-
+-        output_batch["mses"] = collections.defaultdict(list)
+-
+-        # get mses for gt video + noise
+-        self.video2world_pipe.scheduler.set_timesteps(35, device=self.tensor_kwargs["device"])
+-        for video_sigma in self.video2world_pipe.scheduler.sigmas:
+-            video_sigma_B_1 = video_sigma.repeat(unnormed_x0_B_HA_A.shape[0]).unsqueeze(1)
+-            unnormed_x0_pred_B_HA_A = self.predict(data_batch, video_sigma_B_1).float()
+-
+-            mses_gtvid = {
+-                "gtvid/full": F.mse_loss(unnormed_x0_pred_B_HA_A, unnormed_x0_B_HA_A.float()),
+-            }
+-            mses_gtvid = _dp_mean_dict(mses_gtvid, device=unnormed_x0_pred_B_HA_A.device)
+-
+-            if dist.is_available() and dist.is_initialized() and parallel_state.get_data_parallel_rank() != 0:
+-                continue
+-
+-            for name, mse in mses_gtvid.items():
+-                output_batch["mses"][name].append((video_sigma.item(), mse))
+-
+-        del (
+-            video_sigma,
+-            video_sigma_B_1,
+-            unnormed_x0_pred_B_HA_A,
+-        )
+-        gc.collect()
+-
+-        # get mses for generated video
+-
+-        if "obs/workspace_rgb_embedding" not in data_batch:
+-            input_vid = data_batch["obs/workspace_rgb"]
+-            B, C, T, H, W = input_vid.shape
+-            assert T in (1, 5)
+-            vid_input = torch.zeros((B, C, 61, H, W), device=input_vid.device, dtype=input_vid.dtype)
+-            vid_input[:, :, :T, :, :] = input_vid
+-            num_latent_conditional_frames = 1 if T == 1 else 2
+-        else:
+-            vid_input = data_batch["obs/workspace_rgb_embedding"]
+-            num_latent_conditional_frames = data_batch["obs/num_conditional_frames"].cpu()
+-
+-        context = self.video2world_pipe.generate_video(
+-            vid_input=vid_input,
+-            is_video_embedding="obs/workspace_rgb_embedding" in data_batch,
+-            num_latent_conditional_frames=num_latent_conditional_frames,
+-            prompt_embedding=data_batch["obs/language_embedding"],
+-            guidance=0.0,
+-            num_sampling_step=35,
+-            seed=0,
+-            use_cuda_graphs=False,
+-            return_all_context=True,
+-            hidden_state_layer_idx=self.pipe.config.xattn_layer_idx,
+-        )
+-        for video_sigma, crossattn_emb in context:
+-            video_sigma_B_1 = video_sigma.repeat(unnormed_x0_B_HA_A.shape[0]).unsqueeze(1)
+-
+-            hidden_state_shape = crossattn_emb.shape
+-            crossattn_emb = crossattn_emb.reshape(hidden_state_shape[0], -1, hidden_state_shape[-1])
+-
+-            genvid_unnormed_x0_pred_B_HA_A = self.pipe(
+-                state_B_HO_O=data_batch["obs/lowdim_concat"],
+-                crossattn_emb=crossattn_emb,
+-                context_timesteps_B_1=video_sigma_B_1,
+-                seed=0,
+-                use_cuda_graphs=False,
+-            )
+-
+-            mses_genvid = {
+-                "genvid/full": F.mse_loss(genvid_unnormed_x0_pred_B_HA_A, unnormed_x0_B_HA_A.float()),
+-            }
+-            mses_genvid = _dp_mean_dict(mses_genvid, device=genvid_unnormed_x0_pred_B_HA_A.device)
+-
+-            if dist.is_available() and dist.is_initialized() and parallel_state.get_data_parallel_rank() != 0:
+-                continue
+-
+-            for name, mse in mses_genvid.items():
+-                output_batch["mses"][name].append((video_sigma.item(), mse))
+-
+-        return output_batch, loss
++        return self.training_step(data_batch, iteration)
+ 
+     # ------------------ Checkpointing ------------------
+ 

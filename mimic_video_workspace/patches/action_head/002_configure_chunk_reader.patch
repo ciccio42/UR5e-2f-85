@@ -1,0 +1,121 @@
+# Configura ChunkReader per limitare i processi e controllare gli anchor di validation.
+#
+# La patch:
+# - sostituisce multiprocessing.cpu_count() con un limite esplicito;
+# - mantiene sequenziale la scansione con zero o un worker;
+# - lascia invariato il calcolo originale dei timestamp validi;
+# - seleziona un solo anchor per episodio nella prima o nella seconda meta;
+# - usa un seed stabile derivato da seed, stem e modalita di campionamento;
+# - mantiene tutti gli anchor quando la modalita richiesta e "all".
+#
+# I parametri sono passati da MimicDataset tramite la patch 001.
+
+diff --git a/model/cosmos_predict2/data/action/chunk_reader.py b/model/cosmos_predict2/data/action/chunk_reader.py
+--- a/model/cosmos_predict2/data/action/chunk_reader.py
++++ b/model/cosmos_predict2/data/action/chunk_reader.py
+@@ -1,4 +1,5 @@
+ import bisect
++import hashlib
+ import logging
+ import math
+ import multiprocessing
+@@ -28,6 +29,9 @@ class ChunkReader:
+         timestep_anchor: str,
+         should_include_padded_tails: bool = True,
+         episode_mask: np.ndarray | None = None,
++        episode_scan_num_workers: int = 0,
++        episode_anchor_selection: dict[str, str] | None = None,
++        anchor_selection_seed: int = 42,
+         stats_id: str | None = None,
+         data_dir: Path | None = None,
+         logger: logging.Logger | None = None,
+@@ -43,6 +47,23 @@ class ChunkReader:
+             msg = "ChunkReader on no episodes doesn't make sense."
+             raise ValueError(msg)
+ 
++        if episode_scan_num_workers < 0:
++            raise ValueError("episode_scan_num_workers must be non-negative.")
++
++        if episode_anchor_selection is not None:
++            available_episode_stems = {path.stem for path in episode_paths}
++            requested_episode_stems = set(episode_anchor_selection)
++            missing_selections = available_episode_stems - requested_episode_stems
++            unknown_selections = requested_episode_stems - available_episode_stems
++            if missing_selections:
++                raise ValueError(
++                    f"Anchor selection missing for episodes: {sorted(missing_selections)}"
++                )
++            if unknown_selections:
++                raise ValueError(
++                    f"Anchor selection references unknown episodes: {sorted(unknown_selections)}"
++                )
++
+         self._data_components = data_components
+         self._timestep_anchor = timestep_anchor
+         self._should_include_padded_tails = should_include_padded_tails
+@@ -58,8 +79,8 @@ class ChunkReader:
+         )
+         max_shift_duration = max(ac["shift_right_by"] for ac in non_persistent_action_components.values())
+ 
+-        if len(episode_paths) > 10 * multiprocessing.cpu_count():
+-            with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
++        if episode_scan_num_workers > 1 and len(episode_paths) > 10 * episode_scan_num_workers:
++            with multiprocessing.Pool(processes=episode_scan_num_workers) as pool:
+                 timesteps = pool.map(
+                     partial(
+                         self._get_timesteps,
+@@ -92,6 +113,20 @@ class ChunkReader:
+                 )
+             ]
+ 
++        if episode_anchor_selection is not None:
++            timesteps = [
++                self._select_episode_timesteps(
++                    episode_path=episode_path,
++                    timesteps=episode_timesteps,
++                    num_timesteps=num_timesteps,
++                    mode=episode_anchor_selection[episode_path.stem],
++                    seed=anchor_selection_seed,
++                )
++                for episode_path, (episode_timesteps, num_timesteps) in zip(
++                    episode_paths, timesteps, strict=True
++                )
++            ]
++
+         data = [(p, t, n) for p, (t, n) in zip(episode_paths, timesteps, strict=True) if n > 0]
+         if not data:
+             msg = "ChunkReader on only empty episodes doesn't make sense."
+@@ -111,6 +146,33 @@ class ChunkReader:
+         self._data_dir = data_dir
+         self._verbose = verbose
+ 
++    @staticmethod
++    def _select_episode_timesteps(
++        episode_path: Path,
++        timesteps: np.ndarray | None,
++        num_timesteps: int,
++        mode: str,
++        seed: int,
++    ) -> tuple[np.ndarray | None, int]:
++        if timesteps is None or num_timesteps == 0 or mode == "all":
++            return timesteps, num_timesteps
++
++        valid_modes = {"first_half", "second_half"}
++        if mode not in valid_modes:
++            raise ValueError(f"Invalid anchor selection mode for {episode_path.stem}: {mode}")
++
++        indices = np.arange(num_timesteps)
++        first_half, second_half = np.array_split(indices, 2)
++        candidates = first_half if mode == "first_half" else second_half
++        if len(candidates) == 0:
++            candidates = indices
++
++        digest = hashlib.sha256(f"{seed}:{episode_path.stem}:{mode}".encode()).digest()
++        episode_seed = int.from_bytes(digest[:8], byteorder="little", signed=False)
++        rng = np.random.default_rng(episode_seed)
++        selected_idx = int(rng.choice(candidates))
++        return timesteps[selected_idx : selected_idx + 1], 1
++
+     def _get_timesteps(
+         self,
+         episode_path: Path,
