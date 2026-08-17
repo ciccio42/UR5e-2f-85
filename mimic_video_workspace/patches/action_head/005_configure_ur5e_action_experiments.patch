@@ -1,0 +1,55 @@
+# Aggiunge configurazioni prudenti per gli esperimenti action head UR5e.
+#
+# La patch:
+# - aggiunge batch size 1 senza eliminare i batch size degli autori;
+# - limita il dataloader di training UR5e a due processi CPU;
+# - riduce a uno il numero di batch preparati in anticipo da ogni worker;
+# - mantiene pin_memory e persistent_workers attivi;
+# - applica questi limiti soltanto a UR5e, lasciando invariati Libero e Bridge;
+# - non modifica il dataloader di validation, gia configurato con batch size 1 e zero worker.
+# - disattiva checkpoint e validation periodici basati sugli optimizer step;
+# - salva ed esegue la validation al termine di ogni epoca UR5e.
+# - mantiene W&B offline per salvare localmente loss e metriche di training.
+# - disattiva i master weights FP32 dell'optimizer per ridurre l'uso di memoria.
+
+diff --git a/model/cosmos_predict2/configs/experiment/world2action.py b/model/cosmos_predict2/configs/experiment/world2action.py
+--- a/model/cosmos_predict2/configs/experiment/world2action.py
++++ b/model/cosmos_predict2/configs/experiment/world2action.py
+@@ -70,7 +70,7 @@ cs.store(name="config", node=BASE)
+ world2action_pipes = ACTION_DECODER_NETS.keys()
+ xattn_layer_idxs = [20]
+ lrs = np.logspace(-5, -3, 9)[[4]]
+-bszs = [4, 8, 32, 64, 128, 256]
++bszs = [1, 4, 8, 32, 64, 128, 256]
+ 
+ 
+ def get_local_batch_size(global_bsz: int) -> int:
+@@ -105,6 +105,28 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
+     cfg["job"]["name"] = exp_name
+     cfg["dataloader_train"] = {"batch_size": L(get_local_batch_size)(global_bsz=bsz)}
+ 
++    # Limita il parallelismo CPU solo per gli esperimenti UR5e sulla Spark condivisa.
++    if pipe == "ur5e":
++        cfg["dataloader_train"].update(
++            num_workers=2,
++            prefetch_factor=1,
++            pin_memory=True,
++            persistent_workers=True,
++        )
++        # Evita una copia FP32 dei parametri addestrabili dell'action head.
++        cfg["optimizer"]["master_weights"] = False
++
++        # Usa esclusivamente i trigger di checkpoint e validation a fine epoca.
++        cfg["checkpoint"]["save_iter"] = 999_999_999
++        cfg["trainer"]["validation_iter"] = 999_999_999
++        cfg["trainer"]["epoch_checkpoint_throttling_min_period_minutes"] = 0
++
++        # Salva localmente le metriche senza richiedere una connessione al servizio W&B.
++        cfg["trainer"]["callbacks"]["wandb"].update(
++            mode="offline",
++            entity_name="",
++        )
++
+     if "libero" in data_config:
+         cfg["checkpoint"]["save_iter"] = 99999999
+         cfg["trainer"]["run_validation"] = False

@@ -1,0 +1,55 @@
+# Registra il Cosmos UR5e fine-tuned come video backbone dell'action head.
+#
+# La patch:
+# - aggiunge il modello Hydra "v2w_ur5e_finetuned" al catalogo dei video checkpoint;
+# - legge il checkpoint reale dalla variabile UR5E_COSMOS_CKPT;
+# - usa come fallback un percorso stabile dentro mimic_video_workspace/checkpoints;
+# - mantiene invariati i checkpoint pretrained, Bridge e Libero degli autori;
+# - permette a world2action.py di creare esperimenti UR5e che caricano questo backbone.
+#
+# Il launcher action head verifica l'esistenza del file prima di avviare torchrun.
+
+diff --git a/model/cosmos_predict2/configs/defaults/world2action_model.py b/model/cosmos_predict2/configs/defaults/world2action_model.py
+--- a/model/cosmos_predict2/configs/defaults/world2action_model.py
++++ b/model/cosmos_predict2/configs/defaults/world2action_model.py
+@@ -14,6 +14,7 @@
+ # limitations under the License.
+ 
+ import copy
++import os
+ import pathlib
+ 
+ from hydra.core.config_store import ConfigStore
+@@ -51,19 +52,31 @@ BASE: dict = {
+ 
+ VIDEO_MODEL_CKPT_NAMES = [
+     "v2w_pretrained_cosmos",
++    "v2w_ur5e_finetuned",
+     "v2w_bridge_lora_rank256_lr1.778e-04_bsz64_iter_000070043_fused",
+     "v2w_libero_goal_agentview_lora_rank256_lr1.778e-04_bsz32_iter_000007020_fused",
+     "v2w_libero_object_agentview_lora_rank256_lr1.778e-04_bsz32_iter_000008260_fused",
+     "v2w_libero_spatial_agentview_lora_rank256_lr1.778e-04_bsz32_iter_000007540_fused",
+ ]
+ VIDEO_MODEL_CKPT_DIR = pathlib.Path(__file__).parents[3] / "checkpoints" / "video_backbone"
++UR5E_COSMOS_CKPT = pathlib.Path(
++    os.environ.get(
++        "UR5E_COSMOS_CKPT",
++        pathlib.Path(__file__).parents[6] / "checkpoints" / "video_backbone" / "v2w_ur5e_finetuned.pt",
++    )
++)
+ 
+ 
+ def register_model() -> None:
+     cs = ConfigStore.instance()
+     for name in VIDEO_MODEL_CKPT_NAMES:
+         cfg = copy.deepcopy(BASE)
+-        cfg["model"]["config"]["video_dit_path"] = str((VIDEO_MODEL_CKPT_DIR / f"{name}.pt").resolve())
++        checkpoint_path = (
++            UR5E_COSMOS_CKPT
++            if name == "v2w_ur5e_finetuned"
++            else VIDEO_MODEL_CKPT_DIR / f"{name}.pt"
++        )
++        cfg["model"]["config"]["video_dit_path"] = str(checkpoint_path.resolve())
+ 
+         cs.store(
+             group="model",
