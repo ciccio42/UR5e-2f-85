@@ -11,7 +11,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL_ROOT = REPO_ROOT / "mimic_video_workspace/external/mimic-video/model"
+MODEL_ROOT = REPO_ROOT / "mimic_video_workspace/checkpoints"
 sys.path.insert(0, str(MODEL_ROOT))
 os.chdir(MODEL_ROOT)
 
