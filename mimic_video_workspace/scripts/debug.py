@@ -11,11 +11,17 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL_ROOT = REPO_ROOT / "mimic_video_workspace/checkpoints"
+WORKSPACE_ROOT = REPO_ROOT / "mimic_video_workspace"
+MODEL_ROOT = WORKSPACE_ROOT / "external/mimic-video/model"
+CHECKPOINT_ROOT = WORKSPACE_ROOT / "checkpoints"
+if not (MODEL_ROOT / "cosmos_predict2/configs/config.py").is_file():
+    raise FileNotFoundError(f"Codice MimicVideo non trovato in: {MODEL_ROOT}")
+os.environ.setdefault("COSMOS_PREDICT2_ARGS", f'--checkpoints "{CHECKPOINT_ROOT}"')
 sys.path.insert(0, str(MODEL_ROOT))
 os.chdir(MODEL_ROOT)
 
 import torch
+import cosmos_predict2
 
 from cosmos_predict2.configs.config import make_config
 from imaginaire.lazy_config import instantiate
@@ -25,6 +31,12 @@ from imaginaire.utils.config_helper import override
 
 NUM_TASKS = 12
 EPISODES_PER_TASK = 40
+
+IMPORTED_MODEL_ROOT = Path(cosmos_predict2.__file__).resolve().parent.parent
+if IMPORTED_MODEL_ROOT != MODEL_ROOT.resolve():
+    raise RuntimeError(
+        f"MimicVideo importato da {IMPORTED_MODEL_ROOT}, atteso {MODEL_ROOT.resolve()}"
+    )
 
 
 def parse_args() -> argparse.Namespace:
