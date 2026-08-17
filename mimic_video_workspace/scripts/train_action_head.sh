@@ -6,16 +6,18 @@
 # - Checkpoint Cosmos: percorso relativo configurabile con COSMOS_CKPT_REL.
 # - Dati: safetensors UR5e con video embedding, testo, stato robotico e action delta.
 # - Action horizon: 15 step a 10 Hz; observation horizon: 1 step.
-# - Batch size fisico: 1; gradient accumulation: 1. Entrambi sono configurabili.
+# - Batch size fisico: 1; gradient accumulation: 12; batch effettivo: 12.
+#   BATCH_SIZE=12 usa invece un batch fisico bilanciato e accumulation 1.
 # - Action head: 10 canali (posizione 3D, rotazione 6D, gripper), max horizon 16.
 # - DataLoader: 2 worker, prefetch factor 1, pin memory e worker persistenti attivi.
 # - Training completo: 500000 optimizer step predefiniti, configurabili con MAX_ITER.
-#   Con batch size 1 corrispondono indicativamente a 176-180 epoche sul dataset attuale.
+#   Gli optimizer step per epoca corrispondono al numero di chunk bilanciati diviso 12.
 # - Validation: una iniziale e una al termine di ogni epoca completa.
 # - Checkpoint: al termine di ogni epoca e alla conclusione del training.
 #   La retention conserva soltanto gli ultimi 2 checkpoint completi.
 # - W&B offline; master weights FP32 ed EMA disattivati; precisione bfloat16.
-# - Smoke test: 1 optimizer step, 2 batch di validation iniziale e altri 2 dopo lo step.
+# - Smoke test: 1 optimizer step su 12 microbatch, con 2 batch di validation iniziale
+#   e altri 2 dopo lo step.
 
 set -Eeuo pipefail
 
@@ -25,7 +27,13 @@ WORKSPACE="$REPO_ROOT/mimic_video_workspace"
 
 IMAGE="${IMAGE:-mimic-video-train:gb10-cu129}"
 BATCH_SIZE="${BATCH_SIZE:-1}"
-GRAD_ACCUM_ITER="${GRAD_ACCUM_ITER:-1}"
+if [[ -z "${GRAD_ACCUM_ITER:-}" ]]; then
+    if [[ "$BATCH_SIZE" == "1" ]]; then
+        GRAD_ACCUM_ITER=12
+    else
+        GRAD_ACCUM_ITER=1
+    fi
+fi
 MAX_ITER="${MAX_ITER:-500000}"
 COSMOS_CKPT_REL="${COSMOS_CKPT_REL:-checkpoints/video_backbone/v2w_ur5e_finetuned.pt}"
 
@@ -164,8 +172,8 @@ start_tmux() {
     fi
 }
 
-if [[ ! "$BATCH_SIZE" =~ ^(1|4|8|32|64|128|256)$ ]]; then
-    echo "BATCH_SIZE deve essere 1, 4, 8, 32, 64, 128 oppure 256." >&2
+if [[ ! "$BATCH_SIZE" =~ ^(1|4|8|12|32|64|128|256)$ ]]; then
+    echo "BATCH_SIZE deve essere 1, 4, 8, 12, 32, 64, 128 oppure 256." >&2
     exit 1
 fi
 if [[ ! "$GRAD_ACCUM_ITER" =~ ^[1-9][0-9]*$ ]]; then

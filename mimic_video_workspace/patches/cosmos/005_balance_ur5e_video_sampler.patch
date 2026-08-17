@@ -1,0 +1,100 @@
+# Bilancia il sampler del training Cosmos sui dodici task UR5e.
+#
+# La patch:
+# - riconosce esclusivamente il LatentDataset ur5e_pick_place_video;
+# - ricava il task dall'indice globale dell'episodio (40 episodi per task);
+# - costruisce blocchi consecutivi di 12 campioni, uno per ciascun task;
+# - rimescola in modo deterministico campioni e ordine dei task a ogni epoca;
+# - conserva l'interfaccia del sampler usata dal resume del trainer;
+# - lascia invariati validation e tutti gli altri dataset.
+#
+# Con una sola GPU, un batch fisico da 12 coincide con un blocco bilanciato.
+# Anche un effective batch 1 x 12 segue gli stessi blocchi, purche il DataLoader
+# restituisca i microbatch nello stesso ordine prodotto dal sampler.
+
+diff --git a/model/cosmos_predict2/data/resumable_sampler.py b/model/cosmos_predict2/data/resumable_sampler.py
+--- a/model/cosmos_predict2/data/resumable_sampler.py
++++ b/model/cosmos_predict2/data/resumable_sampler.py
+@@ -2,6 +2,10 @@ import torch
+ from torch.utils.data import Dataset, DistributedSampler
+ 
+ 
++UR5E_NUM_TASKS = 12
++UR5E_EPISODES_PER_TASK = 40
++
++
+ class ResumableDistributedSampler(DistributedSampler):
+     def __init__(self, dataset: Dataset, num_replicas: int, rank: int, shuffle: bool, seed: int = 0):
+         super().__init__(
+@@ -15,11 +19,70 @@ class ResumableDistributedSampler(DistributedSampler):
+ 
+         self.start_iter = 0
+ 
++    def _get_ur5e_video_task_indices(self) -> list[list[int]] | None:
++        # Il LatentDataset indicizza direttamente i video delle singole traiettorie.
++        video_paths = getattr(self.dataset, "_video_paths", None)
++        dataset_dir = getattr(self.dataset, "_dataset_dir", None)
++        is_multi_img = getattr(self.dataset, "_is_multi_img", False)
++
++        if video_paths is None or dataset_dir is None or dataset_dir.name != "ur5e_pick_place_video":
++            return None
++
++        task_indices = [[] for _ in range(UR5E_NUM_TASKS)]
++        for dataset_idx, video_path in enumerate(video_paths):
++            episode_stem = video_path.stem[:-1] if is_multi_img else video_path.stem
++            episode_id = episode_stem.removeprefix("ep_")
++            if not episode_stem.startswith("ep_") or not episode_id.isdigit():
++                raise ValueError(f"Unexpected UR5e video name: {video_path.name}")
++
++            task_id = int(episode_id) // UR5E_EPISODES_PER_TASK
++            if not 0 <= task_id < UR5E_NUM_TASKS:
++                raise ValueError(f"UR5e episode outside the expected task map: {video_path.name}")
++            task_indices[task_id].append(dataset_idx)
++
++        empty_tasks = [task_id for task_id, indices in enumerate(task_indices) if not indices]
++        if empty_tasks:
++            raise ValueError(f"UR5e sampler found no training samples for tasks: {empty_tasks}")
++
++        return task_indices
++
++    def _get_balanced_ur5e_video_indices(self, generator: torch.Generator) -> torch.Tensor | None:
++        task_indices = self._get_ur5e_video_task_indices()
++        if task_indices is None:
++            return None
++
++        if self.total_size % UR5E_NUM_TASKS != 0:
++            raise ValueError(
++                f"UR5e sampler size {self.total_size} is not divisible by {UR5E_NUM_TASKS} tasks."
++            )
++
++        samples_per_task = self.total_size // UR5E_NUM_TASKS
++        shuffled_by_task: list[list[int]] = []
++        for indices in task_indices:
++            shuffled = []
++            while len(shuffled) < samples_per_task:
++                permutation = torch.randperm(len(indices), generator=generator).tolist()
++                shuffled.extend(indices[idx] for idx in permutation)
++            shuffled_by_task.append(shuffled[:samples_per_task])
++
++        # Ogni blocco contiene esattamente un campione per ciascuno dei dodici task.
++        balanced_indices = []
++        for sample_idx in range(samples_per_task):
++            task_order = torch.randperm(UR5E_NUM_TASKS, generator=generator).tolist()
++            balanced_indices.extend(shuffled_by_task[task_id][sample_idx] for task_id in task_order)
++
++        indices = torch.tensor(balanced_indices, dtype=torch.int64)
++        return indices[self.rank :: self.num_replicas]
++
+     def __iter__(self):
+         if self.shuffle:
+             g = torch.Generator()
+             g.manual_seed(self.epoch + self.seed)
+-            indices = torch.randperm(len(self.dataset), generator=g)[: self.total_size][self.rank :: self.num_replicas]
++            indices = self._get_balanced_ur5e_video_indices(g)
++            if indices is None:
++                indices = torch.randperm(len(self.dataset), generator=g)[: self.total_size][
++                    self.rank :: self.num_replicas
++                ]
+         else:
+             indices = torch.arange(
+                 self.rank * self.num_samples,

@@ -5,11 +5,11 @@
 # - Esperimento: Cosmos Predict2 Video2World 2B, 480p, 10 fps, LoRA sul dataset UR5e.
 # - Dati: 456 traiettorie di train e 24 di validation, sola camera frontale,
 #   video da 61 frame, 5 frame osservati e video embedding precomputati.
-# - Batch size fisico: 1; gradient accumulation: 4; batch effettivo: 4.
+# - Batch size fisico: 1; gradient accumulation: 12; batch effettivo: 12.
 # - LoRA rank: 64; LoRA alpha: 32. Il rank puo essere impostato con RANK=64|128|256.
 # - DataLoader: 2 worker, prefetch factor 1 per worker, pin memory e worker persistenti attivi.
-# - Training completo: 5000 optimizer step. Con 456 esempi e batch effettivo 4,
-#   un'epoca vale 114 step e il training copre circa 43,86 epoche.
+# - Training completo: 5000 optimizer step. Con 456 esempi e batch effettivo 12,
+#   un'epoca vale 38 step e il training copre circa 131,58 epoche.
 # - Validation completa: all'avvio e al termine di ogni epoca completata.
 # - Checkpoint: al termine della prima epoca, poi a fine epoca se sono trascorsi
 #   almeno 30 minuti dal precedente, e sempre alla conclusione del training.
@@ -17,7 +17,7 @@
 # - Logging ogni 100 optimizer step; W&B offline; EMA, guardrail e CPU offload disattivati.
 # - Ottimizzatore FusedAdamW, learning rate costante 1.778e-4, master weights FP32 disattivi,
 #   precisione bfloat16 e selective activation checkpointing attivo su ogni blocco.
-# - Smoke test: 1 optimizer step (4 micro-batch), con 2 batch di validation prima
+# - Smoke test: 1 optimizer step (12 micro-batch), con 2 batch di validation prima
 #   del training e altri 2 dopo l'aggiornamento; usa output separati dal training completo.
 
 set -Eeuo pipefail
