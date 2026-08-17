@@ -3,6 +3,7 @@
 
 import argparse
 import gc
+import inspect
 import os
 import sys
 from itertools import chain
@@ -22,6 +23,7 @@ os.chdir(MODEL_ROOT)
 
 import torch
 import cosmos_predict2
+from megatron.core import parallel_state
 
 from cosmos_predict2.configs.config import make_config
 from imaginaire.lazy_config import instantiate
@@ -37,6 +39,18 @@ if IMPORTED_MODEL_ROOT != MODEL_ROOT.resolve():
     raise RuntimeError(
         f"MimicVideo importato da {IMPORTED_MODEL_ROOT}, atteso {MODEL_ROOT.resolve()}"
     )
+
+
+def initialize_model_parallel(config: Any) -> None:
+    kwargs = {
+        "pipeline_model_parallel_size": config.model_parallel.pipeline_model_parallel_size,
+        "tensor_model_parallel_size": config.model_parallel.tensor_model_parallel_size,
+        "context_parallel_size": config.model_parallel.context_parallel_size,
+    }
+    if "create_gloo_process_groups" in inspect.signature(parallel_state.initialize_model_parallel).parameters:
+        kwargs["create_gloo_process_groups"] = False
+    parallel_state.initialize_model_parallel(**kwargs)
+    parallel_state.sequence_parallel = config.model_parallel.sequence_parallel
 
 
 def parse_args() -> argparse.Namespace:
@@ -87,6 +101,7 @@ def main() -> None:
     distributed.init()
     config.validate()
     config.freeze()
+    initialize_model_parallel(config)
 
     model = instantiate(config.model)
     dataloader = instantiate(config.dataloader_train)
@@ -182,5 +197,7 @@ if __name__ == "__main__":
     try:
         main()
     finally:
+        if parallel_state.is_initialized():
+            parallel_state.destroy_model_parallel()
         if torch.distributed.is_initialized():
             torch.distributed.destroy_process_group()
