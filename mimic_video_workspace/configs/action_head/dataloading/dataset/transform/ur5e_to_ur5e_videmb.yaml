@@ -5,6 +5,9 @@ data_transforms:
   - name: RotationMatrixTo6D
     targets: [action/eef_rot_ref_delta_lowdim, obs/eef_rot_lowdim]
 
+  - name: Flatten
+    targets: [action/eef_rot_ref_delta_lowdim, obs/eef_rot_lowdim]
+
   - name: Concat
     targets: ${policy_io.concat_groups.action/lowdim_concat}
     out_key: "action/lowdim_concat"
