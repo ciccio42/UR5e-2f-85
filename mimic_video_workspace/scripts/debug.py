@@ -70,6 +70,7 @@ def main() -> None:
     config = override(
         make_config(),
         [
+            "--",
             f"experiment={experiment}",
             f"model.config.lora_alpha={args.lora_alpha}",
         ],
