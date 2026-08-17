@@ -3,6 +3,8 @@
 # La patch:
 # - aggiunge batch size 1 e 12 senza eliminare i batch size degli autori;
 # - usa effective batch 12 con bsz1 e batch fisico 12 con bsz12;
+# - limita il training UR5e a 10000 optimizer step;
+# - adatta LambdaLinear a 200 step di warmup e 10000 step complessivi;
 # - limita il dataloader di training UR5e a due processi CPU;
 # - riduce a uno il numero di batch preparati in anticipo da ogni worker;
 # - mantiene pin_memory e persistent_workers attivi;
@@ -25,13 +27,21 @@ diff --git a/model/cosmos_predict2/configs/experiment/world2action.py b/model/co
  
  
  def get_local_batch_size(global_bsz: int) -> int:
-@@ -105,6 +105,30 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
+@@ -105,6 +105,38 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
      cfg["job"]["name"] = exp_name
      cfg["dataloader_train"] = {"batch_size": L(get_local_batch_size)(global_bsz=bsz)}
  
 +    # Limita il parallelismo CPU solo per gli esperimenti UR5e sulla Spark condivisa.
 +    if pipe == "ur5e":
++        cfg["trainer"]["max_iter"] = 10_000
 +        cfg["trainer"]["grad_accum_iter"] = 12 if bsz == 1 else 1
++        cfg["scheduler"].update(
++            f_start=[1.0e-6],
++            f_max=[1.0],
++            f_min=[0.2],
++            warm_up_steps=[200],
++            cycle_lengths=[10_000],
++        )
 +        cfg["dataloader_train"].update(
 +            num_workers=2,
 +            prefetch_factor=1,

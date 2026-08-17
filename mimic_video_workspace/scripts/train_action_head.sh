@@ -10,7 +10,7 @@
 #   BATCH_SIZE=12 usa invece un batch fisico bilanciato e accumulation 1.
 # - Action head: 10 canali (posizione 3D, rotazione 6D, gripper), max horizon 16.
 # - DataLoader: 2 worker, prefetch factor 1, pin memory e worker persistenti attivi.
-# - Training completo: 500000 optimizer step predefiniti, configurabili con MAX_ITER.
+# - Training completo: 10000 optimizer step predefiniti, configurabili con MAX_ITER.
 #   Gli optimizer step per epoca corrispondono al numero di chunk bilanciati diviso 12.
 # - Validation: una iniziale e una al termine di ogni epoca completa.
 # - Checkpoint: al termine di ogni epoca e alla conclusione del training.
@@ -34,7 +34,7 @@ if [[ -z "${GRAD_ACCUM_ITER:-}" ]]; then
         GRAD_ACCUM_ITER=1
     fi
 fi
-MAX_ITER="${MAX_ITER:-500000}"
+MAX_ITER="${MAX_ITER:-10000}"
 COSMOS_CKPT_REL="${COSMOS_CKPT_REL:-checkpoints/video_backbone/v2w_ur5e_finetuned.pt}"
 
 apply_patches() {
