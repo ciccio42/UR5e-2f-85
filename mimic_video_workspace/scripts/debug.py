@@ -37,10 +37,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def config_value(config: Any, name: str) -> Any:
-    return getattr(config, name) if hasattr(config, name) else config[name]
-
-
 def episode_info(dataset: Any, dataset_idx: int) -> tuple[str, int]:
     video_path = dataset._video_paths[dataset_idx]
     episode_stem = video_path.stem[:-1] if dataset._is_multi_img else video_path.stem
@@ -80,9 +76,11 @@ def main() -> None:
     config.validate()
     config.freeze()
 
-    dataloader_config = config.dataloader_train
+    model = instantiate(config.model)
+    dataloader = instantiate(config.dataloader_train)
+
     grad_accum = config.trainer.grad_accum_iter
-    physical_batch = config_value(dataloader_config, "batch_size")
+    physical_batch = dataloader.batch_size
     effective_batch = physical_batch * grad_accum
 
     print("\n========== CONFIGURAZIONE ==========")
@@ -90,16 +88,15 @@ def main() -> None:
     print(f"physical_batch:      {physical_batch}")
     print(f"grad_accum_iter:     {grad_accum}")
     print(f"effective_batch:     {effective_batch}")
-    print(f"num_workers:         {config_value(dataloader_config, 'num_workers')}")
-    print(f"prefetch_factor:     {config_value(dataloader_config, 'prefetch_factor')}")
-    print(f"in_order:            {config_value(dataloader_config, 'in_order')}")
+    print(f"num_workers:         {dataloader.num_workers}")
+    print(f"prefetch_factor:     {dataloader.prefetch_factor}")
+    print(f"in_order:            {dataloader.in_order}")
     print(f"max_iter:            {config.trainer.max_iter}")
 
     if effective_batch != NUM_TASKS:
         raise ValueError(f"L'effective batch deve essere {NUM_TASKS}, ricevuto {effective_batch}.")
 
     print("\n========== MODELLO ==========")
-    model = instantiate(config.model)
     total_parameters = sum(parameter.numel() for parameter in model.parameters())
     trainable_parameters = sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
     print(f"class:                {type(model).__name__}")
@@ -109,7 +106,6 @@ def main() -> None:
     print(f"cuda_reserved_gib:    {torch.cuda.memory_reserved() / 1024**3:.2f}")
 
     print("\n========== DATALOADER ==========")
-    dataloader = instantiate(config.dataloader_train)
     sampler = dataloader.sampler
     dataset = dataloader.dataset
 
@@ -168,9 +164,11 @@ def main() -> None:
     del first_batch, batch, data_iterator, dataloader, model
     gc.collect()
     torch.cuda.empty_cache()
-    if torch.distributed.is_initialized():
-        torch.distributed.destroy_process_group()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        if torch.distributed.is_initialized():
+            torch.distributed.destroy_process_group()
