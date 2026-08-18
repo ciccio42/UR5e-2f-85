@@ -18,3 +18,4 @@ mimic_video_workspace/processed_data/
 mimic_video_workspace/**/__pycache__/
 mimic_video_workspace/**/*.pyc
 mimic_video_workspace/tmp/
+interleave_pi_zero_workspace/external/
