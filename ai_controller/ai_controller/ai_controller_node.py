@@ -90,6 +90,10 @@ class AIControllerNode(Node):
         self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
         self.declare_parameter('eef_frame_name', 'tcp_link')
         self.declare_parameter('move_robot', False)
+        self.declare_parameter(
+            'seedo_execute_gripper',
+            False,
+        )
 
         # SeeDo-specific parameters
         self.declare_parameter(
@@ -132,6 +136,9 @@ class AIControllerNode(Node):
         self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
         self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
         self.move_robot = self.get_parameter('move_robot').get_parameter_value().bool_value
+        self.seedo_execute_gripper = self.get_parameter(
+            'seedo_execute_gripper'
+        ).get_parameter_value().bool_value
 
         self.seedo_depth_topic = self.get_parameter(
             'seedo_depth_topic'
@@ -156,6 +163,7 @@ class AIControllerNode(Node):
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
+        self.joint_state_event = threading.Event()
 
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
@@ -214,6 +222,59 @@ class AIControllerNode(Node):
                 self.gripper_action_topic,
             )
             self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
+
+        elif self.move_robot:
+            # GoToPose is required for both plan-only and real execution.
+            self.get_logger().info(
+                f'Waiting for service {self.set_pose_service}...'
+            )
+
+            self.set_pose_client = self.create_client(
+                GoToPose,
+                self.set_pose_service,
+            )
+
+            self.set_pose_client.wait_for_service()
+
+            self.get_logger().info(
+                f'Service {self.set_pose_service} is available.'
+            )
+
+            if self.seedo_execute_gripper:
+                self.get_logger().info(
+                    f'Creating gripper action client on '
+                    f'{self.gripper_action_topic}...'
+                )
+
+                self.gripper_action_client = ActionClient(
+                    self,
+                    GripperCommand,
+                    self.gripper_action_topic,
+                )
+
+                self.get_logger().info(
+                    f'Waiting for gripper action server '
+                    f'{self.gripper_action_topic}...'
+                )
+
+                if not self.gripper_action_client.wait_for_server(
+                    timeout_sec=10.0
+                ):
+                    raise RuntimeError(
+                        f'Gripper action server '
+                        f'{self.gripper_action_topic} '
+                        f'is not available.'
+                    )
+
+                self.get_logger().info(
+                    f'Gripper action server '
+                    f'{self.gripper_action_topic} is available.'
+                )
+
+            else:
+                self.get_logger().warning(
+                    'SeeDo gripper execution is DISABLED.'
+                )
 
         # Robot-state capture: joint states + TF (base_link -> eef_frame_name), used to
         # record the actually-executed rollout as a Trajectory (see save_rollout()).
@@ -317,6 +378,18 @@ class AIControllerNode(Node):
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
         # self.control_loop()
 
+    def _wait_for_future(self, future, timeout_sec=None):
+        done_event = threading.Event()
+
+        future.add_done_callback(
+            lambda _: done_event.set()
+        )
+
+        if not done_event.wait(timeout=timeout_sec):
+            return None
+
+        return future.result()
+
     def _lookup_transform(
         self,
         target_frame,
@@ -332,6 +405,7 @@ class AIControllerNode(Node):
                     source_frame,
                     rclpy.time.Time(),
                 )
+
             except (
                 tf2_ros.LookupException,
                 tf2_ros.ConnectivityException,
@@ -345,10 +419,13 @@ class AIControllerNode(Node):
                     f'(attempt {attempt}/{max_attempts}): {exc}'
                 )
 
-                rclpy.spin_once(
-                    self,
-                    timeout_sec=0.1,
-                )
+                if self.ai_controller_target == 'seedo_controller':
+                    time.sleep(0.1)
+                else:
+                    rclpy.spin_once(
+                        self,
+                        timeout_sec=0.1,
+                    )
 
         raise RuntimeError(
             f'Failed to look up transform '
@@ -530,18 +607,39 @@ class AIControllerNode(Node):
         self.synced_images_event.set()
 
     def get_synced_images(self, timeout_sec=5.0):
-        """Block (while spinning callbacks) until a fresh synchronized set of camera images arrives."""
+        """Wait for a fresh synchronized set of camera images."""
         if self.debug_mode:
             return self._get_debug_images()
 
         self.synced_images_event.clear()
-        start = self.get_clock().now()
-        while not self.synced_images_event.is_set():
-            rclpy.spin_once(self, timeout_sec=0.1)
-            elapsed = (self.get_clock().now() - start).nanoseconds / 1e9
-            if elapsed > timeout_sec:
-                self.get_logger().error('Timed out waiting for synchronized camera images.')
+
+        if self.ai_controller_target == 'seedo_controller':
+            if not self.synced_images_event.wait(timeout=timeout_sec):
+                self.get_logger().error(
+                    'Timed out waiting for synchronized camera images.'
+                )
                 return None
+
+            return self.latest_synced_images
+
+        start = self.get_clock().now()
+
+        while not self.synced_images_event.is_set():
+            rclpy.spin_once(
+                self,
+                timeout_sec=0.1,
+            )
+
+            elapsed = (
+                self.get_clock().now() - start
+            ).nanoseconds / 1e9
+
+            if elapsed > timeout_sec:
+                self.get_logger().error(
+                    'Timed out waiting for synchronized camera images.'
+                )
+                return None
+
         return self.latest_synced_images
 
     def _add_dataset_collector_scripts_to_path(self):
@@ -601,6 +699,7 @@ class AIControllerNode(Node):
 
     def _joint_state_callback(self, msg):
         self.latest_joint_state = msg
+        self.joint_state_event.set()
 
     def _capture_robot_state(self, timeout_sec=1.0):
         """Spin briefly to receive a fresh /joint_states + TF, then build a robot-state obs dict.
@@ -609,12 +708,32 @@ class AIControllerNode(Node):
         readable by the same tooling (replicate_trajectory.py, cod_controller.py) as
         recorded demonstrations.
         """
-        start = self.get_clock().now()
-        while self.latest_joint_state is None:
-            rclpy.spin_once(self, timeout_sec=0.1)
-            if (self.get_clock().now() - start).nanoseconds / 1e9 > timeout_sec:
-                self.get_logger().warning('Timed out waiting for /joint_states message.')
-                break
+        if self.ai_controller_target == 'seedo_controller':
+            self.joint_state_event.clear()
+
+            if not self.joint_state_event.wait(
+                timeout=timeout_sec
+            ):
+                self.get_logger().warning(
+                    'Timed out waiting for a fresh /joint_states message.'
+                )
+
+        else:
+            start = self.get_clock().now()
+
+            while self.latest_joint_state is None:
+                rclpy.spin_once(
+                    self,
+                    timeout_sec=0.1,
+                )
+
+                if (
+                    self.get_clock().now() - start
+                ).nanoseconds / 1e9 > timeout_sec:
+                    self.get_logger().warning(
+                        'Timed out waiting for /joint_states message.'
+                    )
+                    break
 
         state = {}
         joint_state = self.latest_joint_state
@@ -712,8 +831,16 @@ class AIControllerNode(Node):
         pose_request.pose.pose.orientation.w = self.pose_before_first_inference[6]
         
         future = self.set_pose_client.call_async(pose_request)
-        rclpy.spin_until_future_complete(self, future)
-        response = future.result()
+
+        if self.ai_controller_target == 'seedo_controller':
+            response = self._wait_for_future(
+                future,
+                timeout_sec=30.0,
+            )
+        else:
+            rclpy.spin_until_future_complete(self, future)
+            response = future.result()
+
         if response is None:
             self.get_logger().error('set_pose_client service call failed.')
             raise RuntimeError('set_pose_client service call failed.')
@@ -725,17 +852,86 @@ class AIControllerNode(Node):
             raise RuntimeError(f'Failed to move robot to initial pose: {response.message}')
         
         # Open the gripper to a known position (e.g., fully open) before starting
-        self.get_logger().info('Opening gripper to a known position before first inference...')
-        gripper_goal = GripperCommand.Goal()
-        gripper_goal.command.position = 0.1  # Fully open position (adjust as needed)
-        gripper_goal.command.max_effort = 50.0
-        future = self.gripper_action_client.send_goal_async(gripper_goal)
-        rclpy.spin_until_future_complete(self, future)
-        if future.result() is not None:
-            self.get_logger().info('Gripper opened successfully before first inference.')
+        if (
+            self.ai_controller_target != 'seedo_controller'
+            or self.seedo_execute_gripper
+        ):
+            # Open the gripper to a known position before starting
+            self.get_logger().info(
+                'Opening gripper to a known position '
+                'before first inference...'
+            )
+
+            gripper_goal = GripperCommand.Goal()
+            gripper_goal.command.position = 0.1
+            gripper_goal.command.max_effort = 50.0
+
+            future = self.gripper_action_client.send_goal_async(
+                gripper_goal
+            )
+
+            if self.ai_controller_target == 'seedo_controller':
+                goal_handle = self._wait_for_future(
+                    future,
+                    timeout_sec=10.0,
+                )
+
+                if goal_handle is None:
+                    raise RuntimeError(
+                        'Timed out sending initial gripper command.'
+                    )
+
+                if not goal_handle.accepted:
+                    raise RuntimeError(
+                        'Initial gripper goal was rejected.'
+                    )
+
+                result_future = goal_handle.get_result_async()
+
+                gripper_result = self._wait_for_future(
+                    result_future,
+                    timeout_sec=10.0,
+                )
+
+                if gripper_result is None:
+                    raise RuntimeError(
+                        'Timed out waiting for initial gripper result.'
+                    )
+
+                self.get_logger().info(
+                    'Gripper opened successfully before first inference.'
+                )
+
+                self.previous_gripper_position = (
+                    gripper_goal.command.position
+                )
+
+            else:
+                rclpy.spin_until_future_complete(
+                    self,
+                    future,
+                )
+
+                if future.result() is not None:
+                    self.get_logger().info(
+                        'Gripper opened successfully before first inference.'
+                    )
+                else:
+                    self.get_logger().error(
+                        f'Failed to open gripper before first inference: '
+                        f'{future.exception()}'
+                    )
+
+                    raise RuntimeError(
+                        f'Failed to open gripper before first inference: '
+                        f'{future.exception()}'
+                    )
+
         else:
-            self.get_logger().error(f'Failed to open gripper before first inference: {future.exception()}')
-            raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
+            self.get_logger().info(
+                'Skipping initial gripper command: '
+                'SeeDo gripper execution is disabled.'
+            )
     
     def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None):
         """Save the current rollout Trajectory to a .pkl file, plus outcome metadata to a .json file."""
@@ -826,6 +1022,10 @@ class AIControllerNode(Node):
                     self.controller.reset()
 
                     if self.ai_controller_target == 'seedo_controller':
+
+                        if self.move_robot:
+                            self.move_to_initial_pose()
+
                         self.get_logger().info(
                             f'Loading SeeDo demo data for task ID: {enter_task_id}'
                         )
@@ -1000,36 +1200,184 @@ class AIControllerNode(Node):
                         pose_request.pose.pose.orientation.y = action[4]
                         pose_request.pose.pose.orientation.z = action[5]
                         pose_request.pose.pose.orientation.w = action[6]
-                        future = self.set_pose_client.call_async(pose_request)
-                        rclpy.spin_until_future_complete(self, future)
-                        if future.result() is not None:
-                            self.get_logger().info(f'Robot set to desired pose at step {step}')
+
+                        future = self.set_pose_client.call_async(
+                            pose_request
+                        )
+
+                        if self.ai_controller_target == 'seedo_controller':
+                            response = self._wait_for_future(
+                                future,
+                                timeout_sec=30.0,
+                            )
+
+                            if response is None:
+                                raise RuntimeError(
+                                    f'Timed out waiting for GoToPose '
+                                    f'at step {step}, action {indx}.'
+                                )
+
+                            if not response.success:
+                                raise RuntimeError(
+                                    f'GoToPose failed at step {step}, '
+                                    f'action {indx}: '
+                                    f'{response.message}'
+                                )
+
+                            self.get_logger().info(
+                                f'Robot set to desired pose '
+                                f'at step {step}, action {indx}'
+                            )
+
                         else:
-                            self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                            raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                            rclpy.spin_until_future_complete(
+                                self,
+                                future,
+                            )
+
+                            if future.result() is not None:
+                                self.get_logger().info(
+                                    f'Robot set to desired pose at step {step}'
+                                )
+                            else:
+                                self.get_logger().error(
+                                    'Service call failed for setting robot '
+                                    f'to desired pose: {future.exception()}'
+                                )
+
+                                raise RuntimeError(
+                                    'Service call failed for setting robot '
+                                    f'to desired pose: {future.exception()}'
+                                )
+
                         
                         # 6. Control the gripper based on the predicted action
-                        self.get_logger().info(f'Controlling gripper at step {step}')   
-                        gripper_goal = GripperCommand.Goal()
-                        gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
-                        # check the z-position of the action to determine if the gripper should be closed or opened                       
-                        
-                        # if self.gripper_closed:
-                        #     self.get_logger().info(f'Keeping gripper closed at step {step}')
-                        #     gripper_goal.command.position = 255.0  # Keep the gripper closed
-                        gripper_goal.command.max_effort = 50.0
-                        future = self.gripper_action_client.send_goal_async(gripper_goal)
-                        rclpy.spin_until_future_complete(self, future)
-                        if future.result() is not None:
-                            self.get_logger().info(f'Gripper command sent at step {step}')
+                        if (
+                            self.ai_controller_target != 'seedo_controller'
+                            or self.seedo_execute_gripper
+                        ):
+                            self.get_logger().info(
+                                f'Controlling gripper at step {step}'
+                            )
+
+                            desired_gripper_position = float(action[-1])
+
+                            # SeeDo sends a gripper command only when
+                            # the desired position actually changes.
+                            if self.ai_controller_target == 'seedo_controller':
+                                gripper_changed = not np.isclose(
+                                    desired_gripper_position,
+                                    self.previous_gripper_position,
+                                    atol=1e-6,
+                                )
+                            else:
+                                gripper_changed = True
+
+                            if gripper_changed:
+                                gripper_goal = GripperCommand.Goal()
+
+                                gripper_goal.command.position = (
+                                    desired_gripper_position
+                                )
+
+                                gripper_goal.command.max_effort = 50.0
+
+                                future = (
+                                    self.gripper_action_client
+                                    .send_goal_async(gripper_goal)
+                                )
+
+                                if self.ai_controller_target == 'seedo_controller':
+                                    goal_handle = self._wait_for_future(
+                                        future,
+                                        timeout_sec=10.0,
+                                    )
+
+                                    if goal_handle is None:
+                                        raise RuntimeError(
+                                            f'Timed out sending gripper command '
+                                            f'at step {step}, action {indx}.'
+                                        )
+
+                                    if not goal_handle.accepted:
+                                        raise RuntimeError(
+                                            f'Gripper goal rejected at step {step}, '
+                                            f'action {indx}.'
+                                        )
+
+                                    result_future = (
+                                        goal_handle.get_result_async()
+                                    )
+
+                                    gripper_result = self._wait_for_future(
+                                        result_future,
+                                        timeout_sec=10.0,
+                                    )
+
+                                    if gripper_result is None:
+                                        raise RuntimeError(
+                                            f'Timed out waiting for gripper result '
+                                            f'at step {step}, action {indx}.'
+                                        )
+
+                                    self.get_logger().info(
+                                        f'Gripper command completed '
+                                        f'at step {step}, action {indx}'
+                                    )
+
+                                    self.previous_gripper_position = (
+                                        desired_gripper_position
+                                    )
+
+                                else:
+                                    rclpy.spin_until_future_complete(
+                                        self,
+                                        future,
+                                    )
+
+                                    if future.result() is not None:
+                                        self.get_logger().info(
+                                            f'Gripper command sent at step {step}'
+                                        )
+                                    else:
+                                        self.get_logger().error(
+                                            f'Failed to send gripper command: '
+                                            f'{future.exception()}'
+                                        )
+
+                                        raise RuntimeError(
+                                            f'Failed to send gripper command: '
+                                            f'{future.exception()}'
+                                        )
+
+                                self.get_logger().info(
+                                    f'Gripper command position: '
+                                    f'{gripper_goal.command.position}'
+                                )
+
+                                # Legacy gripper-state tracking only.
+                                if (
+                                    self.ai_controller_target != 'seedo_controller'
+                                    and not self.gripper_closed
+                                    and gripper_goal.command.position == 255.0
+                                ):
+                                    self.get_logger().info(
+                                        f'Gripper is closing at step {step}'
+                                    )
+                                    self.gripper_closed = True
+
+                            elif self.ai_controller_target == 'seedo_controller':
+                                self.get_logger().debug(
+                                    f'Gripper already at '
+                                    f'{desired_gripper_position}; '
+                                    f'skipping command.'
+                                )
+
                         else:
-                            self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
-                            raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
-                        
-                        self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
-                        if not self.gripper_closed and gripper_goal.command.position == 255.0:
-                            self.get_logger().info(f'Gripper is closing at step {step}')
-                            self.gripper_closed = True
+                            self.get_logger().debug(
+                                'Skipping SeeDo gripper command: '
+                                'gripper execution disabled.'
+                            )
 
                     if self.ai_controller_target == 'seedo_controller':
                         seedo_action_done = (
@@ -1130,16 +1478,62 @@ class AIControllerNode(Node):
 
 def main(args=None):
     rclpy.init()
+
     node = AIControllerNode()
-    executor = MultiThreadedExecutor(num_threads=1)
-    executor.add_node(node)
-    
-    try:
-        node.get_logger().info('Beginning client, shut down with CTRL-C')
-        node.control_loop()
-        executor.spin()
-        node.get_logger().info('Shutting down AIControllerNode\n')
-    except KeyboardInterrupt:
-        node.get_logger().info('Keyboard interrupt, shutting down.\n')
-    node.destroy_node()
-    rclpy.shutdown()
+
+    if node.ai_controller_target == 'seedo_controller':
+        executor = MultiThreadedExecutor(num_threads=1)
+        executor.add_node(node)
+
+        executor_thread = threading.Thread(
+            target=executor.spin,
+            daemon=True,
+        )
+
+        executor_thread.start()
+
+        try:
+            node.get_logger().info(
+                'Beginning SeeDo client, shut down with CTRL-C'
+            )
+
+            node.control_loop()
+
+        except KeyboardInterrupt:
+            node.get_logger().info(
+                'Keyboard interrupt, shutting down.\n'
+            )
+
+        finally:
+            executor.shutdown()
+
+            if executor_thread.is_alive():
+                executor_thread.join(timeout=2.0)
+
+            node.destroy_node()
+
+            if rclpy.ok():
+                rclpy.shutdown()
+
+    else:
+        try:
+            node.get_logger().info(
+                'Beginning client, shut down with CTRL-C'
+            )
+
+            node.control_loop()
+
+            node.get_logger().info(
+                'Shutting down AIControllerNode\n'
+            )
+
+        except KeyboardInterrupt:
+            node.get_logger().info(
+                'Keyboard interrupt, shutting down.\n'
+            )
+
+        finally:
+            node.destroy_node()
+
+            if rclpy.ok():
+                rclpy.shutdown()

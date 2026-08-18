@@ -262,6 +262,25 @@ from sensor_msgs.msg import Image; \
 from vision_msgs.msg import Detection2DArray; \
 print(\"ROS 2 Python imports OK\")'"
 
+# topic_based_ros2_control for Isaac Sim integration
+RUN source /opt/ros/${ROS_DISTRO}/setup.bash && \
+    mkdir -p /opt/topic_based_ws/src && \
+    git clone https://github.com/PickNikRobotics/topic_based_ros2_control.git \
+        /opt/topic_based_ws/src/topic_based_ros2_control && \
+    cd /opt/topic_based_ws && \
+    rosdep install \
+        --ignore-src \
+        --from-paths src \
+        -y \
+        --rosdistro ${ROS_DISTRO} \
+        --dependency-types build \
+        --dependency-types buildtool \
+        --dependency-types exec && \
+    colcon build \
+        --merge-install \
+        --packages-select topic_based_ros2_control \
+        --cmake-args -DBUILD_TESTING=OFF
+
 COPY docker/models/seedo_ros2_entrypoint.sh /seedo_ros2_entrypoint.sh
 RUN chmod +x /seedo_ros2_entrypoint.sh
 

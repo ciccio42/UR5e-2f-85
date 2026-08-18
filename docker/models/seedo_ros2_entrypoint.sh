@@ -2,6 +2,7 @@
 set -e
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+
 cd "${ROS_WS}"
 
 UR_APPLICATION_ROOT="${ROS_WS}/src/UR5e-2f-85"
@@ -36,9 +37,12 @@ if [ -d "${ROS_WS}/src" ] && \
                 -DPython3_EXECUTABLE=/usr/bin/python3 \
             --packages-select \
             moveit_controller_srvs \
+            moveit_controller \
             ur5e_2f_85_teleoperation_msg \
             dataset_collector_pkg \
-            ai_controller
+            ai_controller \
+            ur5e_2f_85_description \
+            ur5e_2f_85_moveit_config
 
     else
         echo "[entrypoint] Skipping ROS 2 workspace build."
@@ -49,6 +53,10 @@ fi
 
 if [ -f "${ROS_WS}/install/setup.bash" ]; then
     source "${ROS_WS}/install/setup.bash"
+fi
+
+if [ -f "/opt/topic_based_ws/install/setup.bash" ]; then
+    source "/opt/topic_based_ws/install/setup.bash"
 fi
 
 exec "$@"
