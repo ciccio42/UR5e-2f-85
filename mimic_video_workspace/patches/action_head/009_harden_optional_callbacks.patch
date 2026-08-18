@@ -1,0 +1,200 @@
+# Replica per l'Action Head la robustezza dei callback opzionali usata da Cosmos.
+# DeviceMonitor usa -1 per metriche non supportate e W&B viene disattivato
+# dopo il primo errore senza interrompere forward, backward o optimizer.
+
+diff --git a/model/cosmos_predict2/callbacks/device_monitor.py b/model/cosmos_predict2/callbacks/device_monitor.py
+--- a/model/cosmos_predict2/callbacks/device_monitor.py
++++ b/model/cosmos_predict2/callbacks/device_monitor.py
+@@ -80,6 +80,16 @@ class DeviceMonitor(EveryN):
+         super().__init__(every_n=every_n, step_size=step_size)
+         self.name = self.__class__.__name__
+         self.log_memory_detail = log_memory_detail
++        self._unsupported_metrics: set[str] = set()
++
++    def _optional_metric(self, name: str, getter, default=-1.0):
++        try:
++            return getter()
++        except Exception as error:
++            if name not in self._unsupported_metrics:
++                log.warning(f"DeviceMonitor disabled unsupported metric {name}: {error}")
++                self._unsupported_metrics.add(name)
++            return default
+ 
+     def on_train_start(self, model, iteration=0):
+         torch.cuda.reset_peak_memory_stats()
+@@ -92,7 +102,11 @@ class DeviceMonitor(EveryN):
+             log.info(f"{self.name} callback: local_dir: {self.local_dir}")
+ 
+         local_rank = int(os.getenv("LOCAL_RANK", 0))
+-        self.handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
++        self.handle = self._optional_metric(
++            "nvml_device_handle",
++            lambda: pynvml.nvmlDeviceGetHandleByIndex(local_rank),
++            default=None,
++        )
+ 
+     def every_n_impl(
+         self,
+@@ -104,23 +118,30 @@ class DeviceMonitor(EveryN):
+         iteration: int,
+     ) -> None:
+         cur_process = psutil.Process(os.getpid())
+-        cpu_memory_usage = sum(p.memory_info().rss for p in [cur_process] + cur_process.children(recursive=True))  # noqa: RUF005
++        cpu_memory_usage = 0
++        for process in [cur_process] + cur_process.children(recursive=True):  # noqa: RUF005
++            try:
++                cpu_memory_usage += process.memory_info().rss
++            except (psutil.NoSuchProcess, psutil.AccessDenied):
++                continue
+         cpu_mem_gb = cpu_memory_usage / (1024**3)
+ 
+         peak_gpu_mem_gb = torch.cuda.max_memory_allocated() / (1024**3)
+         peak_gpu_mem_reserved_gb = torch.cuda.max_memory_reserved() / (1024**3)
+-        temp = torch.cuda.temperature()
+-        try:
+-            power = torch.cuda.power_draw()
+-        except Exception as e:
+-            log.warning(f"Failed to get power draw with error {e}")
+-            power = 0
+-        util = torch.cuda.utilization()
+-        clock = torch.cuda.clock_rate()
+-
+-        memory_info = pynvml.nvmlDeviceGetMemoryInfo(self.handle)
+-        nvml_used_gpu_mem_gb = memory_info.used / (1024**3)
+-        nvml_free_gpu_mem_gb = memory_info.free / (1024**3)
++        temp = self._optional_metric("temperature", torch.cuda.temperature)
++        power = self._optional_metric("power_draw", torch.cuda.power_draw)
++        util = self._optional_metric("utilization", torch.cuda.utilization)
++        clock = self._optional_metric("clock_rate", torch.cuda.clock_rate)
++
++        memory_info = None
++        if self.handle is not None:
++            memory_info = self._optional_metric(
++                "nvml_memory_info",
++                lambda: pynvml.nvmlDeviceGetMemoryInfo(self.handle),
++                default=None,
++            )
++        nvml_used_gpu_mem_gb = -1.0 if memory_info is None else memory_info.used / (1024**3)
++        nvml_free_gpu_mem_gb = -1.0 if memory_info is None else memory_info.free / (1024**3)
+ 
+         prof_data = {
+             "cpu_mem_gb": cpu_mem_gb,
+@@ -143,7 +164,5 @@ class DeviceMonitor(EveryN):
+         df, summary_df = log_prof_data(data_list, iteration)
+         if self.rank == 0:
+             log.info(f"{self.name} Stats:\n{summary_df.to_string()}")
+-            if self.log_memory_detail:
+-                memory_stats = torch.cuda.memory_stats()
+ 
+         torch.cuda.reset_peak_memory_stats()
+diff --git a/model/cosmos_predict2/callbacks/grad_clip.py b/model/cosmos_predict2/callbacks/grad_clip.py
+--- a/model/cosmos_predict2/callbacks/grad_clip.py
++++ b/model/cosmos_predict2/callbacks/grad_clip.py
+@@ -18,7 +18,7 @@ import torch
+ import wandb
+ 
+ from cosmos_predict2.utils.torch_future import get_total_norm
+-from imaginaire.utils import distributed
++from imaginaire.utils import distributed, log
+ from imaginaire.utils.callback import Callback
+ 
+ 
+@@ -33,6 +33,7 @@ class GradClip(Callback):
+         self.clip_norm = clip_norm
+         self.force_finite = force_finite
+         self.log_wandb = log_wandb
++        self._wandb_logging_enabled = log_wandb
+ 
+     def on_before_optimizer_step(
+         self,
+@@ -60,11 +61,15 @@ class GradClip(Callback):
+         total_grad_norm = model.clip_grad_norm_(self.clip_norm)
+         total_weight_norm = get_total_norm(weights, 2.0, False, None)
+ 
+-        if self.log_wandb and distributed.is_rank0():
+-            wandb.log(
+-                {
+-                    "global grad norm": total_grad_norm.item(),
+-                    "global weight norm": total_weight_norm.item(),
+-                },
+-                step=iteration,
+-            )
++        if self._wandb_logging_enabled and distributed.is_rank0():
++            try:
++                wandb.log(
++                    {
++                        "global grad norm": total_grad_norm.item(),
++                        "global weight norm": total_weight_norm.item(),
++                    },
++                    step=iteration,
++                )
++            except Exception as error:
++                self._wandb_logging_enabled = False
++                log.warning(f"Disabling optional W&B gradient logging: {error}")
+diff --git a/model/cosmos_predict2/callbacks/wandb.py b/model/cosmos_predict2/callbacks/wandb.py
+--- a/model/cosmos_predict2/callbacks/wandb.py
++++ b/model/cosmos_predict2/callbacks/wandb.py
+@@ -8,7 +8,7 @@ import attrs
+ import torch
+ import wandb
+ 
+-from imaginaire.utils import distributed
++from imaginaire.utils import distributed, log
+ from imaginaire.utils.callback import Callback
+ 
+ 
+@@ -40,8 +40,11 @@ class WandBCallback(Callback):
+         self._val_mse_sum = defaultdict(lambda: defaultdict(float))
+         self._val_loss_sum = 0.0
+         self._val_step_count = 0
++        self._logging_enabled = True
+ 
+     def _log(self, output_batch, step, prefix):
++        if not self._logging_enabled:
++            return
+         cpu_batch = {
+             k: v.detach().to("cpu", non_blocking=True, copy=True) if torch.is_tensor(v) else v
+             for k, v in output_batch.items()
+@@ -49,21 +52,33 @@ class WandBCallback(Callback):
+         del output_batch
+         gc.collect(0)
+         batch = {f"{prefix}/{k}": v for k, v in cpu_batch.items()}
+-        wandb.log(batch, step=step)
++        try:
++            wandb.log(batch, step=step)
++        except Exception as error:
++            self._logging_enabled = False
++            log.warning(f"Disabling optional W&B logging: {error}")
+ 
+     @distributed.rank0_only
+     def on_train_start(self, model, iteration: int = 0):
+-        run = wandb.init(
+-            entity=self._entity_name,
+-            project=self._project_name,
+-            mode=self._mode,
+-            name=self._run_name,
+-            config=sanitize_for_wandb(attrs.asdict(self.config, recurse=True)),
+-        )
++        try:
++            wandb.init(
++                entity=self._entity_name,
++                project=self._project_name,
++                mode=self._mode,
++                name=self._run_name,
++                config=sanitize_for_wandb(attrs.asdict(self.config, recurse=True)),
++            )
++        except Exception as error:
++            self._logging_enabled = False
++            log.warning(f"Disabling optional W&B logging: {error}")
+ 
+     @distributed.rank0_only
+     def on_train_end(self, model, iteration: int = 0):
+-        wandb.finish()
++        if self._logging_enabled:
++            try:
++                wandb.finish()
++            except Exception as error:
++                log.warning(f"Optional W&B shutdown failed: {error}")
+ 
+     @distributed.rank0_only
+     def on_before_optimizer_step(
