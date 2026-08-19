@@ -26,3 +26,6 @@ interleave_pi_zero_workspace/processed_data/
 interleave_pi_zero_workspace/**/__pycache__/
 interleave_pi_zero_workspace/**/*.pyc
 interleave_pi_zero_workspace/tmp/
+mimic_video_workspace/test/initial_frames/
+mimic_video_workspace/test/language_embeddings/
+mimic_video_workspace/test/outputs/
