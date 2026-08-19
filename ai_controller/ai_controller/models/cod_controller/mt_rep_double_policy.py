@@ -755,6 +755,8 @@ class VideoImitation(nn.Module):
 
         self.demo_mean = demo_mean
         self.first_phase = True
+        self._previous_filtered_bb = None
+        self._bb_filter_max_center_delta = 15.0
 
         model_parameters = filter(lambda p: p.requires_grad, self.parameters())
         params = sum([np.prod(p.size()) for p in model_parameters])
@@ -762,6 +764,47 @@ class VideoImitation(nn.Module):
         print('Total params in Imitation module:', params)
         print("\n---- Complete model ----\n")
         # summary(self)
+
+    def reset_detection_filter(self):
+        self._previous_filtered_bb = None
+
+    def _filter_predicted_bb(self, predicted_bb):
+        if not self.first_phase:
+            self._previous_filtered_bb = predicted_bb.detach().clone()
+            return predicted_bb
+
+        if self._previous_filtered_bb is None or self._previous_filtered_bb.shape != predicted_bb.shape:
+            self._previous_filtered_bb = predicted_bb.detach().clone()
+            return predicted_bb
+
+        previous_bb = self._previous_filtered_bb.to(device=predicted_bb.device, dtype=predicted_bb.dtype)
+        current_centers = (predicted_bb[..., :2] + predicted_bb[..., 2:]) / 2.0
+        previous_centers = (previous_bb[..., :2] + previous_bb[..., 2:]) / 2.0
+        center_delta = torch.norm(current_centers - previous_centers, dim=-1)
+        reject_mask = center_delta > self._bb_filter_max_center_delta
+
+        if not torch.any(reject_mask):
+            self._previous_filtered_bb = predicted_bb.detach().clone()
+            return predicted_bb
+
+        filtered_bb = predicted_bb.clone()
+        filtered_bb[reject_mask] = previous_bb[reject_mask]
+        for index in torch.nonzero(reject_mask.detach().cpu(), as_tuple=False):
+            index_tuple = tuple(index.tolist())
+            delta = center_delta[index_tuple].item()
+            object_index = index_tuple[-1]
+            excess = delta - self._bb_filter_max_center_delta
+            print(
+                "[CODController] Discarding bbox for object index {}: "
+                "center delta {:.2f}px exceeds threshold {:.2f}px by {:.2f}px. "
+                "Keeping previous bbox.".format(
+                    object_index,
+                    delta,
+                    self._bb_filter_max_center_delta,
+                    excess))
+
+        self._previous_filtered_bb = filtered_bb.detach().clone()
+        return filtered_bb
 
     def load_target_obj_detector(self, target_obj_detector_path=None, target_obj_detector_step=-1, gpu_id=0):
         conf_file = OmegaConf.load(os.path.join(
@@ -1181,6 +1224,8 @@ class VideoImitation(nn.Module):
             ), "The tensor contains NaN values"
             assert (predicted_bb >= 0).all(
             ), "The tensor contains values less than zero"
+            if eval:
+                predicted_bb = self._filter_predicted_bb(predicted_bb)
 
         elif self._concat_bb and predict_gt_bb:
             if self._bb_sequence == 1:

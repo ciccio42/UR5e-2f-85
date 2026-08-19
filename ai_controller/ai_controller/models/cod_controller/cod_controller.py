@@ -71,12 +71,12 @@ class CODController(AIController):
             if 'object_detector' in key:
                 del weights[key]
         model.load_state_dict(weights, strict=False)
-        print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")
-        model.load_target_obj_detector(
-                                        target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,
-                                        target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step
-                                    )
-        model._object_detector.eval()
+        #print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")
+        #model.load_target_obj_detector(
+        #                                target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,
+        #                                target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step
+        #                            )
+        #model._object_detector.eval()
         model.eval()
         print("Model weights loaded successfully.")
 
@@ -242,8 +242,7 @@ class CODController(AIController):
             frame_np = frame.permute(1, 2, 0).cpu().numpy()  # Assuming frame is a torch tensor
             pil_img = PIL.Image.fromarray((frame_np * 255).astype(np.uint8))
             pil_img.save(os.path.join(formatted_demo_frames_folder, f"formatted_frame_{i}.png"))
-        print(f"Formatted demo frames saved to {formatted_demo_frames_folder}.")
-            
+        print(f"Formatted demo frames saved to {formatted_demo_frames_folder}.")        
     
 
     def reset(self):
@@ -251,6 +250,8 @@ class CODController(AIController):
         # 1. Save current trajectory data if needed
         # 2. Load the demo dataset for the current task
         self.gripper_closed = False
+        if hasattr(self.model, 'reset_detection_filter'):
+            self.model.reset_detection_filter()
         
     
     def pre_process(self, input_data):
@@ -307,15 +308,22 @@ class CODController(AIController):
         desired_position = action[:3]
         desired_orientation = axisangle2quat(vec=action[3:6])
         predicted_gripper = action[-1]
+        #if not self.gripper_closed:
+        #action[0] += 0.02
+
+        if self.gripper_closed:
+            action[0] += 0.02
+        
+
         print(f"Predicted gripper value: {predicted_gripper}")
-        if predicted_gripper > 0.50:
+        if predicted_gripper > 0.8:
             gripper_finger_pos = 255
             
             if not self.gripper_closed:
                 # if the gripper is not closed and the predicted action is closing move the gripper a little bit forward
                 action[1] += 0.00  # Move the robot slightly forward to avoid collision when closing the gripper
-                input("Press Enter to continue after adjusting the action to avoid collision...")
-                print(f"Adjusted action to avoid collision when closing the gripper: {action}")
+                #input("Press Enter to continue after adjusting the action to avoid collision...")
+                #print(f"Adjusted action to avoid collision when closing the gripper: {action}")
             self.gripper_closed = True
             
         else:
