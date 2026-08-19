@@ -33,18 +33,31 @@ LORA_ALPHA="${LORA_ALPHA:-32}"
 apply_patches() {
     local submodule="$WORKSPACE/external/mimic-video"
     local patch
+    local index
+    local -a patches
 
     git config --global --add safe.directory "$submodule"
-    for patch in "$WORKSPACE"/patches/cosmos/*.patch; do
-        if git -C "$submodule" apply --check "$patch" 2>/dev/null; then
-            git -C "$submodule" apply "$patch"
-            echo "Applicata: $(basename "$patch")"
-        elif git -C "$submodule" apply --reverse --check "$patch" 2>/dev/null; then
-            echo "Gia applicata: $(basename "$patch")"
-        else
+
+    mapfile -t patches < <(find "$WORKSPACE/patches/cosmos" -maxdepth 1 -type f -name '*.patch' | sort)
+
+    # Le patch successive possono modificare righe introdotte dalle precedenti.
+    # Le rimuovo in ordine inverso e poi ricostruisco sempre lo stato completo.
+    for ((index=${#patches[@]} - 1; index >= 0; index--)); do
+        patch="${patches[$index]}"
+        if git -C "$submodule" apply --reverse --check "$patch" 2>/dev/null; then
+            git -C "$submodule" apply --reverse "$patch"
+            echo "Rimossa per riallineamento: $(basename "$patch")"
+        fi
+    done
+
+    for patch in "${patches[@]}"; do
+        if ! git -C "$submodule" apply --check "$patch" 2>/dev/null; then
             echo "Impossibile applicare la patch: $patch" >&2
             exit 1
         fi
+
+        git -C "$submodule" apply "$patch"
+        echo "Applicata: $(basename "$patch")"
     done
 }
 
