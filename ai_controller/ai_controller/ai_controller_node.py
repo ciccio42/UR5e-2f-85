@@ -224,6 +224,22 @@ class AIControllerNode(Node):
             self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
 
         elif self.move_robot:
+
+            self.get_logger().info(
+                f'Waiting for service {self.set_home_service}...'
+            )
+
+            self.set_home_client = self.create_client(
+                GoHome,
+                self.set_home_service,
+            )
+
+            self.set_home_client.wait_for_service()
+
+            self.get_logger().info(
+                f'Service {self.set_home_service} is available.'
+            )
+
             # GoToPose is required for both plan-only and real execution.
             self.get_logger().info(
                 f'Waiting for service {self.set_pose_service}...'
@@ -614,13 +630,19 @@ class AIControllerNode(Node):
         self.synced_images_event.clear()
 
         if self.ai_controller_target == 'seedo_controller':
-            if not self.synced_images_event.wait(timeout=timeout_sec):
-                self.get_logger().error(
-                    'Timed out waiting for synchronized camera images.'
-                )
-                return None
+            if self.seedo_rgb_msg is None:
+                if not self.seedo_rgbd_event.wait(timeout=timeout_sec):
+                    self.get_logger().error(
+                        'Timed out waiting for SeeDo RGB image.'
+                    )
+                    return None
 
-            return self.latest_synced_images
+            front_image = self.bridge.imgmsg_to_cv2(
+                self.seedo_rgb_msg,
+                desired_encoding='rgb8',
+            )
+
+            return [front_image]
 
         start = self.get_clock().now()
 
@@ -1024,6 +1046,35 @@ class AIControllerNode(Node):
                     if self.ai_controller_target == 'seedo_controller':
 
                         if self.move_robot:
+                            self.get_logger().info(
+                                f'Setting robot to home position for task ID: '
+                                f'{enter_task_id}'
+                            )
+
+                            future = self.set_home_client.call_async(
+                                GoHome.Request()
+                            )
+
+                            response = self._wait_for_future(
+                                future,
+                                timeout_sec=60.0,
+                            )
+
+                            if response is None:
+                                raise RuntimeError(
+                                    'Timed out waiting for GoHome service.'
+                                )
+
+                            if not response.success:
+                                raise RuntimeError(
+                                    f'Failed to set robot to home position: '
+                                    f'{response.message}'
+                                )
+
+                            self.get_logger().info(
+                                response.message
+                            )
+
                             self.move_to_initial_pose()
 
                         self.get_logger().info(
@@ -1228,6 +1279,10 @@ class AIControllerNode(Node):
                                 f'Robot set to desired pose '
                                 f'at step {step}, action {indx}'
                             )
+
+                            # Allow Isaac/ros2_control state feedback to settle
+                            # before planning the next SeeDo micro-action.
+                            time.sleep(0.5)
 
                         else:
                             rclpy.spin_until_future_complete(

@@ -34,6 +34,7 @@ setup(
             'ai_controller_node = ai_controller.ai_controller_node:main',
             'replicate_rollout = ai_controller.replicate_rollout:main',
             'script_controller_node = ai_controller.script_controller_node:main',
+            'mock_scene_publisher = ai_controller.models.seedo_controller.mock_scene_publisher:main',
         ],
     },
 )
