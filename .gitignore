@@ -6,7 +6,6 @@ install/
 traj_tmp/
 *.pkl
 resource/
-test/
 checkpoint_folder/
 *png
 save_images/
