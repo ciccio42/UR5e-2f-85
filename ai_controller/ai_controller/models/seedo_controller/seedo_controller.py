@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+import json
 
 from ai_controller.utils.ai_controller import AIController
 
@@ -29,6 +30,7 @@ from ai_controller.models.seedo_controller.motion_layer import (
 )
 from results import (
     ActionPlanningResult,
+    ActionStep,
     SceneState,
     PrimitivePlan,
 )
@@ -67,6 +69,86 @@ class SeeDoController(AIController):
         self.execution_error: str | None = None
 
         super().__init__(model_config=model_config)
+
+    def _load_precomputed_action_plan(
+        self,
+        action_plan_path: str | Path,
+    ) -> ActionPlanningResult:
+        """Load a previously generated SeeDo ActionPlanningResult."""
+
+        normalized_path = (
+            Path(action_plan_path)
+            .expanduser()
+            .resolve()
+        )
+
+        if not normalized_path.is_file():
+            raise FileNotFoundError(
+                "Precomputed SeeDo action plan does not exist: "
+                f"{normalized_path}"
+            )
+
+        if normalized_path.stat().st_size == 0:
+            raise ValueError(
+                "Precomputed SeeDo action plan is empty: "
+                f"{normalized_path}"
+            )
+
+        with normalized_path.open(
+            "r",
+            encoding="utf-8",
+        ) as stream:
+            plan = json.load(stream)
+
+        raw_steps = plan.get("steps", [])
+        raw_ambiguities = plan.get("ambiguities", [])
+
+        action_steps = tuple(
+            ActionStep(
+                pick_keyframe=int(step["pick_keyframe"]),
+                place_keyframe=int(step["place_keyframe"]),
+                picked_track_id=int(step["picked_track_id"]),
+                picked_category=str(step["picked_category"]),
+                picked_color=str(step["picked_color"]),
+                destination_track_id=int(
+                    step["destination_track_id"]
+                ),
+                destination_category=str(
+                    step["destination_category"]
+                ),
+                destination_ordinal_from_left=int(
+                    step["destination_ordinal_from_left"]
+                ),
+                relation=str(step["relation"]),
+                action=str(step["action"]),
+            )
+            for step in raw_steps
+        )
+
+        ambiguities = tuple(
+            str(item)
+            for item in raw_ambiguities
+        )
+
+        if action_steps:
+            natural_language_plan = " and then ".join(
+                step.action
+                for step in action_steps
+            )
+        else:
+            natural_language_plan = (
+                "No action plan generated: "
+                + "; ".join(ambiguities)
+            )
+
+        result = ActionPlanningResult(
+            steps=action_steps,
+            status=str(plan["status"]),
+            ambiguities=ambiguities,
+            natural_language_plan=natural_language_plan,
+        )
+
+        return self.post_process(result)
 
     def load_model(
         self,
@@ -647,6 +729,28 @@ class SeeDoController(AIController):
         artifacts_dir = self._prepare_artifacts_dir(
             requested_artifacts_dir
         )
+
+        precomputed_action_plan_path = kwargs.get(
+            "precomputed_action_plan_path"
+        )
+
+        if precomputed_action_plan_path:
+            self.execution_status = "planning"
+            self.execution_error = None
+
+            try:
+                self.action_plan = (
+                    self._load_precomputed_action_plan(
+                        precomputed_action_plan_path
+                    )
+                )
+            except Exception as exc:
+                self.execution_status = "failed"
+                self.execution_error = str(exc)
+                raise
+
+            self.execution_status = "plan_ready"
+            return 
 
         # Reset runtime/execution state for the new demonstration.
         self.action_plan = None

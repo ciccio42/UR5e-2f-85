@@ -116,6 +116,10 @@ class AIControllerNode(Node):
             'seedo_artifacts_dir',
             '',
         )
+        self.declare_parameter(
+            'seedo_precomputed_action_plan_path',
+            '',
+        )
 
         # get parameters
         self.ai_controller_target = self.get_parameter('ai_controller_target').get_parameter_value().string_value
@@ -158,6 +162,10 @@ class AIControllerNode(Node):
 
         self.seedo_artifacts_dir = self.get_parameter(
             'seedo_artifacts_dir'
+        ).get_parameter_value().string_value
+
+        self.seedo_precomputed_action_plan_path = self.get_parameter(
+            'seedo_precomputed_action_plan_path'
         ).get_parameter_value().string_value
 
         self.debug_steps = None
@@ -776,7 +784,17 @@ class AIControllerNode(Node):
             self.get_logger().warning('No /joint_states message received; skipping joint/gripper state fields.')
 
         try:
-            trans = self.tf_buffer.lookup_transform(self.frame_id, self.eef_frame_name, rclpy.time.Time())
+            if self.ai_controller_target == 'seedo_controller':
+                trans = self._lookup_transform(
+                    self.frame_id,
+                    self.eef_frame_name,
+                )
+            else:
+                trans = self.tf_buffer.lookup_transform(
+                    self.frame_id,
+                    self.eef_frame_name,
+                    rclpy.time.Time(),
+                )
             state[EEF_POS_NAME] = np.array([trans.transform.translation.x,
                                             trans.transform.translation.y,
                                             trans.transform.translation.z])
@@ -1085,6 +1103,9 @@ class AIControllerNode(Node):
                             demo_path=self.demo_path,
                             task_id=enter_task_id,
                             artifacts_dir=self._get_seedo_artifacts_dir(),
+                            precomputed_action_plan_path=(
+                                self.seedo_precomputed_action_plan_path
+                            ),
                         )
 
                         self.get_logger().info(

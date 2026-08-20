@@ -50,4 +50,4 @@ motion_layer:
   gripper_open_position: 0.1
   gripper_closed_position: 0.8
 
-  object_y_offset: -0.06
+  object_y_offset: -0.04

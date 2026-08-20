@@ -17,6 +17,8 @@ ${UR_APPLICATION_ROOT}/ai_controller/ai_controller/models/seedo_controller/model
 ${PYTHONPATH:-}"
 fi
 
+export PYTHONPATH="${PYTHONPATH:-}:/opt/seedo-venv/lib/python3.12/site-packages"
+
 if [ -d "${ROS_WS}/src" ] && \
    find "${ROS_WS}/src" -name package.xml -print -quit | grep -q .; then
 
