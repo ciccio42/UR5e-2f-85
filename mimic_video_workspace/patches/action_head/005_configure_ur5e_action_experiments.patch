@@ -33,12 +33,15 @@ diff --git a/model/cosmos_predict2/configs/experiment/world2action.py b/model/co
  
  
  def get_local_batch_size(global_bsz: int) -> int:
-@@ -105,6 +106,39 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
+@@ -105,6 +106,42 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
      cfg["job"]["name"] = exp_name
      cfg["dataloader_train"] = {"batch_size": L(get_local_batch_size)(global_bsz=bsz)}
  
 +    # Limita il parallelismo CPU solo per gli esperimenti UR5e sulla Spark condivisa.
 +    if pipe == "ur5e":
++        # Mantiene la stessa gerarchia posttraining usata dal fine tuning Cosmos.
++        cfg["job"].update(project="posttraining", group="world2action")
++
 +        cfg["trainer"]["max_iter"] = 10_000
 +        cfg["trainer"]["grad_accum_iter"] = 12 if bsz == 1 else 1
 +        cfg["scheduler"].update(
