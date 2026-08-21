@@ -14,8 +14,9 @@
 #   Gli optimizer step per epoca corrispondono al numero di chunk bilanciati diviso 12.
 # - Validation: una iniziale e una al termine di ogni epoca completa.
 # - Checkpoint: al termine di ogni epoca e alla conclusione del training.
-#   La retention conserva soltanto gli ultimi 2 checkpoint completi.
-# - W&B offline; master weights FP32 ed EMA disattivati; precisione bfloat16.
+#   La retention conserva gli ultimi 2 checkpoint completi e il best validato.
+# - W&B online con credenziali esterne; master weights FP32 ed EMA disattivati;
+#   precisione bfloat16.
 # - Smoke test: 1 optimizer step su 12 microbatch, con 2 batch di validation iniziale
 #   e altri 2 dopo lo step.
 
@@ -35,23 +36,55 @@ if [[ -z "${GRAD_ACCUM_ITER:-}" ]]; then
     fi
 fi
 MAX_ITER="${MAX_ITER:-10000}"
-COSMOS_CKPT_REL="${COSMOS_CKPT_REL:-checkpoints/video_backbone/v2w_ur5e_finetuned.pt}"
+COSMOS_CKPT_REL="${COSMOS_CKPT_REL:-checkpoints/posttraining/video2world/v2w_ur5e_pick_place_videmb_lora_rank64_lr1.778e-04_bsz1_alpha32_train/checkpoints/model/iter_000001520_fused.pt}"
+WANDB_ENV_FILE="${WANDB_ENV_FILE:-$HOME/.config/mimic-video/wandb.env}"
 
 apply_patches() {
     local submodule="$WORKSPACE/external/mimic-video"
     local patch
+    local index
+    local -a cosmos_patches
+    local -a action_patches
 
     git config --global --add safe.directory "$submodule"
-    for patch in "$WORKSPACE"/patches/action_head/*.patch; do
-        if git -C "$submodule" apply --check "$patch" 2>/dev/null; then
-            git -C "$submodule" apply "$patch"
-            echo "Applicata: $(basename "$patch")"
-        elif git -C "$submodule" apply --reverse --check "$patch" 2>/dev/null; then
-            echo "Gia applicata: $(basename "$patch")"
-        else
+
+    mapfile -t cosmos_patches < <(find "$WORKSPACE/patches/cosmos" -maxdepth 1 -type f -name '*.patch' | sort)
+    mapfile -t action_patches < <(find "$WORKSPACE/patches/action_head" -maxdepth 1 -type f -name '*.patch' | sort)
+
+    # La prima patch di ogni gruppo modifica un file esclusivo e identifica
+    # senza ambiguita quale configurazione e attualmente applicata.
+    if [[ ${#action_patches[@]} -gt 0 ]] && \
+        git -C "$submodule" apply --reverse --check "${action_patches[0]}" 2>/dev/null; then
+        for ((index=${#action_patches[@]} - 1; index >= 0; index--)); do
+            patch="${action_patches[$index]}"
+            if git -C "$submodule" apply --reverse --check "$patch" 2>/dev/null; then
+                git -C "$submodule" apply --reverse "$patch"
+                echo "Rimossa patch Action Head: $(basename "$patch")"
+            fi
+        done
+    fi
+
+    # Prima di configurare l'Action Head rimuovo le patch del training Cosmos,
+    # in ordine inverso per rispettare le dipendenze tra patch successive.
+    if [[ ${#cosmos_patches[@]} -gt 0 ]] && \
+        git -C "$submodule" apply --reverse --check "${cosmos_patches[0]}" 2>/dev/null; then
+        for ((index=${#cosmos_patches[@]} - 1; index >= 0; index--)); do
+            patch="${cosmos_patches[$index]}"
+            if git -C "$submodule" apply --reverse --check "$patch" 2>/dev/null; then
+                git -C "$submodule" apply --reverse "$patch"
+                echo "Rimossa patch Cosmos: $(basename "$patch")"
+            fi
+        done
+    fi
+
+    for patch in "${action_patches[@]}"; do
+        if ! git -C "$submodule" apply --check "$patch" 2>/dev/null; then
             echo "Impossibile applicare la patch: $patch" >&2
             exit 1
         fi
+
+        git -C "$submodule" apply "$patch"
+        echo "Applicata: $(basename "$patch")"
     done
 }
 
@@ -67,6 +100,22 @@ install_configs() {
     install -D -m 0644 \
         "$source/policy_io/ur5e_videmb.yaml" \
         "$target/policy_io/ur5e_videmb.yaml"
+}
+
+load_wandb_credentials() {
+    # Il file resta fuori dalla repository ed e montato in sola lettura nel container.
+    if [[ -f "$WANDB_ENV_FILE" ]]; then
+        set -a
+        # shellcheck disable=SC1090
+        source "$WANDB_ENV_FILE"
+        set +a
+    fi
+
+    if [[ -z "${WANDB_API_KEY:-}" ]]; then
+        echo "WANDB_API_KEY non disponibile." >&2
+        echo "Configura le credenziali in $WANDB_ENV_FILE." >&2
+        exit 1
+    fi
 }
 
 run_training() {
@@ -86,6 +135,7 @@ run_training() {
         )
     fi
 
+    load_wandb_credentials
     apply_patches
     install_configs
 
@@ -130,6 +180,14 @@ run_training() {
 
 run_container() {
     local mode="$1"
+    local container_wandb_env="/run/secrets/mimic-video-wandb.env"
+    local host_wandb_env
+
+    if [[ ! -f "$WANDB_ENV_FILE" ]]; then
+        echo "File W&B non trovato: $WANDB_ENV_FILE" >&2
+        exit 1
+    fi
+    host_wandb_env="$(realpath "$WANDB_ENV_FILE")"
 
     docker run --rm \
         --gpus all \
@@ -139,7 +197,9 @@ run_container() {
         -e GRAD_ACCUM_ITER="$GRAD_ACCUM_ITER" \
         -e MAX_ITER="$MAX_ITER" \
         -e COSMOS_CKPT_REL="$COSMOS_CKPT_REL" \
+        -e WANDB_ENV_FILE="$container_wandb_env" \
         -v "$REPO_ROOT":/workspace/UR5e-2f-85 \
+        -v "$host_wandb_env":"$container_wandb_env":ro \
         -w /workspace/UR5e-2f-85 \
         "$IMAGE" \
         bash /workspace/UR5e-2f-85/mimic_video_workspace/scripts/train_action_head.sh --inside "$mode"
@@ -158,9 +218,9 @@ start_tmux() {
     fi
 
     printf -v command \
-        'IMAGE=%q BATCH_SIZE=%q GRAD_ACCUM_ITER=%q MAX_ITER=%q COSMOS_CKPT_REL=%q CONTAINER_NAME=%q bash %q --container %q; status=$?; echo "Training terminato con stato $status"; exec bash' \
+        'IMAGE=%q BATCH_SIZE=%q GRAD_ACCUM_ITER=%q MAX_ITER=%q COSMOS_CKPT_REL=%q WANDB_ENV_FILE=%q CONTAINER_NAME=%q bash %q --container %q; status=$?; echo "Training terminato con stato $status"; exec bash' \
         "$IMAGE" "$BATCH_SIZE" "$GRAD_ACCUM_ITER" "$MAX_ITER" "$COSMOS_CKPT_REL" \
-        "$CONTAINER_NAME" "$SCRIPT_PATH" "$mode"
+        "$WANDB_ENV_FILE" "$CONTAINER_NAME" "$SCRIPT_PATH" "$mode"
 
     tmux new-session -d -s "$SESSION_NAME" -n train "$command"
     echo "Sessione avviata: $SESSION_NAME"

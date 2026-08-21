@@ -12,13 +12,19 @@
 # - non modifica il dataloader di validation, gia configurato con batch size 1 e zero worker.
 # - disattiva checkpoint e validation periodici basati sugli optimizer step;
 # - salva ed esegue la validation al termine di ogni epoca UR5e.
-# - mantiene W&B offline per salvare localmente loss e metriche di training.
+# - abilita W&B online usando le credenziali fornite dall'ambiente di esecuzione.
 # - disattiva i master weights FP32 dell'optimizer per ridurre l'uso di memoria.
 
 diff --git a/model/cosmos_predict2/configs/experiment/world2action.py b/model/cosmos_predict2/configs/experiment/world2action.py
 --- a/model/cosmos_predict2/configs/experiment/world2action.py
 +++ b/model/cosmos_predict2/configs/experiment/world2action.py
-@@ -70,7 +70,7 @@ cs.store(name="config", node=BASE)
+@@ -1,4 +1,5 @@
+ import copy
+ import itertools as it
++import os
+ 
+ import numpy as np
+@@ -70,7 +71,7 @@ cs.store(name="config", node=BASE)
  world2action_pipes = ACTION_DECODER_NETS.keys()
  xattn_layer_idxs = [20]
  lrs = np.logspace(-5, -3, 9)[[4]]
@@ -27,7 +33,7 @@ diff --git a/model/cosmos_predict2/configs/experiment/world2action.py b/model/co
  
  
  def get_local_batch_size(global_bsz: int) -> int:
-@@ -105,6 +105,38 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
+@@ -105,6 +106,39 @@ for video_ckpt, data_config, xattn_layer_idx, lr, bsz in it.product(
      cfg["job"]["name"] = exp_name
      cfg["dataloader_train"] = {"batch_size": L(get_local_batch_size)(global_bsz=bsz)}
  
@@ -57,10 +63,11 @@ diff --git a/model/cosmos_predict2/configs/experiment/world2action.py b/model/co
 +        cfg["trainer"]["validation_iter"] = 999_999_999
 +        cfg["trainer"]["epoch_checkpoint_throttling_min_period_minutes"] = 0
 +
-+        # Salva localmente le metriche senza richiedere una connessione al servizio W&B.
++        # Invia online le metriche usando le credenziali W&B dell'ambiente.
 +        cfg["trainer"]["callbacks"]["wandb"].update(
-+            mode="offline",
-+            entity_name="",
++            mode=os.getenv("WANDB_MODE", "online"),
++            entity_name=os.getenv("WANDB_ENTITY") or None,
++            project_name=os.getenv("WANDB_PROJECT", "mimic_video_w2a"),
 +        )
 +
      if "libero" in data_config:

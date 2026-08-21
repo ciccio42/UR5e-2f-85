@@ -1,0 +1,240 @@
+# Conserva il checkpoint Action Head con validation loss minima oltre agli ultimi due.
+#
+# La patch aggiunge un callback indipendente da W&B che aggrega la validation
+# loss standard dell'Action Head, la confronta con il best persistente e
+# promuove il checkpoint completo della stessa iterazione. I quattro componenti
+# vengono copiati come best_<iterazione>.pt; latest_checkpoint.txt continua a
+# riferirsi soltanto agli iter_*.pt e il comportamento del resume resta invariato.
+
+diff --git a/model/cosmos_predict2/checkpointer.py b/model/cosmos_predict2/checkpointer.py
+--- a/model/cosmos_predict2/checkpointer.py
++++ b/model/cosmos_predict2/checkpointer.py
+@@ -13,8 +13,10 @@
+ 
+ from __future__ import annotations
+ 
+ import collections
++import json
+ import os
++import shutil
+ import threading
+ from typing import TYPE_CHECKING
+ 
+@@ -36,6 +38,7 @@ if TYPE_CHECKING:
+ 
+ CHECKPOINT_FOLDERS = ("model", "optim", "scheduler", "trainer")
+ KEEP_LAST_CHECKPOINTS = 2
++BEST_CHECKPOINT_METADATA = "best_checkpoint.json"
+ 
+ 
+ class Checkpointer:
+@@ -173,6 +176,99 @@ class Checkpointer:
+                         os.remove(path)
+                         log.info(f"Removed old checkpoint: {path}")
+ 
++    def read_best_checkpoint_metadata(self) -> dict | None:
++        """Read the persistent best-checkpoint metric, if available."""
++        metadata_path = os.path.join(self.checkpoint_dir_local, BEST_CHECKPOINT_METADATA)
++        if not os.path.isfile(metadata_path):
++            return None
++
++        try:
++            with open(metadata_path) as file:
++                return json.load(file)
++        except (OSError, ValueError) as error:
++            log.warning(f"Could not read best-checkpoint metadata: {error}")
++            return None
++
++    def promote_best_checkpoint(self, iteration: int, val_loss: float) -> bool:
++        """Copy a complete iter checkpoint to the persistent best checkpoint."""
++        if distributed.get_rank() != 0:
++            return False
++
++        # Validation can overlap the asynchronous write of the trainer state.
++        self.finalize()
++
++        source_file = f"iter_{iteration:09}.pt"
++        best_file = f"best_{iteration:09}.pt"
++        source_paths = {
++            folder: os.path.join(self.checkpoint_dir_local, folder, source_file)
++            for folder in CHECKPOINT_FOLDERS
++        }
++        missing = [path for path in source_paths.values() if not os.path.isfile(path)]
++        if missing:
++            log.warning(
++                "Cannot promote validation checkpoint because the matching "
++                f"iteration is incomplete: {missing}"
++            )
++            return False
++
++        staged_paths: list[tuple[str, str]] = []
++        try:
++            # Stage every component before replacing or deleting any previous best.
++            for folder, source_path in source_paths.items():
++                destination = os.path.join(self.checkpoint_dir_local, folder, best_file)
++                temporary = f"{destination}.tmp"
++                shutil.copy2(source_path, temporary)
++                staged_paths.append((temporary, destination))
++
++            fused_source = os.path.join(
++                self.checkpoint_dir_local,
++                "model",
++                source_file.replace(".pt", "_fused.pt"),
++            )
++            fused_best_file = best_file.replace(".pt", "_fused.pt")
++            if os.path.isfile(fused_source):
++                fused_destination = os.path.join(self.checkpoint_dir_local, "model", fused_best_file)
++                fused_temporary = f"{fused_destination}.tmp"
++                shutil.copy2(fused_source, fused_temporary)
++                staged_paths.append((fused_temporary, fused_destination))
++
++            for temporary, destination in staged_paths:
++                os.replace(temporary, destination)
++
++            metadata = {
++                "iteration": iteration,
++                "val_loss": val_loss,
++                "filename": best_file,
++            }
++            metadata_path = os.path.join(self.checkpoint_dir_local, BEST_CHECKPOINT_METADATA)
++            metadata_temporary = f"{metadata_path}.tmp"
++            with open(metadata_temporary, "w") as file:
++                json.dump(metadata, file, indent=2)
++                file.write("\n")
++            os.replace(metadata_temporary, metadata_path)
++
++            # The new complete set and its metadata now exist: old best files are safe to remove.
++            keep_files = {best_file, fused_best_file}
++            for folder in CHECKPOINT_FOLDERS:
++                folder_path = os.path.join(self.checkpoint_dir_local, folder)
++                for filename in os.listdir(folder_path):
++                    if filename.startswith("best_") and filename.endswith(".pt") and filename not in keep_files:
++                        path = os.path.join(folder_path, filename)
++                        os.remove(path)
++                        log.info(f"Removed previous best checkpoint: {path}")
++
++            log.success(
++                f"Saved best checkpoint {best_file} with validation loss {val_loss:.8f}"
++            )
++            return True
++        except Exception as error:
++            log.exception(f"Failed to promote best checkpoint: {error}")
++            return False
++        finally:
++            for temporary, _destination in staged_paths:
++                if os.path.isfile(temporary):
++                    os.remove(temporary)
++
+     @misc.timer("checkpoint loading")
+     def load(
+         self,
+diff --git a/model/cosmos_predict2/callbacks/best_checkpoint.py b/model/cosmos_predict2/callbacks/best_checkpoint.py
+new file mode 100644
+--- /dev/null
++++ b/model/cosmos_predict2/callbacks/best_checkpoint.py
+@@ -0,0 +1,86 @@
++# SPDX-FileCopyrightText: Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++
++from __future__ import annotations
++
++import math
++
++import torch
++
++from imaginaire.utils import distributed, log
++from imaginaire.utils.callback import Callback
++
++
++class BestCheckpointCallback(Callback):
++    """Keep the complete checkpoint associated with the lowest validation loss."""
++
++    def __init__(self) -> None:
++        self._best_val_loss = math.inf
++        self._val_loss_sum = 0.0
++        self._val_step_count = 0
++
++    @distributed.rank0_only
++    def on_train_start(self, model, iteration: int = 0) -> None:
++        del model, iteration
++        metadata = self.trainer.checkpointer.read_best_checkpoint_metadata()
++        if metadata is not None:
++            try:
++                self._best_val_loss = float(metadata["val_loss"])
++                log.info(
++                    "Loaded best validation loss "
++                    f"{self._best_val_loss:.8f} from {metadata.get('filename', 'unknown')}"
++                )
++            except (KeyError, TypeError, ValueError) as error:
++                log.warning(f"Ignoring invalid best-checkpoint metadata: {error}")
++
++    @distributed.rank0_only
++    def on_validation_start(self, model, dataloader_val, iteration: int = 0) -> None:
++        del model, dataloader_val, iteration
++        self._val_loss_sum = 0.0
++        self._val_step_count = 0
++
++    @distributed.rank0_only
++    def on_validation_step_end(
++        self,
++        model,
++        data_batch,
++        output_batch,
++        loss,
++        iteration: int = 0,
++    ) -> None:
++        del model, data_batch, iteration
++
++        # output_batch["loss"] is the same reduced metric logged by W&B.
++        metric = output_batch.get("loss")
++        if metric is None:
++            metric = loss.detach().float().mean()
++        if torch.is_tensor(metric):
++            metric = metric.detach().float().item()
++
++        self._val_loss_sum += float(metric)
++        self._val_step_count += 1
++
++    @distributed.rank0_only
++    def on_validation_end(self, model, iteration: int = 0) -> None:
++        del model
++        if self._val_step_count == 0:
++            log.warning("Best checkpoint was not evaluated because validation produced no batches.")
++            return
++
++        val_loss = self._val_loss_sum / self._val_step_count
++        self._val_loss_sum = 0.0
++        self._val_step_count = 0
++
++        # Iteration zero is the untrained baseline and has no matching iter checkpoint.
++        if iteration == 0 or not math.isfinite(val_loss):
++            return
++
++        log.info(
++            f"Validation loss at iteration {iteration}: {val_loss:.8f}; "
++            f"current best: {self._best_val_loss:.8f}"
++        )
++        if val_loss >= self._best_val_loss:
++            return
++
++        if self.trainer.checkpointer.promote_best_checkpoint(iteration, val_loss):
++            self._best_val_loss = val_loss
+diff --git a/model/cosmos_predict2/configs/defaults/callbacks.py b/model/cosmos_predict2/configs/defaults/callbacks.py
+--- a/model/cosmos_predict2/configs/defaults/callbacks.py
++++ b/model/cosmos_predict2/configs/defaults/callbacks.py
+@@ -15,6 +15,7 @@
+ from hydra.core.config_store import ConfigStore
+ from omegaconf import MISSING
+ 
++from cosmos_predict2.callbacks.best_checkpoint import BestCheckpointCallback
+ from cosmos_predict2.callbacks.device_monitor import DeviceMonitor
+ from cosmos_predict2.callbacks.grad_clip import GradClip
+ from cosmos_predict2.callbacks.iter_speed import IterSpeed
+@@ -35,6 +36,7 @@ BASIC_CALLBACKS = dict(
+     device_monitor=L(DeviceMonitor)(
+         every_n="${trainer.logging_iter}",
+     ),
++    best_checkpoint=L(BestCheckpointCallback)(),
+     manual_gc=L(ManualGarbageCollection)(every_n=5),
+     grad_clip=L(GradClip)(clip_norm=10.0, log_wandb=True),
+     wandb=L(WandBCallback)(mode="online", entity_name=MISSING, run_name="${job.name}", project_name=MISSING),
