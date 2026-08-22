@@ -1,0 +1,8 @@
+initial_positions:
+  elbow_joint: 2.3534
+  robotiq_85_left_knuckle_joint: 0.0
+  shoulder_lift_joint: -2.3425
+  shoulder_pan_joint: 1.5609
+  wrist_1_joint: -1.5739
+  wrist_2_joint: -1.5755
+  wrist_3_joint: -0.0086

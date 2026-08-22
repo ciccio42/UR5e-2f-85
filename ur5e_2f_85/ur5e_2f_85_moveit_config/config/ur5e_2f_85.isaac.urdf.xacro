@@ -3,7 +3,7 @@
 
     <xacro:arg
         name="initial_positions_file"
-        default="initial_positions.yaml" />
+        default="initial_positions_isaac.yaml" />
 
     <!-- Same robot description used by the existing MoveIt config -->
     <xacro:include
