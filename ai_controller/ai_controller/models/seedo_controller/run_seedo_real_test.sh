@@ -9,7 +9,9 @@ export PYTHONPATH="${PYTHONPATH:-}:/opt/seedo-venv/lib/python3.12/site-packages"
 REPO_ROOT="/home/ros2_ws/src/UR5e-2f-85"
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S_%3N')"
-RUN_DIR="${REPO_ROOT}/real_tests/${TIMESTAMP}"
+
+REAL_TEST_ROOT="/test_real"
+RUN_DIR="${REAL_TEST_ROOT}/${TIMESTAMP}"
 
 ACTION_PLAN_SOURCE="/seedo_tests/ai_controller_node_interactive/action_planning"
 

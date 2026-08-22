@@ -6,7 +6,134 @@ source /home/ros2_ws/install/setup.bash
 export PYTHONPATH="${PYTHONPATH:-}:/opt/seedo-venv/lib/python3.12/site-packages"
 
 REPO_ROOT="/home/ros2_ws/src/UR5e-2f-85"
-OUTPUT_ROOT="/home/asus-mivia/Desktop/Angelo/test_isaac"
+
+SCRIPT_DIR="${REPO_ROOT}/ai_controller/ai_controller/models/seedo_controller"
+SCENE_CONFIGURATOR="${SCRIPT_DIR}/configure_isaac_scene.py"
+
+TASK=""
+TRAJECTORY=""
+CONFIGURE_SCENE=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --task)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --task requires a value."
+                exit 1
+            fi
+
+            TASK="$2"
+            CONFIGURE_SCENE=true
+            shift 2
+            ;;
+
+        --trajectory)
+            if [[ $# -lt 2 ]]; then
+                echo "ERROR: --trajectory requires a value."
+                exit 1
+            fi
+
+            TRAJECTORY="$2"
+            CONFIGURE_SCENE=true
+            shift 2
+            ;;
+
+        *)
+            echo "Unknown argument: $1"
+            echo "Usage: $0 [--task 00-15] [--trajectory 000-039]"
+            exit 1
+            ;;
+    esac
+done
+
+# ============================================================
+# SCENE CONFIGURATION SELECTION
+# ============================================================
+
+# If no task/trajectory was passed, ask whether the scene
+# should be configured at all.
+if [[ "${CONFIGURE_SCENE}" == false ]]; then
+    read -rp "Vuoi configurare la scena? [y/n]: " CONFIGURE_REPLY
+
+    case "${CONFIGURE_REPLY}" in
+        y|Y|yes|YES|Yes|s|S|si|SI|Si)
+            CONFIGURE_SCENE=true
+            ;;
+        *)
+            CONFIGURE_SCENE=false
+            ;;
+    esac
+fi
+
+
+# ============================================================
+# TASK / TRAJECTORY
+# ============================================================
+
+if [[ "${CONFIGURE_SCENE}" == true ]]; then
+
+    if [[ -z "${TASK}" ]]; then
+        read -rp "Task [00-15]: " TASK
+    fi
+
+    if [[ -z "${TRAJECTORY}" ]]; then
+        read -rp "Trajectory [000-039]: " TRAJECTORY
+    fi
+
+    # Validate task.
+    if ! [[ "${TASK}" =~ ^[0-9]{1,2}$ ]] || (( 10#${TASK} > 15 )); then
+        echo "ERROR: task must be between 00 and 15."
+        exit 1
+    fi
+
+    # Validate trajectory.
+    if ! [[ "${TRAJECTORY}" =~ ^[0-9]{1,3}$ ]] || (( 10#${TRAJECTORY} > 39 )); then
+        echo "ERROR: trajectory must be between 000 and 039."
+        exit 1
+    fi
+
+    # Normalize formatting.
+    printf -v TASK "%02d" "$((10#${TASK}))"
+    printf -v TRAJECTORY "%03d" "$((10#${TRAJECTORY}))"
+
+fi
+
+OUTPUT_ROOT="/test_isaac"
+
+if [[ "${CONFIGURE_SCENE}" == true ]]; then
+
+    echo "================================================="
+    echo "Configuring Isaac scene"
+    echo "Task:       ${TASK}"
+    echo "Trajectory: ${TRAJECTORY}"
+    echo "================================================="
+
+    python3 "${SCENE_CONFIGURATOR}" \
+        --task "$((10#${TASK}))" \
+        --trajectory "$((10#${TRAJECTORY}))"
+
+    SCENE_CONFIG_EXIT_CODE=$?
+
+    if [[ ${SCENE_CONFIG_EXIT_CODE} -ne 0 ]]; then
+        echo
+        echo "ERROR: Isaac scene configuration failed."
+        echo "SeeDo test will NOT be started."
+        exit "${SCENE_CONFIG_EXIT_CODE}"
+    fi
+
+    echo
+    echo "Isaac scene configured successfully."
+    echo
+
+else
+
+    echo "================================================="
+    echo "Isaac scene configuration SKIPPED"
+    echo "Using the current scene."
+    echo "================================================="
+    echo
+
+fi
 
 TIMESTAMP="$(date '+%Y%m%d_%H%M%S_%3N')"
 RUN_DIR="${OUTPUT_ROOT}/${TIMESTAMP}"
@@ -69,6 +196,8 @@ set -e
 cat > "${RUN_DIR}/run_status.json" <<EOF
 {
     "timestamp": "${TIMESTAMP}",
+    "task": "${TASK}",
+    "trajectory": "${TRAJECTORY}",
     "exit_code": ${EXIT_CODE},
     "mode": "isaac_sim"
 }
