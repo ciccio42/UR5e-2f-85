@@ -1,0 +1,22 @@
+# Mimic Video controller configuration.
+# MIMIC_VIDEO_WORKSPACE must point to the mimic_video_workspace directory.
+
+experiment_name: "w2a_ur5e_videmb_v2w_ur5e_finetuned_lr1.000e-04_layer20_bsz1"
+
+video_model_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/posttraining/video2world/v2w_ur5e_pick_place_videmb_lora_rank64_lr1.778e-04_bsz1_alpha32_train/checkpoints/model/iter_000001520_fused.pt"
+action_model_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/posttraining/world2action/w2a_ur5e_videmb_v2w_ur5e_finetuned_lr1.000e-04_layer20_bsz1_accum12_train/checkpoints/model/iter_000007326.pt"
+dataset_statistics_path: "${MIMIC_VIDEO_DATASET_STATISTICS_PATH}"
+
+# precomputed: load a saved embedding without loading T5.
+# runtime_t5: encode the command at runtime and ignore saved embeddings.
+language_conditioning: "precomputed"
+precomputed_embeddings_dir: "${MIMIC_VIDEO_WORKSPACE}/test/cosmos/language_embeddings"
+text_encoder_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/text_encoder/t5-11b"
+offload_text_encoder: true
+downcast_text_encoder: true
+
+seed: 0
+use_cuda_graphs: false
+
+# Read only by MimicVideoController; MimicVideoPolicy always returns 15 actions.
+num_execute_actions: 10

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from typing import Literal
 
 import torch
 
@@ -29,18 +31,39 @@ PROMPT_EMBED_DIM = 1024
 NUM_SAMPLING_STEPS = 35
 STOP_AFTER_STEP = 0
 
+LanguageConditioning = Literal["precomputed", "runtime_t5"]
+LANGUAGE_CONDITIONING_MODES = {"precomputed", "runtime_t5"}
+
+
+def _resolve_path(path: str | Path) -> Path:
+    """Expand environment variables and user directories in a configured path."""
+    expanded = os.path.expanduser(os.path.expandvars(str(path)))
+    if "$" in expanded:
+        raise EnvironmentError(f"Unresolved environment variable in path: {path}")
+    return Path(expanded)
+
 
 def load_mimic_video_pipeline(
     experiment_name: str,
     video_model_path: str | Path,
     action_model_path: str | Path,
     dataset_statistics_path: str | Path,
+    language_conditioning: LanguageConditioning = "precomputed",
+    text_encoder_path: str | Path | None = None,
+    offload_text_encoder: bool = True,
+    downcast_text_encoder: bool = True,
     dtype: torch.dtype = torch.bfloat16,
 ) -> Video2World2ActionPipeline:
     """Load the official Mimic Video pipeline with the UR5e normalizer."""
-    video_model_path = Path(video_model_path)
-    action_model_path = Path(action_model_path)
-    dataset_statistics_path = Path(dataset_statistics_path)
+    if language_conditioning not in LANGUAGE_CONDITIONING_MODES:
+        raise ValueError(
+            f"language_conditioning must be one of {sorted(LANGUAGE_CONDITIONING_MODES)}, "
+            f"got {language_conditioning!r}"
+        )
+
+    video_model_path = _resolve_path(video_model_path)
+    action_model_path = _resolve_path(action_model_path)
+    dataset_statistics_path = _resolve_path(dataset_statistics_path)
 
     for path in (video_model_path, action_model_path, dataset_statistics_path):
         if not path.is_file():
@@ -50,12 +73,24 @@ def load_mimic_video_pipeline(
         make_config(),
         ["--", f"experiment={experiment_name}"],
     )
-    config.model.config.video_pipe_config.guardrail_config.enabled = False
+    video_pipe_config = config.model.config.video_pipe_config
+    video_pipe_config.guardrail_config.enabled = False
+
+    use_text_encoder = language_conditioning == "runtime_t5"
+    if use_text_encoder:
+        if text_encoder_path is None:
+            raise ValueError("text_encoder_path is required when language_conditioning='runtime_t5'.")
+        text_encoder_path = _resolve_path(text_encoder_path)
+        if not text_encoder_path.is_dir():
+            raise FileNotFoundError(text_encoder_path)
+        video_pipe_config.text_encoder.t5.ckpt_path = str(text_encoder_path)
 
     video_pipe = Video2WorldPipeline.from_config(
-        config=config.model.config.video_pipe_config,
+        config=video_pipe_config,
         dit_path=str(video_model_path),
-        use_text_encoder=False,
+        use_text_encoder=use_text_encoder,
+        offload_text_encoder=offload_text_encoder,
+        downcast_text_encoder=downcast_text_encoder,
         device="cuda",
         torch_dtype=dtype,
         load_ema_to_reg=False,
@@ -91,21 +126,51 @@ class MimicVideoPolicy:
         video_model_path: str | Path,
         action_model_path: str | Path,
         dataset_statistics_path: str | Path,
+        language_conditioning: LanguageConditioning = "precomputed",
+        text_encoder_path: str | Path | None = None,
+        offload_text_encoder: bool = True,
+        downcast_text_encoder: bool = True,
         dtype: torch.dtype = torch.bfloat16,
     ) -> None:
         if not torch.cuda.is_available():
             raise RuntimeError("Mimic Video inference requires a CUDA device.")
 
         self.dtype = dtype
+        self.language_conditioning = language_conditioning
         self.model = load_mimic_video_pipeline(
             experiment_name=experiment_name,
             video_model_path=video_model_path,
             action_model_path=action_model_path,
             dataset_statistics_path=dataset_statistics_path,
+            language_conditioning=language_conditioning,
+            text_encoder_path=text_encoder_path,
+            offload_text_encoder=offload_text_encoder,
+            downcast_text_encoder=downcast_text_encoder,
             dtype=dtype,
         )
         self.model.eval()
         self.model.requires_grad_(False)
+
+    @torch.inference_mode()
+    def encode_command(self, command: str) -> torch.Tensor:
+        """Encode one command with the same T5 path used by the official precompute script."""
+        if self.language_conditioning != "runtime_t5":
+            raise RuntimeError("encode_command is available only with language_conditioning='runtime_t5'.")
+        command = command.strip()
+        if not command:
+            raise ValueError("command must not be empty.")
+
+        embedding = self.model.video2world_pipeline.encode_prompt(
+            command,
+            max_length=PROMPT_TOKENS,
+            return_mask=False,
+        )
+        expected_prompt = (BATCH_SIZE, PROMPT_TOKENS, PROMPT_EMBED_DIM)
+        if tuple(embedding.shape) != expected_prompt:
+            raise RuntimeError(
+                f"T5 returned shape {tuple(embedding.shape)}, expected {expected_prompt}"
+            )
+        return embedding.detach()
 
     @staticmethod
     def _validate_inputs(
@@ -139,16 +204,11 @@ class MimicVideoPolicy:
         state: torch.Tensor,
         command: str,
         prompt_embedding: torch.Tensor,
-        stop_after_step: int = STOP_AFTER_STEP,
         seed: int = 0,
-        use_cuda_graphs: bool = True,
+        use_cuda_graphs: bool = False,
     ) -> torch.Tensor:
         """Return denormalized actions shaped ``(1, 15, 10)``."""
         self._validate_inputs(input_vid, state, prompt_embedding)
-        if not 0 <= stop_after_step <= NUM_SAMPLING_STEPS:
-            raise ValueError(
-                f"stop_after_step must be between 0 and {NUM_SAMPLING_STEPS}, got {stop_after_step}"
-            )
 
         input_vid = input_vid.to(device="cuda", dtype=self.dtype)
         state = state.to(device="cuda", dtype=self.dtype)
@@ -160,7 +220,7 @@ class MimicVideoPolicy:
             prompt=command,
             prompt_embedding=prompt_embedding,
             num_sampling_step=NUM_SAMPLING_STEPS,
-            stop_after_step=stop_after_step,
+            stop_after_step=STOP_AFTER_STEP,
             seed=seed,
             use_cuda_graphs=use_cuda_graphs,
         )
