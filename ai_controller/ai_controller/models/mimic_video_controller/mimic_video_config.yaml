@@ -11,6 +11,25 @@ dataset_statistics_path: "${MIMIC_VIDEO_DATASET_STATISTICS_PATH}"
 # runtime_t5: encode the command at runtime and ignore saved embeddings.
 language_conditioning: "precomputed"
 precomputed_embeddings_dir: "${MIMIC_VIDEO_WORKSPACE}/test/cosmos/language_embeddings"
+precomputed_embeddings:
+  "01": "blue_bin1.safetensors"
+  "02": "blue_bin2.safetensors"
+  "03": "blue_bin3.safetensors"
+  "04": "blue_bin4.safetensors"
+  "05": "green_bin1.safetensors"
+  "06": "green_bin2.safetensors"
+  "07": "green_bin3.safetensors"
+  "08": "green_bin4.safetensors"
+  "09": "red_bin1.safetensors"
+  "10": "red_bin2.safetensors"
+  "11": "red_bin3.safetensors"
+  "12": "red_bin4.safetensors"
+  "13": "yellow_bin1.safetensors"
+  "14": "yellow_bin2.safetensors"
+  "15": "yellow_bin3.safetensors"
+  "16": "yellow_bin4.safetensors"
+
+
 text_encoder_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/text_encoder/t5-11b"
 offload_text_encoder: true
 downcast_text_encoder: true

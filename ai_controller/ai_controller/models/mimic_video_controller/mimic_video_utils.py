@@ -102,6 +102,7 @@ def rotation_matrix_to_6d(rotation_matrix: np.ndarray) -> np.ndarray:
 
 # Viene eseguita dopo aver ricevuto posa e gripper dal nodo ROS: costruisce il
 # vettore propriocettivo (10,) che il controller porterà alla shape (1, 1, 10).
+# Sostituisce le trasformazioni configurate nei file YAML del training.
 def build_lowdim_state(
     eef_position: np.ndarray,
     eef_quaternion: np.ndarray,
