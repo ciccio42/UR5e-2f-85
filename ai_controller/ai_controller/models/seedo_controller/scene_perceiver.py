@@ -34,6 +34,8 @@ from track_objects import (
     load_groundingdino_model,
 )
 
+from ai_controller.models.seedo_controller.timing_utils import TIMING
+
 
 class ScenePerceiver:
     """Runtime RGB-D perception used by SeeDo.
@@ -311,14 +313,21 @@ class ScenePerceiver:
         detected_confidences: list[float] = []
 
         for detector_label in self.detector_labels:
-            boxes, logits, phrases = predict(
-                model=self.grounding_model,
-                image=image,
-                caption=detector_label,
-                box_threshold=box_threshold,
-                text_threshold=text_threshold,
-                device=self.device,
-            )
+
+            timing_label = detector_label.replace(" ", "_")
+            with TIMING.measure(
+                f"scene.grounding_dino.{timing_label}",
+                cuda=True,
+            ):
+
+                boxes, logits, phrases = predict(
+                    model=self.grounding_model,
+                    image=image,
+                    caption=detector_label,
+                    box_threshold=box_threshold,
+                    text_threshold=text_threshold,
+                    device=self.device,
+                )
 
             # Task-specific correction already implemented in SeeDo.
             # For every other label this function is effectively a no-op.
@@ -376,26 +385,31 @@ class ScenePerceiver:
                 device=boxes.device,
             )
         )
+        
+        with TIMING.measure(
+            "scene.sam",
+            cuda=True,
+        ):
 
-        self.sam_predictor.set_image(
-            image_source
-        )
-
-        transformed_boxes = (
-            self.sam_predictor.transform
-            .apply_boxes_torch(
-                boxes_xyxy,
-                image_source.shape[:2],
+            self.sam_predictor.set_image(
+                image_source
             )
-            .to(self.device)
-        )
 
-        masks, _, _ = self.sam_predictor.predict_torch(
-            point_coords=None,
-            point_labels=None,
-            boxes=transformed_boxes,
-            multimask_output=False,
-        )
+            transformed_boxes = (
+                self.sam_predictor.transform
+                .apply_boxes_torch(
+                    boxes_xyxy,
+                    image_source.shape[:2],
+                )
+                .to(self.device)
+            )
+
+            masks, _, _ = self.sam_predictor.predict_torch(
+                point_coords=None,
+                point_labels=None,
+                boxes=transformed_boxes,
+                multimask_output=False,
+            )
 
         masks_np = (
             masks
@@ -650,55 +664,59 @@ class ScenePerceiver:
 
         raw_objects: list[RawSceneObject] = []
 
-        for detection in detections:
+        with TIMING.measure(
+            "scene.geometry"
+        ):
 
-            object_id = detection.object_id
-            label = detection.label
-            pixel = detection.pixel_coordinates
+            for detection in detections:
 
-            position_base = self.pixel_to_base_link(
-                pixel=pixel,
-                depth_image=depth_image,
-                camera_matrix=camera_matrix,
-                base_to_table_rotation=rotation,
-                base_to_table_translation=translation,
-            )
+                object_id = detection.object_id
+                label = detection.label
+                pixel = detection.pixel_coordinates
 
-            depth = robust_depth_at(
-                depth_image,
-                pixel[0],
-                pixel[1],
-            )
-
-            if depth is None:
-                raise RuntimeError(
-                    f"No valid depth for object '{object_id}' "
-                    f"at pixel {pixel}."
+                position_base = self.pixel_to_base_link(
+                    pixel=pixel,
+                    depth_image=depth_image,
+                    camera_matrix=camera_matrix,
+                    base_to_table_rotation=rotation,
+                    base_to_table_translation=translation,
                 )
 
-            position_camera_np = deproject_pixel(
-                pixel[0],
-                pixel[1],
-                depth,
-                camera_matrix,
-            )
+                depth = robust_depth_at(
+                    depth_image,
+                    pixel[0],
+                    pixel[1],
+                )
 
-            position_camera = tuple(
-                float(value)
-                for value in position_camera_np
-            )
+                if depth is None:
+                    raise RuntimeError(
+                        f"No valid depth for object '{object_id}' "
+                        f"at pixel {pixel}."
+                    )
 
-            raw_objects.append(
-            RawSceneObject(
-                object_id=object_id,
-                label=label,
-                pixel_coordinates=pixel,
-                position_camera=position_camera,
-                position_base=position_base,
-                mask=detection.mask,
-                confidence=detection.confidence,
+                position_camera_np = deproject_pixel(
+                    pixel[0],
+                    pixel[1],
+                    depth,
+                    camera_matrix,
+                )
+
+                position_camera = tuple(
+                    float(value)
+                    for value in position_camera_np
+                )
+
+                raw_objects.append(
+                RawSceneObject(
+                    object_id=object_id,
+                    label=label,
+                    pixel_coordinates=pixel,
+                    position_camera=position_camera,
+                    position_base=position_base,
+                    mask=detection.mask,
+                    confidence=detection.confidence,
+                )
             )
-        )
 
         raw_scene = RawSceneState(
             objects=tuple(raw_objects)
@@ -708,74 +726,79 @@ class ScenePerceiver:
         raw_scene_json_path = None
 
         if artifacts_dir is not None:
-            artifacts_dir = (
-                Path(artifacts_dir)
-                .expanduser()
-                .resolve()
-            )
 
-            artifacts_dir.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
+            with TIMING.measure(
+                "io.scene_perception_artifacts"
+            ):
 
-            overlay = self._build_raw_scene_overlay(
-                rgb_image=rgb_image,
-                raw_scene=raw_scene,
-            )
-
-            overlay_image_path = (
-                artifacts_dir
-                / "raw_scene_overlay.png"
-            )
-
-            saved = cv2.imwrite(
-                str(overlay_image_path),
-                cv2.cvtColor(
-                    overlay,
-                    cv2.COLOR_RGB2BGR,
-                ),
-            )
-
-            if not saved:
-                raise RuntimeError(
-                    f"Could not save raw scene overlay: "
-                    f"{overlay_image_path}"
+                artifacts_dir = (
+                    Path(artifacts_dir)
+                    .expanduser()
+                    .resolve()
                 )
 
-            raw_scene_json_path = (
-                artifacts_dir
-                / "raw_scene_state.json"
-            )
-
-            with raw_scene_json_path.open(
-                "w",
-                encoding="utf-8",
-            ) as stream:
-                json.dump(
-                    {
-                        "objects": [
-                            {
-                                "object_id": obj.object_id,
-                                "label": obj.label,
-                                "pixel_coordinates": list(
-                                    obj.pixel_coordinates
-                                ),
-                                "confidence": obj.confidence,
-                                "position_camera": list(
-                                    obj.position_camera
-                                ),
-                                "position_base": list(
-                                    obj.position_base
-                                ),
-                            }
-                            for obj in raw_scene.objects
-                        ]
-                    },
-                    stream,
-                    indent=2,
-                    ensure_ascii=False,
+                artifacts_dir.mkdir(
+                    parents=True,
+                    exist_ok=True,
                 )
+
+                overlay = self._build_raw_scene_overlay(
+                    rgb_image=rgb_image,
+                    raw_scene=raw_scene,
+                )
+
+                overlay_image_path = (
+                    artifacts_dir
+                    / "raw_scene_overlay.png"
+                )
+
+                saved = cv2.imwrite(
+                    str(overlay_image_path),
+                    cv2.cvtColor(
+                        overlay,
+                        cv2.COLOR_RGB2BGR,
+                    ),
+                )
+
+                if not saved:
+                    raise RuntimeError(
+                        f"Could not save raw scene overlay: "
+                        f"{overlay_image_path}"
+                    )
+
+                raw_scene_json_path = (
+                    artifacts_dir
+                    / "raw_scene_state.json"
+                )
+
+                with raw_scene_json_path.open(
+                    "w",
+                    encoding="utf-8",
+                ) as stream:
+                    json.dump(
+                        {
+                            "objects": [
+                                {
+                                    "object_id": obj.object_id,
+                                    "label": obj.label,
+                                    "pixel_coordinates": list(
+                                        obj.pixel_coordinates
+                                    ),
+                                    "confidence": obj.confidence,
+                                    "position_camera": list(
+                                        obj.position_camera
+                                    ),
+                                    "position_base": list(
+                                        obj.position_base
+                                    ),
+                                }
+                                for obj in raw_scene.objects
+                            ]
+                        },
+                        stream,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
 
         return ScenePerceptionResult(
             raw_scene=raw_scene,

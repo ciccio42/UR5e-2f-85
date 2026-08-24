@@ -23,7 +23,7 @@ import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from control_msgs.action import GripperCommand
 from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _normalize_angle, EEF_POS_NAME, EEF_QUAT_NAME, JOINT_POS_NAME, JOINT_VEL_NAME, GRIPPER_QPOS_NAME, GRIPPER_QVEL_NAME
-
+from ai_controller.models.seedo_controller.timing_utils import TIMING
 _trajectory_cls = None
 
 def _get_trajectory_cls(node):
@@ -1070,6 +1070,10 @@ class AIControllerNode(Node):
             # SeeDo runtime state
             seedo_runtime_input = None
             seedo_primitive_count = None
+
+            # Timing state for the current episode
+            end_to_end_start = None
+            robot_execution_start = None
             
             for step in range(self.max_step):
                 if step == 0:
@@ -1109,6 +1113,20 @@ class AIControllerNode(Node):
                             )
 
                             self.move_to_initial_pose()
+
+
+                        # --------------------------------------------------
+                        # START END-TO-END TIMING
+                        # --------------------------------------------------
+
+                        TIMING.reset()
+
+                        end_to_end_start = TIMING.start()
+
+                        self.get_logger().info(
+                            '[TIMING] End-to-end timing started.'
+                        )
+
 
                         self.get_logger().info(
                             f'Loading SeeDo demo data for task ID: {enter_task_id}'
@@ -1273,6 +1291,25 @@ class AIControllerNode(Node):
                         new_action[3:7] = quat
                         new_action[7] = actions[i][6] # gripper position remains the same
                         actions[i] = new_action
+
+
+                primitive_execution_start = None
+
+                if (
+                    self.ai_controller_target == 'seedo_controller'
+                    and self.move_robot
+                ):
+                    # Start the global robot execution timer only once,
+                    # immediately before the first physical action.
+                    if robot_execution_start is None:
+                        robot_execution_start = TIMING.start()
+
+                        self.get_logger().info(
+                            '[TIMING] Robot execution timing started.'
+                        )
+
+                    # Start timing the current primitive.
+                    primitive_execution_start = TIMING.start()
 
                 for indx, action in enumerate(actions):
                     self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
@@ -1495,6 +1532,12 @@ class AIControllerNode(Node):
                             reward=1 if seedo_action_done else 0,
                         )
 
+                if primitive_execution_start is not None:
+                    TIMING.stop(
+                        f'robot.primitive_{step:02d}',
+                        primitive_execution_start,
+                    )
+
                 # check if a transiction close->open has been made
                 episode_done = False
 
@@ -1558,6 +1601,44 @@ class AIControllerNode(Node):
                     self.get_logger().info(
                         'SeeDo PrimitivePlan consumed successfully.'
                     )
+
+                    # --------------------------------------------------
+                    # FINAL TIMINGS
+                    # --------------------------------------------------
+
+                    if robot_execution_start is not None:
+                        TIMING.stop(
+                            'robot_execution',
+                            robot_execution_start,
+                        )
+                        robot_execution_start = None
+
+
+                    if end_to_end_start is not None:
+                        TIMING.stop(
+                            'end_to_end_wall',
+                            end_to_end_start,
+                        )
+                        end_to_end_start = None
+
+                    if self.controller.artifacts_dir:
+                        timing_path = (
+                            self.controller.artifacts_dir
+                            / 'timings.json'
+                        )
+
+                        TIMING.save(
+                            timing_path
+                        )
+
+                        self.get_logger().info(
+                            f'[TIMING] Results saved to: {timing_path}'
+                        )
+                    else:
+                        self.get_logger().warning(
+                            '[TIMING] No artifacts_dir set; '
+                            'timing results not saved.'
+                        )
 
                 if episode_done:
                     break  # exit the loop if the gripper has opened after being closed

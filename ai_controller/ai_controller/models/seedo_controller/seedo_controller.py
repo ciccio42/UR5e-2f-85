@@ -38,6 +38,7 @@ from ai_controller.utils.utils import (
     EEF_POS_NAME,
     EEF_QUAT_NAME,
 )
+from ai_controller.models.seedo_controller.timing_utils import TIMING
 
 
 class SeeDoController(AIController):
@@ -485,6 +486,7 @@ class SeeDoController(AIController):
         t: int = 0,
         save_path: str | None = None,
     ) -> Any:
+        print(f"[INFO] SeeDoController.inference(t={t}) called.")
         if self.action_plan is None:
             raise RuntimeError(
                 "load_command() must be called before inference()."
@@ -530,41 +532,50 @@ class SeeDoController(AIController):
             try:
                 self.execution_status = "perceiving"
 
-                perception_result = self.scene_perceiver.run(
-                    rgb_image=processed_input["rgb"],
-                    depth_image=processed_input["depth"],
-                    camera_info=processed_input["camera_info"],
-                    base_to_table_transform=processed_input[
-                        "base_to_table_transform"
-                    ],
-                    artifacts_dir=(
-                        self.artifacts_dir
-                        / "scene_perceiver"
-                    ),
-                )
+                with TIMING.measure(
+                    "scene_perception"
+                ):
+                    perception_result = self.scene_perceiver.run(
+                        rgb_image=processed_input["rgb"],
+                        depth_image=processed_input["depth"],
+                        camera_info=processed_input["camera_info"],
+                        base_to_table_transform=processed_input[
+                            "base_to_table_transform"
+                        ],
+                        artifacts_dir=(
+                            self.artifacts_dir
+                            / "scene_perceiver"
+                        ),
+                    )
 
                 self.execution_status = "interpreting_scene"
-
-                self.scene_state = self.scene_interpreter.run(
-                    perception_result=perception_result,
-                    artifacts_dir=(
-                        self.artifacts_dir
-                        / "scene_interpreter"
-                    ),
-                )
+                
+                with TIMING.measure(
+                    "scene_interpretation"
+                ):
+                    self.scene_state = self.scene_interpreter.run(
+                        perception_result=perception_result,
+                        artifacts_dir=(
+                            self.artifacts_dir
+                            / "scene_interpreter"
+                        ),
+                    )
 
                 self.execution_status = "generating_lmp"
 
-                self.primitive_plan = self.lmp_generator.run(
-                    action_plan=self.action_plan,
-                    scene_state=self.scene_state,
-                    workspace_bottom_left=self.workspace_bottom_left,
-                    workspace_top_right=self.workspace_top_right,
-                    artifacts_dir=(
-                        self.artifacts_dir
-                        / "lmp_generator"
-                    ),
-                )
+                with TIMING.measure(
+                    "lmp_generation"
+                ):
+                    self.primitive_plan = self.lmp_generator.run(
+                        action_plan=self.action_plan,
+                        scene_state=self.scene_state,
+                        workspace_bottom_left=self.workspace_bottom_left,
+                        workspace_top_right=self.workspace_top_right,
+                        artifacts_dir=(
+                            self.artifacts_dir
+                            / "lmp_generator"
+                        ),
+                    )
 
             except Exception as exc:
                 self.execution_status = "failed"
@@ -643,10 +654,14 @@ class SeeDoController(AIController):
         self.execution_status = "executing"
 
         try:
-            actions = self.motion_layer.translate(
-                primitive_step=primitive_step,
-                scene_state=self.scene_state,
-            )
+
+            with TIMING.measure(
+                "motion_layer"
+            ):
+                actions = self.motion_layer.translate(
+                    primitive_step=primitive_step,
+                    scene_state=self.scene_state,
+                )
         except Exception as exc:
             self.execution_status = "failed"
             self.execution_error = str(exc)
@@ -761,37 +776,46 @@ class SeeDoController(AIController):
         self.execution_error = None
 
         try:
-            keyframe_result = self.keyframe_selector.run(
-                video_path=self.demo_path,
-                artifacts_dir=(
-                    artifacts_dir
-                    / "keyframe_selection"
-                ),
-            )
+            with TIMING.measure(
+                "keyframe_selection"
+            ):
+                keyframe_result = self.keyframe_selector.run(
+                    video_path=self.demo_path,
+                    artifacts_dir=(
+                        artifacts_dir
+                        / "keyframe_selection"
+                    ),
+                )
 
-            visual_result = self.visual_prompter.run(
-                video_path=self.demo_path,
-                keyframes=keyframe_result.keyframes,
-                artifacts_dir=(
-                    artifacts_dir
-                    / "visual_prompting"
-                ),
-            )
+            with TIMING.measure(
+                "visual_prompting_wall"
+            ):
+                visual_result = self.visual_prompter.run(
+                    video_path=self.demo_path,
+                    keyframes=keyframe_result.keyframes,
+                    artifacts_dir=(
+                        artifacts_dir
+                        / "visual_prompting"
+                    ),
+                )
 
-            action_result = self.action_planner.run(
-                annotated_video_path=(
-                    visual_result.annotated_video_path
-                ),
-                keyframes=keyframe_result.keyframes,
-                track_id_map=visual_result.track_id_map,
-                key_frame_coordinates=(
-                    visual_result.key_frame_coordinates
-                ),
-                artifacts_dir=(
-                    artifacts_dir
-                    / "action_planning"
-                ),
-            )
+            with TIMING.measure(
+                "action_planning"
+            ):
+                action_result = self.action_planner.run(
+                    annotated_video_path=(
+                        visual_result.annotated_video_path
+                    ),
+                    keyframes=keyframe_result.keyframes,
+                    track_id_map=visual_result.track_id_map,
+                    key_frame_coordinates=(
+                        visual_result.key_frame_coordinates
+                    ),
+                    artifacts_dir=(
+                        artifacts_dir
+                        / "action_planning"
+                    ),
+                )
 
             self.action_plan = self.post_process(
                 action_result
