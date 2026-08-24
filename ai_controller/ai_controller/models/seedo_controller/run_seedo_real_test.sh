@@ -46,33 +46,20 @@ cp \
     "${CONFIG_PATH}" \
     "${RUN_DIR}/seedo_controller.yaml"
 
-# ----------------------------------------------------------------------
-# Save repository state for reproducibility.
-# ----------------------------------------------------------------------
-
-git -C "${REPO_ROOT}" rev-parse HEAD \
-    > "${RUN_DIR}/git_commit.txt"
-
-git -C "${REPO_ROOT}" diff \
-    > "${RUN_DIR}/local_changes.patch"
-
-# ----------------------------------------------------------------------
-# Execute SeeDo.
-#
-# seedo_artifacts_dir:
-#   scene_perceiver/
-#   scene_interpreter/
-#   lmp_generator/
-#   motion_layer/
-#
-# save_rollout_path:
-#   executed trajectory .pkl + result .json
-#
-# stdout/stderr:
-#   console.log
-# ----------------------------------------------------------------------
-
 set +e
+
+# ros2 run ai_controller ai_controller_node \
+#     --ros-args \
+#     -p ai_controller_target:=seedo_controller \
+#     -p model_config_path:="${CONFIG_PATH}" \
+#     -p task_name:=pick_place \
+#     -p demo_path:=/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+#     -p seedo_precomputed_action_plan_path:="${PRECOMPUTED_PLAN}" \
+#     -p seedo_artifacts_dir:="${RUN_DIR}" \
+#     -p save_rollout_path:="${RUN_DIR}/rollouts" \
+#     -p move_robot:=true \
+#     -p seedo_execute_gripper:=true \
+#     2>&1 | tee "${RUN_DIR}/console.log"
 
 ros2 run ai_controller ai_controller_node \
     --ros-args \
@@ -80,7 +67,6 @@ ros2 run ai_controller ai_controller_node \
     -p model_config_path:="${CONFIG_PATH}" \
     -p task_name:=pick_place \
     -p demo_path:=/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
-    -p seedo_precomputed_action_plan_path:="${PRECOMPUTED_PLAN}" \
     -p seedo_artifacts_dir:="${RUN_DIR}" \
     -p save_rollout_path:="${RUN_DIR}/rollouts" \
     -p move_robot:=true \

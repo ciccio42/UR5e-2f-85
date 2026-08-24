@@ -51,13 +51,13 @@ On the host system:
 
 ```bash
 cd /home/asus-mivia/Desktop/Angelo/UR5e-2f-85
-
-export ROBOT_IP=172.16.174.59
 ```
 
 Start the SeeDo container:
 
 ```bash
+export ROBOT_IP=172.16.174.59
+
 docker run -it --rm \
   --name seedo_ros2_container \
   --gpus all \
@@ -173,5 +173,6 @@ Open a new terminal:
 ```bash
 docker exec -it seedo_ros2_container bash
 
+export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/run_seedo_real_test.sh
 ```

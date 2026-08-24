@@ -173,6 +173,8 @@ class AIControllerNode(Node):
         self.latest_joint_state = None
         self.joint_state_event = threading.Event()
 
+        self.pause_executor = threading.Event()
+
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
         if self.ai_controller_target == 'cod_controller':
@@ -347,14 +349,28 @@ class AIControllerNode(Node):
 
             self.seedo_rgbd_event = threading.Event()
 
-            self.camera_subs = [
-                message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
-                for topic in self.camera_topic
-            ]
-            self.camera_sync = message_filters.ApproximateTimeSynchronizer(
-                self.camera_subs, queue_size=10, slop=100
-            )
-            self.camera_sync.registerCallback(self.synced_images_callback)
+            if self.ai_controller_target != 'seedo_controller':
+                self.camera_subs = [
+                    message_filters.Subscriber(
+                        self,
+                        RosImage,
+                        topic,
+                        qos_profile=qos_profile_sensor_data,
+                    )
+                    for topic in self.camera_topic
+                ]
+
+                self.camera_sync = (
+                    message_filters.ApproximateTimeSynchronizer(
+                        self.camera_subs,
+                        queue_size=10,
+                        slop=100,
+                    )
+                )
+
+                self.camera_sync.registerCallback(
+                    self.synced_images_callback
+                )
 
             # SeeDo RGB-D subscribers
             if self.ai_controller_target == 'seedo_controller':
@@ -1056,7 +1072,6 @@ class AIControllerNode(Node):
             seedo_primitive_count = None
             
             for step in range(self.max_step):
-                
                 if step == 0:
                     # resetting controller state for the new task
                     self.controller.reset()
@@ -1099,14 +1114,19 @@ class AIControllerNode(Node):
                             f'Loading SeeDo demo data for task ID: {enter_task_id}'
                         )
 
-                        self.controller.load_command(
-                            demo_path=self.demo_path,
-                            task_id=enter_task_id,
-                            artifacts_dir=self._get_seedo_artifacts_dir(),
-                            precomputed_action_plan_path=(
-                                self.seedo_precomputed_action_plan_path
-                            ),
-                        )
+                        self.pause_executor.set()
+
+                        try:
+                            self.controller.load_command(
+                                demo_path=self.demo_path,
+                                task_id=enter_task_id,
+                                artifacts_dir=self._get_seedo_artifacts_dir(),
+                                precomputed_action_plan_path=(
+                                    self.seedo_precomputed_action_plan_path
+                                ),
+                            )
+                        finally:
+                            self.pause_executor.clear()
 
                         self.get_logger().info(
                             'Waiting for SeeDo runtime RGB-D data...'
@@ -1551,6 +1571,13 @@ class AIControllerNode(Node):
             self.traj_cnt += 1
                     
         
+def spin_executor(node=None, executor=None):
+    while rclpy.ok():
+        if node.pause_executor.is_set():
+            time.sleep(0.01)
+            continue
+
+        executor.spin_once(timeout_sec=0.01)
 
 def main(args=None):
     rclpy.init()
@@ -1558,11 +1585,17 @@ def main(args=None):
     node = AIControllerNode()
 
     if node.ai_controller_target == 'seedo_controller':
+
         executor = MultiThreadedExecutor(num_threads=1)
         executor.add_node(node)
 
+        # executor_thread = threading.Thread(
+        #     target=executor.spin,
+        #     daemon=True,
+        # )
+
         executor_thread = threading.Thread(
-            target=executor.spin,
+            target=spin_executor, args=(node, executor),
             daemon=True,
         )
 

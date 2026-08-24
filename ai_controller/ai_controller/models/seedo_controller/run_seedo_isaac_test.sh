@@ -53,7 +53,7 @@ done
 # If no task/trajectory was passed, ask whether the scene
 # should be configured at all.
 if [[ "${CONFIGURE_SCENE}" == false ]]; then
-    read -rp "Vuoi configurare la scena? [y/n]: " CONFIGURE_REPLY
+    read -rp "Do you want to configure the scene? [y/n]: " CONFIGURE_REPLY
 
     case "${CONFIGURE_REPLY}" in
         y|Y|yes|YES|Yes|s|S|si|SI|Si)
@@ -153,28 +153,20 @@ echo "================================================="
 cp -a "${ACTION_PLAN_SOURCE}/." "${RUN_DIR}/action_planning/"
 cp "${CONFIG_PATH}" "${RUN_DIR}/seedo_controller.yaml"
 
-git -C "${REPO_ROOT}" rev-parse HEAD > "${RUN_DIR}/git_commit.txt"
-git -C "${REPO_ROOT}" diff > "${RUN_DIR}/local_changes.patch"
-
-{
-    echo "=== DATE ==="
-    date --iso-8601=seconds
-    echo
-    echo "=== ROS DOMAIN ==="
-    echo "ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-}"
-    echo "RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION:-}"
-    echo
-    echo "=== CONTROLLERS ==="
-    ros2 control list_controllers || true
-    echo
-    echo "=== GRIPPER ACTIONS ==="
-    ros2 action list -t | grep -i gripper || true
-    echo
-    echo "=== ISAAC TOPICS ==="
-    ros2 topic list | grep -E 'isaac_joint|zed_(front|left|right)' || true
-} > "${RUN_DIR}/runtime_info.txt" 2>&1
-
 set +e
+
+# ros2 run ai_controller ai_controller_node \
+#     --ros-args \
+#     -p ai_controller_target:=seedo_controller \
+#     -p model_config_path:="${CONFIG_PATH}" \
+#     -p task_name:=pick_place \
+#     -p demo_path:=/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+#     -p seedo_precomputed_action_plan_path:="${PRECOMPUTED_PLAN}" \
+#     -p seedo_artifacts_dir:="${RUN_DIR}" \
+#     -p save_rollout_path:="${RUN_DIR}/rollouts" \
+#     -p move_robot:=true \
+#     -p seedo_execute_gripper:=true \
+#     2>&1 | tee "${RUN_DIR}/console.log"
 
 ros2 run ai_controller ai_controller_node \
     --ros-args \
@@ -182,7 +174,6 @@ ros2 run ai_controller ai_controller_node \
     -p model_config_path:="${CONFIG_PATH}" \
     -p task_name:=pick_place \
     -p demo_path:=/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
-    -p seedo_precomputed_action_plan_path:="${PRECOMPUTED_PLAN}" \
     -p seedo_artifacts_dir:="${RUN_DIR}" \
     -p save_rollout_path:="${RUN_DIR}/rollouts" \
     -p move_robot:=true \
