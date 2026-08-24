@@ -127,6 +127,9 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'tinyvla_controller':
             from ai_controller.models.tinyvla_controller.tinyvla_controller import TinyVLAController
             self.controller = TinyVLAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'mimic_video_controller':
+            from ai_controller.models.mimic_video_controller.mimic_video_controller import MimicVideoController
+            self.controller = MimicVideoController(self.model_config_path, self.task_name)
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -391,6 +394,40 @@ class AIControllerNode(Node):
             np.asarray(eef_quat, dtype=np.float64),
         ])
 
+    def _build_mimic_video_state(self, robot_state):
+        """Build the 8-dim state consumed by MimicVideoController.pre_process().
+
+        The controller converts the XYZW quaternion to the absolute rotation 6D
+        representation expected by the Action Head.
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build Mimic Video proprio state.')
+            return None
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+            [1.0 if self.gripper_closed else 0.0],
+        ])
+
+    def _warmup_mimic_video_history(self):
+        """Collect four real observations; the first inference adds the fifth frame."""
+        for frame_index in range(4):
+            images = self.get_synced_images()
+            if images is None:
+                raise RuntimeError('Failed to acquire a synchronized image during Mimic Video warm-up.')
+
+            robot_state = self._capture_robot_state()
+            states = self._build_mimic_video_state(robot_state)
+            if states is None:
+                raise RuntimeError('Failed to acquire the robot state during Mimic Video warm-up.')
+
+            self.controller.pre_process([images, states])
+            self.get_logger().info(f'Mimic Video warm-up frame {frame_index + 1}/4 acquired.')
+
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
         self.get_logger().info('Moving robot to initial pose before first inference...')
@@ -534,13 +571,26 @@ class AIControllerNode(Node):
                     
                     self.move_to_initial_pose()
                     
-                    # load the demo data for the given task_id
-                    self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
-                    self.controller.load_command(self.demo_path, 
-                                                 enter_task_id,
-                                                 save_demo_frames=True,
-                                                 traj_cnt=self.traj_cnt,
-                                                 save_path=self.save_rollout_path)
+                    # Load either a runtime T5 command or a precomputed task embedding.
+                    self.get_logger().info(f'Loading command data for task ID: {enter_task_id}')
+                    if self.ai_controller_target == 'mimic_video_controller':
+                        if self.controller.cfg.language_conditioning == 'runtime_t5':
+                            command = input('Enter the Mimic Video task command: ').strip()
+                            self.controller.load_command(
+                                self.demo_path,
+                                task_id=None,
+                                command=command,
+                            )
+                        else:
+                            self.controller.load_command(self.demo_path, task_id=enter_task_id)
+
+                        self._warmup_mimic_video_history()
+                    else:
+                        self.controller.load_command(self.demo_path,
+                                                     enter_task_id,
+                                                     save_demo_frames=True,
+                                                     traj_cnt=self.traj_cnt,
+                                                     save_path=self.save_rollout_path)
                 
             
                 # 1. Get sensor data (e.g., camera images)
@@ -566,6 +616,8 @@ class AIControllerNode(Node):
                     states = self._build_openvla_state(robot_state)
                 elif self.ai_controller_target == 'tinyvla_controller':
                     states = self._build_tinyvla_state(robot_state)
+                elif self.ai_controller_target == 'mimic_video_controller':
+                    states = self._build_mimic_video_state(robot_state)
                 else:
                     states = None
 
@@ -581,6 +633,9 @@ class AIControllerNode(Node):
                 if self.ai_controller_target == 'cod_controller':
                     pred_action, predicted_bb, target_obj_prediction = out
                     actions = [pred_action]
+                elif self.ai_controller_target == 'mimic_video_controller':
+                    # Mimic Video already returns absolute 8D targets with XYZW quaternion.
+                    actions = out
                 elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
                     actions = out
                     # OpenVLAController/TinyVLAController both return a list of
