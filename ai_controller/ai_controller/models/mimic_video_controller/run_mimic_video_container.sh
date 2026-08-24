@@ -35,6 +35,9 @@ setup_runtime_environment() {
     export MIMIC_VIDEO_DATASET_STATISTICS_PATH="$MIMIC_VIDEO_WORKSPACE/checkpoints/dataset_statistics/ur5e_action.json"
     export MIMIC_VIDEO_CONTROLLER_CONFIG=/home/ros2_ws/src/ai_controller/ai_controller/models/mimic_video_controller/mimic_video_config.yaml
 
+    # Indica a Cosmos dove trovare il tokenizer video e gli altri asset runtime.
+    export COSMOS_PREDICT2_ARGS="--checkpoints $MIMIC_VIDEO_WORKSPACE/checkpoints"
+
     export CUDA_HOME=/usr/local/cuda-12.8
     export CUDA_PATH="$CUDA_HOME"
     export CUDNN_PY_ROOT=/usr/local/lib/python3.12/dist-packages/nvidia/cudnn
@@ -92,10 +95,16 @@ setup_runtime_environment() {
         echo "Statistiche UR5e mancanti: $MIMIC_VIDEO_DATASET_STATISTICS_PATH" >&2
         return 1
     fi
+    local video_tokenizer="$MIMIC_VIDEO_WORKSPACE/checkpoints/video_backbone/tokenizer/tokenizer.pth"
+    if [[ ! -f "$video_tokenizer" ]]; then
+        echo "Tokenizer video Cosmos mancante: $video_tokenizer" >&2
+        return 1
+    fi
 
     echo "Runtime Mimic Video attivo"
     echo "  Python:      $(command -v python)"
     echo "  Model dir:   $MIMIC_MODEL_DIR"
+    echo "  Checkpoints: $MIMIC_VIDEO_WORKSPACE/checkpoints"
     echo "  Statistics:  $MIMIC_VIDEO_DATASET_STATISTICS_PATH"
 }
 
