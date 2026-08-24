@@ -246,20 +246,41 @@ if [[ "${init_process:-}" != "sleep" ]]; then
     exit 1
 fi
 
-echo "Applicazione delle patch d'inferenza..."
+echo "Installazione delle configurazioni UR5e per l'inferenza..."
 docker exec "$CONTAINER_NAME" bash -lc '
     set -e
-    model_repo=/workspace/mimic_video_workspace/external/mimic-video
-    patch_dir=/workspace/mimic_video_workspace/patches/inference
-    shopt -s nullglob
-    patches=("$patch_dir"/*.patch)
+    workspace=/workspace/mimic_video_workspace
+    source_dir="$workspace/configs/action_head/dataloading"
+    target_dir="$workspace/external/mimic-video/model/cosmos_predict2/configs/dataloading"
 
-    if (( ${#patches[@]} == 0 )); then
-        echo "Nessuna patch d inferenza trovata in $patch_dir" >&2
-        exit 1
-    fi
+    install -D -m 0644 "$source_dir/ur5e_videmb.yaml" "$target_dir/ur5e_videmb.yaml"
+    install -D -m 0644 "$source_dir/dataset/ur5e.yaml" "$target_dir/dataset/ur5e.yaml"
+    install -D -m 0644 \
+        "$source_dir/dataset/transform/ur5e_to_ur5e_videmb.yaml" \
+        "$target_dir/dataset/transform/ur5e_to_ur5e_videmb.yaml"
+    install -D -m 0644 \
+        "$source_dir/policy_io/ur5e_videmb.yaml" \
+        "$target_dir/policy_io/ur5e_videmb.yaml"
+'
+
+echo "Applicazione delle registrazioni UR5e e delle patch d'inferenza..."
+docker exec "$CONTAINER_NAME" bash -lc '
+    set -e
+    workspace=/workspace/mimic_video_workspace
+    model_repo=/workspace/mimic_video_workspace/external/mimic-video
+    patches=(
+        "$workspace/patches/action_head/004_register_ur5e_action_pipe.patch"
+        "$workspace/patches/action_head/005_configure_ur5e_action_experiments.patch"
+        "$workspace/patches/action_head/007_register_ur5e_cosmos_checkpoint.patch"
+        "$workspace/patches/inference/001_lazy_apex_optimizer_import.patch"
+    )
 
     for patch_file in "${patches[@]}"; do
+        if [[ ! -f "$patch_file" ]]; then
+            echo "Patch richiesta mancante: $patch_file" >&2
+            exit 1
+        fi
+
         git_cmd=(git -c safe.directory="$model_repo" -C "$model_repo")
         if "${git_cmd[@]}" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
             echo "Gia applicata: $(basename "$patch_file")"
