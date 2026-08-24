@@ -1,0 +1,138 @@
+[1mdiff --git a/ai_controller/ai_controller/models/cod_controller/cod_controller.py b/ai_controller/ai_controller/models/cod_controller/cod_controller.py[m
+[1mindex 1d261ba..146a4dc 100755[m
+[1m--- a/ai_controller/ai_controller/models/cod_controller/cod_controller.py[m
+[1m+++ b/ai_controller/ai_controller/models/cod_controller/cod_controller.py[m
+[36m@@ -71,12 +71,12 @@[m [mclass CODController(AIController):[m
+             if 'object_detector' in key:[m
+                 del weights[key][m
+         model.load_state_dict(weights, strict=False)[m
+[31m-        print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")[m
+[31m-        model.load_target_obj_detector([m
+[31m-                                        target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,[m
+[31m-                                        target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step[m
+[31m-                                    )[m
+[31m-        model._object_detector.eval()[m
+[32m+[m[32m        #print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")[m
+[32m+[m[32m        #model.load_target_obj_detector([m
+[32m+[m[32m        #                                target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,[m
+[32m+[m[32m        #                                target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step[m
+[32m+[m[32m        #                            )[m
+[32m+[m[32m        #model._object_detector.eval()[m
+         model.eval()[m
+         print("Model weights loaded successfully.")[m
+ [m
+[36m@@ -242,8 +242,7 @@[m [mclass CODController(AIController):[m
+             frame_np = frame.permute(1, 2, 0).cpu().numpy()  # Assuming frame is a torch tensor[m
+             pil_img = PIL.Image.fromarray((frame_np * 255).astype(np.uint8))[m
+             pil_img.save(os.path.join(formatted_demo_frames_folder, f"formatted_frame_{i}.png"))[m
+[31m-        print(f"Formatted demo frames saved to {formatted_demo_frames_folder}.")[m
+[31m-            [m
+[32m+[m[32m        print(f"Formatted demo frames saved to {formatted_demo_frames_folder}.")[m[41m        [m
+     [m
+ [m
+     def reset(self):[m
+[36m@@ -251,6 +250,8 @@[m [mclass CODController(AIController):[m
+         # 1. Save current trajectory data if needed[m
+         # 2. Load the demo dataset for the current task[m
+         self.gripper_closed = False[m
+[32m+[m[32m        if hasattr(self.model, 'reset_detection_filter'):[m
+[32m+[m[32m            self.model.reset_detection_filter()[m
+         [m
+     [m
+     def pre_process(self, input_data):[m
+[36m@@ -307,15 +308,22 @@[m [mclass CODController(AIController):[m
+         desired_position = action[:3][m
+         desired_orientation = axisangle2quat(vec=action[3:6])[m
+         predicted_gripper = action[-1][m
+[32m+[m[32m        #if not self.gripper_closed:[m
+[32m+[m[32m        #action[0] += 0.02[m
+[32m+[m
+[32m+[m[32m        if self.gripper_closed:[m
+[32m+[m[32m            action[0] += 0.02[m
+[32m+[m[41m        [m
+[32m+[m
+         print(f"Predicted gripper value: {predicted_gripper}")[m
+[31m-        if predicted_gripper > 0.50:[m
+[32m+[m[32m        if predicted_gripper > 0.8:[m
+             gripper_finger_pos = 255[m
+             [m
+             if not self.gripper_closed:[m
+                 # if the gripper is not closed and the predicted action is closing move the gripper a little bit forward[m
+                 action[1] += 0.00  # Move the robot slightly forward to avoid collision when closing the gripper[m
+[31m-                input("Press Enter to continue after adjusting the action to avoid collision...")[m
+[31m-                print(f"Adjusted action to avoid collision when closing the gripper: {action}")[m
+[32m+[m[32m                #input("Press Enter to continue after adjusting the action to avoid collision...")[m
+[32m+[m[32m                #print(f"Adjusted action to avoid collision when closing the gripper: {action}")[m
+             self.gripper_closed = True[m
+             [m
+         else:[m
+[1mdiff --git a/ai_controller/ai_controller/models/cod_controller/mt_rep_double_policy.py b/ai_controller/ai_controller/models/cod_controller/mt_rep_double_policy.py[m
+[1mindex ecad416..ce26f96 100755[m
+[1m--- a/ai_controller/ai_controller/models/cod_controller/mt_rep_double_policy.py[m
+[1m+++ b/ai_controller/ai_controller/models/cod_controller/mt_rep_double_policy.py[m
+[36m@@ -755,6 +755,8 @@[m [mclass VideoImitation(nn.Module):[m
+ [m
+         self.demo_mean = demo_mean[m
+         self.first_phase = True[m
+[32m+[m[32m        self._previous_filtered_bb = None[m
+[32m+[m[32m        self._bb_filter_max_center_delta = 15.0[m
+ [m
+         model_parameters = filter(lambda p: p.requires_grad, self.parameters())[m
+         params = sum([np.prod(p.size()) for p in model_parameters])[m
+[36m@@ -763,6 +765,47 @@[m [mclass VideoImitation(nn.Module):[m
+         print("\n---- Complete model ----\n")[m
+         # summary(self)[m
+ [m
+[32m+[m[32m    def reset_detection_filter(self):[m
+[32m+[m[32m        self._previous_filtered_bb = None[m
+[32m+[m
+[32m+[m[32m    def _filter_predicted_bb(self, predicted_bb):[m
+[32m+[m[32m        if not self.first_phase:[m
+[32m+[m[32m            self._previous_filtered_bb = predicted_bb.detach().clone()[m
+[32m+[m[32m            return predicted_bb[m
+[32m+[m
+[32m+[m[32m        if self._previous_filtered_bb is None or self._previous_filtered_bb.shape != predicted_bb.shape:[m
+[32m+[m[32m            self._previous_filtered_bb = predicted_bb.detach().clone()[m
+[32m+[m[32m            return predicted_bb[m
+[32m+[m
+[32m+[m[32m        previous_bb = self._previous_filtered_bb.to(device=predicted_bb.device, dtype=predicted_bb.dtype)[m
+[32m+[m[32m        current_centers = (predicted_bb[..., :2] + predicted_bb[..., 2:]) / 2.0[m
+[32m+[m[32m        previous_centers = (previous_bb[..., :2] + previous_bb[..., 2:]) / 2.0[m
+[32m+[m[32m        center_delta = torch.norm(current_centers - previous_centers, dim=-1)[m
+[32m+[m[32m        reject_mask = center_delta > self._bb_filter_max_center_delta[m
+[32m+[m
+[32m+[m[32m        if not torch.any(reject_mask):[m
+[32m+[m[32m            self._previous_filtered_bb = predicted_bb.detach().clone()[m
+[32m+[m[32m            return predicted_bb[m
+[32m+[m
+[32m+[m[32m        filtered_bb = predicted_bb.clone()[m
+[32m+[m[32m        filtered_bb[reject_mask] = previous_bb[reject_mask][m
+[32m+[m[32m        for index in torch.nonzero(reject_mask.detach().cpu(), as_tuple=False):[m
+[32m+[m[32m            index_tuple = tuple(index.tolist())[m
+[32m+[m[32m            delta = center_delta[index_tuple].item()[m
+[32m+[m[32m            object_index = index_tuple[-1][m
+[32m+[m[32m            excess = delta - self._bb_filter_max_center_delta[m
+[32m+[m[32m            print([m
+[32m+[m[32m                "[CODController] Discarding bbox for object index {}: "[m
+[32m+[m[32m                "center delta {:.2f}px exceeds threshold {:.2f}px by {:.2f}px. "[m
+[32m+[m[32m                "Keeping previous bbox.".format([m
+[32m+[m[32m                    object_index,[m
+[32m+[m[32m                    delta,[m
+[32m+[m[32m                    self._bb_filter_max_center_delta,[m
+[32m+[m[32m                    excess))[m
+[32m+[m
+[32m+[m[32m        self._previous_filtered_bb = filtered_bb.detach().clone()[m
+[32m+[m[32m        return filtered_bb[m
+[32m+[m
+     def load_target_obj_detector(self, target_obj_detector_path=None, target_obj_detector_step=-1, gpu_id=0):[m
+         conf_file = OmegaConf.load(os.path.join([m
+             target_obj_detector_path, "config.yaml"))[m
+[36m@@ -1181,6 +1224,8 @@[m [mclass VideoImitation(nn.Module):[m
+             ), "The tensor contains NaN values"[m
+             assert (predicted_bb >= 0).all([m
+             ), "The tensor contains values less than zero"[m
+[32m+[m[32m            if eval:[m
+[32m+[m[32m                predicted_bb = self._filter_predicted_bb(predicted_bb)[m
+ [m
+         elif self._concat_bb and predict_gt_bb:[m
+             if self._bb_sequence == 1:[m

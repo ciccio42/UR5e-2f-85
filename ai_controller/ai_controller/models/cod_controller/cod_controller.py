@@ -308,11 +308,11 @@ class CODController(AIController):
         desired_position = action[:3]
         desired_orientation = axisangle2quat(vec=action[3:6])
         predicted_gripper = action[-1]
-        #if not self.gripper_closed:
-        #action[0] += 0.02
+        # if not self.gripper_closed:
+        #     action[0] += 0.02
 
-        if self.gripper_closed:
-            action[0] += 0.02
+        # if self.gripper_closed:
+        #     action[0] += 0.02
         
 
         print(f"Predicted gripper value: {predicted_gripper}")
@@ -436,9 +436,11 @@ class CODController(AIController):
 
                 # show the image with predicted bounding boxes using OpenCV
                 cv2.imshow(f"Predicted BB at step {t}", display_img[:, :, ::-1])  # Convert RGB to BGR for OpenCV
-                cv2.waitKey(1000)  # Display the image for 1 s
+                key = cv2.waitKey(1000)  # Display the image for 1 s
                 # close the OpenCV window
                 cv2.destroyAllWindows()
+                if key & 0xFF == 27:
+                    raise KeyboardInterrupt('Esc pressed')
                 
             return self.post_process([action, predicted_bb, target_obj_prediction])
         

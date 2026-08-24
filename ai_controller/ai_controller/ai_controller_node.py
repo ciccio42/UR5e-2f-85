@@ -211,12 +211,28 @@ class AIControllerNode(Node):
 
         self.traj_cnt = 0
         self.max_step = 90
+
         self.gripper_closed = False
         self.previous_gripper_position = 0.0
         self.initial_gripper_pose = None
+        self.abort_window_name = 'AI Controller Abort'
 
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
         self.control_loop()
+
+    def _show_abort_window(self):
+        image = np.zeros((60, 420, 3), dtype=np.uint8)
+        cv2.putText(image, 'Press ESC to stop and save', (12, 36),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.imshow(self.abort_window_name, image)
+
+    def _esc_pressed(self):
+        self._show_abort_window()
+        return cv2.waitKey(1) & 0xFF == 27
+
+    def _raise_if_esc_pressed(self):
+        if self._esc_pressed():
+            raise KeyboardInterrupt('Esc pressed')
 
     def synced_images_callback(self, *image_msgs):
         """Called once per cycle when all camera topics have a message within the sync window."""
@@ -233,11 +249,13 @@ class AIControllerNode(Node):
         self.synced_images_event.clear()
         start = self.get_clock().now()
         while not self.synced_images_event.is_set():
+            self._raise_if_esc_pressed()
             rclpy.spin_once(self, timeout_sec=0.1)
             elapsed = (self.get_clock().now() - start).nanoseconds / 1e9
             if elapsed > timeout_sec:
                 self.get_logger().error('Timed out waiting for synchronized camera images.')
                 return None
+        self._raise_if_esc_pressed()
         return self.latest_synced_images
 
     def _add_dataset_collector_scripts_to_path(self):
@@ -307,6 +325,7 @@ class AIControllerNode(Node):
         """
         start = self.get_clock().now()
         while self.latest_joint_state is None:
+            self._raise_if_esc_pressed()
             rclpy.spin_once(self, timeout_sec=0.1)
             if (self.get_clock().now() - start).nanoseconds / 1e9 > timeout_sec:
                 self.get_logger().warning('Timed out waiting for /joint_states message.')
@@ -408,7 +427,9 @@ class AIControllerNode(Node):
         pose_request.pose.pose.orientation.w = self.pose_before_first_inference[6]
         
         future = self.set_pose_client.call_async(pose_request)
+        self._raise_if_esc_pressed()
         rclpy.spin_until_future_complete(self, future)
+        self._raise_if_esc_pressed()
         response = future.result()
         if response is None:
             self.get_logger().error('set_pose_client service call failed.')
@@ -426,20 +447,66 @@ class AIControllerNode(Node):
         gripper_goal.command.position = 0.1  # Fully open position (adjust as needed)
         gripper_goal.command.max_effort = 50.0
         future = self.gripper_action_client.send_goal_async(gripper_goal)
+        self._raise_if_esc_pressed()
         rclpy.spin_until_future_complete(self, future)
+        self._raise_if_esc_pressed()
         if future.result() is not None:
             self.get_logger().info('Gripper opened successfully before first inference.')
         else:
             self.get_logger().error(f'Failed to open gripper before first inference: {future.exception()}')
             raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
     
-    def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None):
+    def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None,
+                     completed=True, abort_reason='', ask_results=None):
         """Save the current rollout Trajectory to a .pkl file, plus outcome metadata to a .json file."""
         complete_save_path = os.path.join(save_path, f'task_{task_id}')
         os.makedirs(complete_save_path,
                     exist_ok=True)
 
         traj_name = 'traj_{:03d}'.format(traj_number)
+        trajectory_path = None
+
+        if ask_results is None:
+            ask_results = completed
+        res_dict = {
+            'trajectory_complete': int(completed),
+            'aborted': int(not completed),
+            'abort_reason': abort_reason,
+        }
+        if ask_results:
+            # 1. Ask for object reached
+            object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
+            res_dict['object_reached'] = int(object_reached)
+
+            # 2. Ask for object picked
+            object_picked = input("Did the robot successfully pick the target object? [1,0]: ")
+            res_dict['object_picked'] = int(object_picked)
+
+            # 3. Ask for object placed
+            object_placed = input("Did the robot successfully place the target object? [1,0]: ")
+            res_dict['object_placed'] = int(object_placed)
+        else:
+            res_dict['object_reached'] = 0
+            res_dict['object_picked'] = 0
+            res_dict['object_placed'] = 0
+
+        res_dict['reached_wrong'] = 0
+        res_dict['picked_wrong'] = 0
+        res_dict['place_wrong_correct_bin'] = 0
+        res_dict['place_wrong_wrong_bin'] = 0
+
+        if ask_results and res_dict['object_reached'] != 1:
+            reached_wrong = input("Did the robot reach the wrong object? [1,0]: ")
+            res_dict['reached_wrong'] = int(reached_wrong)
+
+            picked_wrong = input("Did the robot pick the wrong object? [1,0]: ")
+            res_dict['picked_wrong'] = int(picked_wrong)
+
+            place_wrong_correct_bin = input("Did the robot place the wrong object in correct bin? [1,0]: ")
+            res_dict['place_wrong_correct_bin'] = int(place_wrong_correct_bin)
+
+            place_wrong_wrong_bin = input("Did the robot place the wrong object in wrong bin? [1,0]: ")
+            res_dict['place_wrong_wrong_bin'] = int(place_wrong_wrong_bin)
 
         if traj is not None:
             trajectory_path = os.path.join(complete_save_path, traj_name + '.pkl')
@@ -449,42 +516,52 @@ class AIControllerNode(Node):
                 traj_number=traj_number,
                 ai_controller_target=self.ai_controller_target,
                 task_name=self.task_name,
+                completed=completed,
+                aborted=not completed,
+                abort_reason=abort_reason,
             )
-            self.get_logger().info(f'Saved rollout trajectory to {trajectory_path}')
+            status = 'complete' if completed else 'incomplete'
+            self.get_logger().info(f'Saved rollout trajectory to {trajectory_path} ({status})')
 
-        res_dict = dict()
-        # 1. Ask for object reached
-        object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
-        res_dict['object_reached'] = int(object_reached)
-        
-        # 2. Ask for object picked
-        object_picked = input("Did the robot successfully pick the target object? [1,0]: ")
-        res_dict['object_picked'] = int(object_picked)
-        
-        # 3. Ask for object placed
-        object_placed = input("Did the robot successfully place the target object? [1,0]: ")
-        res_dict['object_placed'] = int(object_placed)
-        
-        res_dict['reached_wrong'] = 0
-        res_dict['picked_wrong'] = 0
-        res_dict['place_wrong_correct_bin'] = 0
-        res_dict['place_wrong_wrong_bin'] = 0
-        if res_dict['object_reached'] != 1:
-            reached_wrong = input("Did the robot reach the wrong object? [1,0]: ")
-            res_dict['reached_wrong'] = int(reached_wrong)
-            
-            picked_wrong = input("Did the robot pick the wrong object? [1,0]: ")
-            res_dict['picked_wrong'] = int(picked_wrong)
-            
-            place_wrong_correct_bin = input("Did the robot place the wrong object in correct bin? [1,0]: ")
-            res_dict['place_wrong_correct_bin'] = int(place_wrong_correct_bin)
-            
-            place_wrong_wrong_bin = input("Did the robot place the wrong object in wrong bin? [1,0]: ")
-            res_dict['place_wrong_wrong_bin'] = int(place_wrong_wrong_bin)
-            
         
         with open(os.path.join(complete_save_path, traj_name + '.json'), 'w') as f:
             json.dump(res_dict, f)
+
+        return trajectory_path
+
+    def check_robot_pose_reached(self, pose_request, timeout_sec=5.0):
+        # get current pose with TF listener
+        cnt = 100
+        target_position = np.array([pose_request.pose.pose.position.x,
+                                    pose_request.pose.pose.position.y,
+                                    pose_request.pose.pose.position.z]) 
+        while cnt > 0:
+            try:
+                # perform rclpy.spin_once() to allow TF listener to update
+                rclpy.spin_once(self, timeout_sec=0.1)
+                trans = self.tf_buffer.lookup_transform(self.frame_id, self.eef_frame_name, rclpy.time.Time())
+            except Exception as exc:
+                self.get_logger().warning(
+                    f'Could not look up EEF pose via TF ({self.frame_id} -> {self.eef_frame_name}): {exc}')
+                cnt -= 1
+                continue
+            
+            current_position = np.array([trans.transform.translation.x,
+                                        trans.transform.translation.y,
+                                        trans.transform.translation.z])
+            
+            position_error = np.linalg.norm(current_position - target_position)
+            delta = current_position - target_position
+            
+            if position_error < 0.01:
+                self.get_logger().info(f'Robot reached the desired pose with position error: {position_error:.4f}')
+                return True
+            else:
+                self.get_logger().warning(f'Robot has not reached the desired pose yet. Position error: {position_error:.4f}, Delta: {delta}')
+                return False
+            
+                
+        
 
     def control_loop(self):
         """Main control loop for the AI controller."""
@@ -500,212 +577,234 @@ class AIControllerNode(Node):
         self.traj_cnt = traj_cnt
         
         while rclpy.ok():
-        
+
             input("Press Enter to start the control loop. Make sure the robot is in a safe position.")
-            
+
             enter_task_id = input("Enter task ID (e.g., 1, 2, 3): ")
             self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
-            
+
             # create a new trajectory
             traj = Trajectory()
-            
-            for step in range(self.max_step):
-                
-                if step == 0:
-                    # resetting controller state for the new task
-                    self.controller.reset()
-                    self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
-                    # call service to set robot to home position
-                    # wait for the service to complete
-                    future = self.set_home_client.call_async(GoHome.Request())
-                    rclpy.spin_until_future_complete(self, future)
-                    response = future.result()
-                    if response is None:
-                        self.get_logger().error('set_home_client service call failed.')
-                        raise RuntimeError('set_home_client service call failed.')
 
-                    if response.success:
-                        self.get_logger().info(response.message)
-                        
-                    else:
-                        self.get_logger().error(response.message)
-                        raise RuntimeError(f'Failed to set robot to home position: {response.message}')      
-                    
-                    self.move_to_initial_pose()
+            try:
+                for step in range(self.max_step):
 
-                    # capture the settled gripper pose (via TF) right after the robot
-                    # reaches its initial pose, as the episode's reference starting pose
-                    initial_robot_state = self._capture_robot_state()
-                    self.initial_gripper_pose = np.concatenate([
-                        initial_robot_state.get(EEF_POS_NAME, np.zeros(3)),
-                        initial_robot_state.get(EEF_QUAT_NAME, np.array([0.0, 0.0, 0.0, 1.0])),
-                    ])
-                    # fix the model-predicted orientation to the measured initial
-                    # gripper orientation (see TinyVLAController.post_process)
-                    if hasattr(self.controller, 'set_starting_orientation'):
-                        self.controller.set_starting_orientation(self.initial_gripper_pose[3:7])
-
-                    # load the demo data for the given task_id
-                    self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
-                    self.controller.load_command(self.demo_path, 
-                                                 enter_task_id,
-                                                 save_demo_frames=True,
-                                                 traj_cnt=self.traj_cnt,
-                                                 save_path=self.save_rollout_path)
-                
-            
-                # 1. Get sensor data (e.g., camera images)
-                images = self.get_synced_images()
-                if images is None:
-                    self.get_logger().error('Skipping step: failed to get synchronized camera images.')
-                    continue
-                # images is a list of cv2/numpy arrays in the same order as self.camera_topic
-                # save the images with PIL format for debugging
-                for i, image in enumerate(images):
-                    img = Image.fromarray(image)
-                    img.save(f'{save_path}/camera_image_{i}.png')
-
-                # capture the robot state (eef pose, joint pos/vel, gripper qpos/qvel) paired
-                # with the observation image used for this step's inference
-                robot_state = self._capture_robot_state()
-
-                # 2. Get joint-states or other relevant robot states (if needed for inference).
-                # Each controller expects a different state format (or none at all), so branch
-                # on the loaded model: CODController.pre_process() raises NotImplementedError
-                # if states is not None, while OpenVLAController needs the 8-dim proprio vector.
-                if self.ai_controller_target == 'openvla_controller':
-                    states = self._build_openvla_state(robot_state)
-                elif self.ai_controller_target == 'tinyvla_controller':
-                    states = self._build_tinyvla_state(robot_state)
-                else:
-                    states = None
-
-                # 3. Perform inference using the AI controller
-                step_save_path = f'{save_path}/step_{step}'
-                out = self.controller.inference(
-                                                input_data=[images, states],
-                                                t=step,
-                                                save_path=step_save_path)
-                
-                predicted_bb = None
-                target_obj_prediction = None
-                if self.ai_controller_target == 'cod_controller':
-                    pred_action, predicted_bb, target_obj_prediction = out
-                    actions = [pred_action]
-                elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
-                    actions = out
-                    # OpenVLAController/TinyVLAController both return a list of
-                    # actions wrt base_link frame [x, y, z, roll, pitch, yaw, gripper_position]
-                    # convert orientation from roll/pitch/yaw to quaternion
-                    for i in range(len(actions)):
-                        new_action = np.zeros(8)
-                        new_action[:3] = actions[i][:3] # position remains the same
-                        roll, pitch, yaw = actions[i][3:6]
-                        quat = _euler2quat(roll, pitch, yaw)
-                        new_action[3:7] = quat
-                        new_action[7] = actions[i][6] # gripper position remains the same
-                        actions[i] = new_action
-
-                for indx, action in enumerate(actions):
-                    self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
-                    if self.move_robot:
-                        # 5. Send commands to the robot (e.g., set pose, control gripper)
-                        # call service to set robot to the desired pose
-                        self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
-                        # input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
-                        pose_request = GoToPose.Request()
-                        pose_request.pose.header.stamp = self.get_clock().now().to_msg()
-                        pose_request.pose.header.frame_id = self.frame_id
-                        pose_request.pose.pose.position.x = action[0]
-                        pose_request.pose.pose.position.y = action[1]
-                        pose_request.pose.pose.position.z = action[2]
-                        pose_request.pose.pose.orientation.x = action[3]
-                        pose_request.pose.pose.orientation.y = action[4]
-                        pose_request.pose.pose.orientation.z = action[5]
-                        pose_request.pose.pose.orientation.w = action[6]
-                        future = self.set_pose_client.call_async(pose_request)
+                    if step == 0:
+                        # resetting controller state for the new task
+                        self.controller.reset()
+                        self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
+                        # call service to set robot to home position
+                        # wait for the service to complete
+                        future = self.set_home_client.call_async(GoHome.Request())
+                        self._raise_if_esc_pressed()
                         rclpy.spin_until_future_complete(self, future)
-                        if future.result() is not None:
-                            self.get_logger().info(f'Robot set to desired pose at step {step}')
+                        self._raise_if_esc_pressed()
+                        response = future.result()
+                        if response is None:
+                            self.get_logger().error('set_home_client service call failed.')
+                            raise RuntimeError('set_home_client service call failed.')
+
+                        if response.success:
+                            self.get_logger().info(response.message)
+
                         else:
-                            self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                            raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
-                        
-                        # 6. Control the gripper based on the predicted action
-                        self.get_logger().info(f'Controlling gripper at step {step}')   
-                        gripper_goal = GripperCommand.Goal()
-                        gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
-                        # check the z-position of the action to determine if the gripper should be closed or opened                       
-                        
-                        # if self.gripper_closed:
-                        #     self.get_logger().info(f'Keeping gripper closed at step {step}')
-                        #     gripper_goal.command.position = 255.0  # Keep the gripper closed
-                        gripper_goal.command.max_effort = 50.0
-                        future = self.gripper_action_client.send_goal_async(gripper_goal)
-                        rclpy.spin_until_future_complete(self, future)
-                        goal_handle = future.result()
-                        if goal_handle is None or not goal_handle.accepted:
-                            self.get_logger().error(f'Gripper goal rejected: {future.exception()}')
-                            raise RuntimeError(f'Gripper goal rejected: {future.exception()}')
+                            self.get_logger().error(response.message)
+                            raise RuntimeError(f'Failed to set robot to home position: {response.message}')
 
-                        # wait for the gripper to actually finish moving before continuing -
-                        # goal acceptance above only means the server started executing it,
-                        # and re-sending a goal on the next step preempts an in-progress one
-                        result_future = goal_handle.get_result_async()
-                        rclpy.spin_until_future_complete(self, result_future)
-                        result = result_future.result()
-                        if result is None:
-                            self.get_logger().error(f'Failed to get gripper command result: {result_future.exception()}')
-                            raise RuntimeError(f'Failed to get gripper command result: {result_future.exception()}')
+                        self.move_to_initial_pose()
 
-                        self.get_logger().info(
-                            f'Gripper command position: {gripper_goal.command.position} '
-                            f'(reached_goal={result.result.reached_goal}, stalled={result.result.stalled})')
-                        if not self.gripper_closed and gripper_goal.command.position == 255.0:
-                            self.get_logger().info(f'Gripper is closing at step {step}')
-                            self.gripper_closed = True
+                        # load the demo data for the given task_id
+                        self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
+                        self.controller.load_command(self.demo_path,
+                                                     enter_task_id,
+                                                     save_demo_frames=True,
+                                                     traj_cnt=self.traj_cnt,
+                                                     save_path=self.save_rollout_path)
 
-                # check if a transiction close->open has been made
-                episode_done = False
-                if self.gripper_closed and gripper_goal.command.position == 0.0:
-                    self.get_logger().info(f'Gripper is opening at step {step}')
-                    self.gripper_closed = False
-                    episode_done = True
+                    # 1. Get sensor data (e.g., camera images)
+                    images = self.get_synced_images()
+                    if images is None:
+                        self.get_logger().error('Skipping step: failed to get synchronized camera images.')
+                        continue
+                    # images is a list of cv2/numpy arrays in the same order as self.camera_topic
+                    # save the images with PIL format for debugging
+                    for i, image in enumerate(images):
+                        img = Image.fromarray(image)
+                        img.save(f'{save_path}/camera_image_{i}.png')
 
-                # 7. Record this step (observation image, cropped model input, predicted
-                # bounding boxes, computed action and robot state) into the rollout Trajectory
-                step_obs = dict(robot_state)
-                step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+                    # capture the robot state (eef pose, joint pos/vel, gripper qpos/qvel) paired
+                    # with the observation image used for this step's inference
+                    robot_state = self._capture_robot_state()
 
-                cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
-                if os.path.isfile(cropped_image_path):
-                    step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                    # 2. Get joint-states or other relevant robot states (if needed for inference).
+                    # Each controller expects a different state format (or none at all), so branch
+                    # on the loaded model: CODController.pre_process() raises NotImplementedError
+                    # if states is not None, while OpenVLAController needs the 8-dim proprio vector.
+                    if self.ai_controller_target == 'openvla_controller':
+                        states = self._build_openvla_state(robot_state)
+                    elif self.ai_controller_target == 'tinyvla_controller':
+                        states = self._build_tinyvla_state(robot_state)
+                    else:
+                        states = None
+
+                    # 3. Perform inference using the AI controller
+                    step_save_path = f'{save_path}/step_{step}'
+                    out = self.controller.inference(
+                                                    input_data=[images, states],
+                                                    t=step,
+                                                    save_path=step_save_path)
+
+                    predicted_bb = None
+                    target_obj_prediction = None
+                    if self.ai_controller_target == 'cod_controller':
+                        pred_action, predicted_bb, target_obj_prediction = out
+                        actions = [pred_action]
+                    elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
+                        actions = out
+                        # OpenVLAController/TinyVLAController both return a list of
+                        # actions wrt base_link frame [x, y, z, roll, pitch, yaw, gripper_position]
+                        # convert orientation from roll/pitch/yaw to quaternion
+                        for i in range(len(actions)):
+                            new_action = np.zeros(8)
+                            new_action[:3] = actions[i][:3] # position remains the same
+                            roll, pitch, yaw = actions[i][3:6]
+                            quat = _euler2quat(roll, pitch, yaw)
+                            new_action[3:7] = quat
+                            new_action[7] = actions[i][6] # gripper position remains the same
+                            actions[i] = new_action
+
+                    for indx, action in enumerate(actions):
+                        self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
+                        if self.move_robot:
+                            self._raise_if_esc_pressed()
+                            # 5. Send commands to the robot (e.g., set pose, control gripper)
+                            # call service to set robot to the desired pose
+                            self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
+                            # input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
+                            pose_request = GoToPose.Request()
+                            pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+                            pose_request.pose.header.frame_id = self.frame_id
+                            pose_request.pose.pose.position.x = action[0]
+                            pose_request.pose.pose.position.y = action[1]
+                            pose_request.pose.pose.position.z = action[2]
+                            pose_request.pose.pose.orientation.x = action[3]
+                            pose_request.pose.pose.orientation.y = action[4]
+                            pose_request.pose.pose.orientation.z = action[5]
+                            pose_request.pose.pose.orientation.w = action[6]
+                            future = self.set_pose_client.call_async(pose_request)
+                            self._raise_if_esc_pressed()
+                            rclpy.spin_until_future_complete(self, future)
+                            self._raise_if_esc_pressed()
+                            if future.result() is not None:
+                                self.get_logger().info(f'Robot set to desired pose at step {step}')
+                            else:
+                                self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                                raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+
+                            # 6. Control the gripper based on the predicted action
+                            self.get_logger().info(f'Controlling gripper at step {step}')
+                            gripper_goal = GripperCommand.Goal()
+                            gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                            # check the z-position of the action to determine if the gripper should be closed or opened
+
+                            # if self.gripper_closed:
+                            #     self.get_logger().info(f'Keeping gripper closed at step {step}')
+                            #     gripper_goal.command.position = 255.0  # Keep the gripper closed
+                            gripper_goal.command.max_effort = 50.0
+                            future = self.gripper_action_client.send_goal_async(gripper_goal)
+                            self._raise_if_esc_pressed()
+                            rclpy.spin_until_future_complete(self, future)
+                            self._raise_if_esc_pressed()
+                            if future.result() is not None:
+                                self.get_logger().info(f'Gripper command sent at step {step}')
+                            else:
+                                self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
+                                raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
+
+                            self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
+                            if not self.gripper_closed and gripper_goal.command.position == 255.0:
+                                self.get_logger().info(f'Gripper is closing at step {step}')
+                                self.gripper_closed = True
+
+                    # check if a transiction close->open has been made
+                    episode_done = False
+                    if self.gripper_closed and gripper_goal.command.position == 0.0:
+                        self.get_logger().info(f'Gripper is opening at step {step}')
+                        self.gripper_closed = False
+                        episode_done = True
+
+                    # 7. Record this step (observation image, cropped model input, predicted
+                    # bounding boxes, computed action and robot state) into the rollout Trajectory
+                    step_obs = dict(robot_state)
+                    step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+
+                    cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
+                    if os.path.isfile(cropped_image_path):
+                        step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                    else:
+                        self.get_logger().warning(
+                            f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+
+                    if predicted_bb is not None:
+                        step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
+
+                    traj.append(
+                        obs=step_obs,
+                        action=action,
+                        done=episode_done,
+                        reward=1 if episode_done else 0,
+                    )
+
+                    if episode_done:
+                        break  # exit the loop if the gripper has opened after being closed
+
+                self.save_rollout(
+                                  traj=traj,
+                                  save_path=self.save_rollout_path,
+                                  task_id=enter_task_id,
+                                  traj_number=self.traj_cnt
+                                  )
+                self.traj_cnt += 1
+            except KeyboardInterrupt as exc:
+                abort_reason = str(exc) or 'KeyboardInterrupt'
+                self.get_logger().warning(
+                    'Execution interrupted by user. Saving incomplete rollout before shutdown...')
+                self.save_rollout(
+                                  traj=traj,
+                                  save_path=self.save_rollout_path,
+                                  task_id=enter_task_id,
+                                  traj_number=self.traj_cnt,
+                                  completed=False,
+                                  abort_reason=abort_reason,
+                                  ask_results=True
+                                  )
+                # OPEN GRIPPER
+                gripper_goal = GripperCommand.Goal()
+                gripper_goal.command.position = 0.0  # Fully open position (adjust as needed)
+                gripper_goal.command.max_effort = 50.0
+                future = self.gripper_action_client.send_goal_async(gripper_goal)
+                rclpy.spin_until_future_complete(self, future)
+                if future.result() is not None:
+                    self.get_logger().info('Gripper opened successfully after KeyboardInterrupt.')
                 else:
-                    self.get_logger().warning(
-                        f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
-
-                if predicted_bb is not None:
-                    step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
-
-                traj.append(
-                    obs=step_obs,
-                    action=action,
-                    done=episode_done,
-                    reward=1 if episode_done else 0,
-                )
-
-                if episode_done:
-                    break  # exit the loop if the gripper has opened after being closed
-
-            self.save_rollout(
-                              traj=traj,
-                              save_path=self.save_rollout_path,
-                              task_id=enter_task_id,
-                              traj_number=self.traj_cnt
-                              )
-            self.traj_cnt += 1
+                    self.get_logger().error(f'Failed to open gripper after KeyboardInterrupt: {future.exception()}')
+                raise
+            except Exception as exc:
+                abort_reason = f'{type(exc).__name__}: {exc}'
+                self.get_logger().error(
+                    f'AI controller execution failed. Saving incomplete rollout: {abort_reason}')
+                self.save_rollout(
+                                  traj=traj,
+                                  save_path=self.save_rollout_path,
+                                  task_id=enter_task_id,
+                                  traj_number=self.traj_cnt,
+                                  completed=False,
+                                  abort_reason=abort_reason,
+                                  ask_results=True
+                                  )
+                self.traj_cnt += 1
                     
         
 

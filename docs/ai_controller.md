@@ -130,7 +130,7 @@ ros2 run ai_controller ai_controller_node --ros-args \
 export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA
 export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA/llava-pythia
 ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=False  \
+    -p move_robot:=True  \
     -p ai_controller_target:="tinyvla_controller" \
     -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml"
 
