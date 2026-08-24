@@ -6,6 +6,14 @@ from pathlib import Path
 from typing import Literal
 
 import torch
+import transformer_engine.pytorch.attention as te_attention
+
+# Transformer Engine 2.3+ moved RoPE helpers into the ``attention.rope``
+# module, while the official Mimic Video sources import the legacy namespace.
+if not hasattr(te_attention, "apply_rotary_pos_emb"):
+    from transformer_engine.pytorch.attention.rope import apply_rotary_pos_emb
+
+    setattr(te_attention, "apply_rotary_pos_emb", apply_rotary_pos_emb)
 
 from cosmos_predict2.configs.config import make_config
 from cosmos_predict2.data.action.utils import extract_normalization_types
