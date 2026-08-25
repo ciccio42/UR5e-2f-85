@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import safetensors.torch as st
@@ -37,6 +39,29 @@ DEFAULT_CHECKPOINT_DIR = WORKSPACE_DIR / "checkpoints"
 
 ALL_COLORS = ("green", "yellow", "blue", "red")
 ALL_BINS = (1, 2, 3, 4)
+
+COLOR_BIN_PATTERN = re.compile(
+    r"^(green|yellow|blue|red)_bin([1-4])(?:_.+)?$"
+)
+COLOR_SPATIAL_PATTERN = re.compile(
+    r"^(green|yellow|blue|red)_(leftmost|middleleft|middleright|rightmost)$"
+)
+LEFTMOST_ITEM_PATTERN = re.compile(r"^leftmost_item_bin([1-4])$")
+SPATIAL_BIN_INDEX = {
+    "leftmost": 1,
+    "middleleft": 2,
+    "middleright": 3,
+    "rightmost": 4,
+}
+
+
+@dataclass(frozen=True)
+class TestCase:
+    output_stem: str
+    input_color: str
+    target_bin: int
+    input_video: Path
+    embedding_path: Path
 
 
 def add_mimic_video_to_path(checkpoint_dir: Path) -> None:
@@ -65,25 +90,85 @@ def build_test_cases(
     test_dir: Path,
     colors: list[str],
     bins: list[int],
-) -> list[tuple[str, int, Path, Path]]:
-    cases: list[tuple[str, int, Path, Path]] = []
+) -> list[TestCase]:
+    cases: list[TestCase] = []
 
     initial_dir = test_dir / "initial_frames"
     embedding_dir = test_dir / "language_embeddings"
+    selected_colors = set(colors)
+    selected_bins = set(bins)
 
     for color in colors:
         input_video = initial_dir / f"{color}.mp4"
         if not input_video.exists():
             raise FileNotFoundError(f"Missing initial video: {input_video}")
 
-        for bin_idx in bins:
-            embedding_path = embedding_dir / f"{color}_bin{bin_idx}.safetensors"
-            if not embedding_path.exists():
-                raise FileNotFoundError(
-                    f"Missing language embedding: {embedding_path}"
-                )
+    embedding_paths = sorted(embedding_dir.glob("*.safetensors"), key=str)
+    if not embedding_paths:
+        raise FileNotFoundError(f"No language embeddings found in: {embedding_dir}")
 
-            cases.append((color, bin_idx, input_video, embedding_path))
+    unrecognized_embeddings: list[Path] = []
+    for embedding_path in embedding_paths:
+        stem = embedding_path.stem
+
+        color_bin_match = COLOR_BIN_PATTERN.fullmatch(stem)
+        if color_bin_match:
+            color = color_bin_match.group(1)
+            bin_idx = int(color_bin_match.group(2))
+            if color in selected_colors and bin_idx in selected_bins:
+                cases.append(
+                    TestCase(
+                        output_stem=stem,
+                        input_color=color,
+                        target_bin=bin_idx,
+                        input_video=initial_dir / f"{color}.mp4",
+                        embedding_path=embedding_path,
+                    )
+                )
+            continue
+
+        color_spatial_match = COLOR_SPATIAL_PATTERN.fullmatch(stem)
+        if color_spatial_match:
+            color = color_spatial_match.group(1)
+            bin_idx = SPATIAL_BIN_INDEX[color_spatial_match.group(2)]
+            if color in selected_colors and bin_idx in selected_bins:
+                cases.append(
+                    TestCase(
+                        output_stem=stem,
+                        input_color=color,
+                        target_bin=bin_idx,
+                        input_video=initial_dir / f"{color}.mp4",
+                        embedding_path=embedding_path,
+                    )
+                )
+            continue
+
+        leftmost_item_match = LEFTMOST_ITEM_PATTERN.fullmatch(stem)
+        if leftmost_item_match:
+            bin_idx = int(leftmost_item_match.group(1))
+            if bin_idx in selected_bins:
+                # Il prompt non specifica il colore: viene provato con tutte le
+                # scene iniziali selezionate, generando nomi di output distinti.
+                for color in colors:
+                    cases.append(
+                        TestCase(
+                            output_stem=f"{stem}_initial_{color}",
+                            input_color=color,
+                            target_bin=bin_idx,
+                            input_video=initial_dir / f"{color}.mp4",
+                            embedding_path=embedding_path,
+                        )
+                    )
+            continue
+
+        unrecognized_embeddings.append(embedding_path)
+
+    if unrecognized_embeddings:
+        unknown = "\n".join(f"  - {path.name}" for path in unrecognized_embeddings)
+        raise ValueError(
+            "Language embeddings with an unsupported naming convention:\n"
+            f"{unknown}"
+        )
 
     return cases
 
@@ -168,10 +253,16 @@ def parse_args() -> argparse.Namespace:
         "--use-cuda-graphs",
         action="store_true",
     )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Regenerate output videos that already exist.",
+    )
 
     return parser.parse_args()
 
 
+@torch.inference_mode()
 def main() -> None:
     args = parse_args()
 
@@ -229,42 +320,49 @@ def main() -> None:
             device="cuda",
             torch_dtype=torch.bfloat16,
         )
+        pipe.dit.eval()
+        pipe.dit.requires_grad_(False)
 
         num_latent_conditional_frames = pipe.tokenizer.get_latent_num_frames(
             args.num_conditional_frames
         )
         num_video_frames = pipe.tokenizer.get_pixel_num_frames(pipe.config.state_t)
 
-        for color, bin_idx, input_video, embedding_path in cases:
-            output_video = run_output_dir / f"{color}_bin{bin_idx}.mp4"
+        for case in cases:
+            output_video = run_output_dir / f"{case.output_stem}.mp4"
 
-            print(f"\n[Checkpoint: {run_name}] {color} -> bin{bin_idx}")
-            print(f"  input_video: {input_video}")
-            print(f"  embedding:   {embedding_path}")
+            if output_video.exists() and not args.overwrite:
+                print(f"\n[Checkpoint: {run_name}] skip existing: {output_video}")
+                continue
+
+            print(
+                f"\n[Checkpoint: {run_name}] "
+                f"{case.input_color} -> bin{case.target_bin} [{case.embedding_path.stem}]"
+            )
+            print(f"  input_video: {case.input_video}")
+            print(f"  embedding:   {case.embedding_path}")
             print(f"  output:      {output_video}")
 
-            prompt_embedding = read_language_embedding(embedding_path)
+            prompt_embedding = read_language_embedding(case.embedding_path)
 
             vid_input = read_and_process_video(
-                str(input_video),
+                str(case.input_video),
                 [480, 640],
                 num_video_frames,
                 num_latent_conditional_frames,
                 resize=True,
             )
 
-            # Nessun grafo autograd durante l'inferenza.
-            with torch.inference_mode():
-                video = pipe.generate_video(
-                    vid_input=vid_input,
-                    is_video_embedding=False,
-                    num_latent_conditional_frames=num_latent_conditional_frames,
-                    prompt_embedding=prompt_embedding,
-                    guidance=args.guidance,
-                    num_sampling_step=args.num_sampling_step,
-                    seed=args.seed,
-                    use_cuda_graphs=args.use_cuda_graphs,
-                )
+            video = pipe.generate_video(
+                vid_input=vid_input,
+                is_video_embedding=False,
+                num_latent_conditional_frames=num_latent_conditional_frames,
+                prompt_embedding=prompt_embedding,
+                guidance=args.guidance,
+                num_sampling_step=args.num_sampling_step,
+                seed=args.seed,
+                use_cuda_graphs=args.use_cuda_graphs,
+            )
 
             save_image_or_video(video, str(output_video), fps=args.fps)
             print(f"  saved: {output_video}")
