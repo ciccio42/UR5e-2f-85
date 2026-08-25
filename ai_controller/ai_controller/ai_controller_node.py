@@ -5,6 +5,7 @@ import pickle
 import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import message_filters
@@ -101,6 +102,15 @@ class AIControllerNode(Node):
             '/zed_front/zed_node/depth/depth_registered',
         )
         self.declare_parameter(
+            'seedo_record_depth_topics',
+            [
+                '/zed_front/zed_node/depth/depth_registered',
+                '/zed_left/zed_node/depth/depth_registered',
+                '/zed_right/zed_node/depth/depth_registered',
+                '/zed_gripper/zed_node/depth/depth_registered',
+            ],
+        )
+        self.declare_parameter(
             'seedo_camera_info_topic',
             '/zed_front/zed_node/rgb/color/rect/camera_info',
         )
@@ -148,6 +158,14 @@ class AIControllerNode(Node):
             'seedo_depth_topic'
         ).get_parameter_value().string_value
 
+        self.seedo_record_depth_topics = (
+            self.get_parameter(
+                'seedo_record_depth_topics'
+            )
+            .get_parameter_value()
+            .string_array_value
+        )
+
         self.seedo_camera_info_topic = self.get_parameter(
             'seedo_camera_info_topic'
         ).get_parameter_value().string_value
@@ -168,12 +186,26 @@ class AIControllerNode(Node):
             'seedo_precomputed_action_plan_path'
         ).get_parameter_value().string_value
 
+        self.seedo_record_camera_names = (
+            'camera_front',
+            'camera_lateral_left',
+            'camera_lateral_right',
+            'eye_in_hand',
+        )
+
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
         self.joint_state_event = threading.Event()
 
         self.pause_executor = threading.Event()
+
+        # Runtime context used to persist failure information
+        # even when the rollout terminates with an exception.
+        self.current_task_id = None
+        self.current_failure_stage = None
+        self.current_failure_step = None
+        self.current_failure_action_index = None
 
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
@@ -349,6 +381,14 @@ class AIControllerNode(Node):
 
             self.seedo_rgbd_event = threading.Event()
 
+            # Latest RGB/depth messages used only for rollout recording.
+            # The callbacks store ROS messages without converting them to numpy,
+            # keeping the runtime overhead minimal.
+            self.seedo_record_rgb_msgs = {}
+            self.seedo_record_depth_msgs = {}
+
+            self.seedo_record_lock = threading.Lock()
+
             if self.ai_controller_target != 'seedo_controller':
                 self.camera_subs = [
                     message_filters.Subscriber(
@@ -409,6 +449,50 @@ class AIControllerNode(Node):
                     self._seedo_camera_info_callback,
                     qos_profile_sensor_data,
                 )
+
+                # Additional cameras used only for rollout recording.
+                # Front RGB-D is already handled by _seedo_rgbd_callback,
+                # therefore only cameras 1..3 are subscribed here.
+
+                self.seedo_record_rgb_subs = []
+                self.seedo_record_depth_subs = []
+
+                for index in range(1, len(self.seedo_record_camera_names)):
+
+                    camera_name = self.seedo_record_camera_names[index]
+
+                    rgb_topic = self.camera_topic[index]
+                    depth_topic = self.seedo_record_depth_topics[index]
+
+                    rgb_sub = self.create_subscription(
+                        RosImage,
+                        rgb_topic,
+                        lambda msg, name=camera_name:
+                            self._seedo_record_rgb_callback(
+                                msg,
+                                name,
+                            ),
+                        qos_profile_sensor_data,
+                    )
+
+                    depth_sub = self.create_subscription(
+                        RosImage,
+                        depth_topic,
+                        lambda msg, name=camera_name:
+                            self._seedo_record_depth_callback(
+                                msg,
+                                name,
+                            ),
+                        qos_profile_sensor_data,
+                    )
+
+                    self.seedo_record_rgb_subs.append(
+                        rgb_sub
+                    )
+
+                    self.seedo_record_depth_subs.append(
+                        depth_sub
+                    )
 
         self.traj_cnt = 0
         self.max_step = 90
@@ -517,8 +601,377 @@ class AIControllerNode(Node):
     ):
         self.seedo_rgb_msg = rgb_msg
         self.seedo_depth_msg = depth_msg
+
+        with self.seedo_record_lock:
+            self.seedo_record_rgb_msgs[
+                'camera_front'
+            ] = rgb_msg
+
+            self.seedo_record_depth_msgs[
+                'camera_front'
+            ] = depth_msg
+
         self.seedo_rgbd_event.set()
 
+    def _seedo_record_rgb_callback(
+        self,
+        msg: RosImage,
+        camera_name: str,
+    ):
+        with self.seedo_record_lock:
+            self.seedo_record_rgb_msgs[
+                camera_name
+            ] = msg
+
+
+    def _seedo_record_depth_callback(
+        self,
+        msg: RosImage,
+        camera_name: str,
+    ):
+        with self.seedo_record_lock:
+            self.seedo_record_depth_msgs[
+                camera_name
+            ] = msg
+
+    def _get_seedo_record_camera_data(
+        self,
+        timeout_sec=5.0,
+    ):
+        """
+        Return the latest RGB + depth frame from all four cameras
+        using the same observation keys as the reference dataset.
+        """
+
+        deadline = time.monotonic() + timeout_sec
+
+        expected_names = self.seedo_record_camera_names
+
+        # Wait until at least one RGB and depth frame has been received
+        # from every camera.
+        while time.monotonic() < deadline:
+
+            with self.seedo_record_lock:
+                rgb_ready = all(
+                    name in self.seedo_record_rgb_msgs
+                    for name in expected_names
+                )
+
+                depth_ready = all(
+                    name in self.seedo_record_depth_msgs
+                    for name in expected_names
+                )
+
+            if rgb_ready and depth_ready:
+                break
+
+            time.sleep(0.01)
+
+        with self.seedo_record_lock:
+            missing_rgb = [
+                name
+                for name in expected_names
+                if name not in self.seedo_record_rgb_msgs
+            ]
+
+            missing_depth = [
+                name
+                for name in expected_names
+                if name not in self.seedo_record_depth_msgs
+            ]
+
+            if missing_rgb or missing_depth:
+                raise RuntimeError(
+                    "Missing rollout camera data. "
+                    f"RGB missing: {missing_rgb}; "
+                    f"Depth missing: {missing_depth}"
+                )
+
+            # Keep local references so the callbacks can continue updating
+            # the dictionaries while conversion is performed.
+            rgb_msgs = {
+                name: self.seedo_record_rgb_msgs[name]
+                for name in expected_names
+            }
+
+            depth_msgs = {
+                name: self.seedo_record_depth_msgs[name]
+                for name in expected_names
+            }
+
+        camera_data = {}
+
+        dataset_keys = {
+            "camera_front": (
+                "camera_front_image",
+                "camera_front_depth",
+            ),
+            "camera_lateral_left": (
+                "camera_lateral_left_image",
+                "camera_lateral_left_depth",
+            ),
+            "camera_lateral_right": (
+                "camera_lateral_right_image",
+                "camera_lateral_right_depth",
+            ),
+            "eye_in_hand": (
+                "eye_in_hand_image",
+                "eye_in_hand_depth",
+            ),
+        }
+
+        for camera_name in expected_names:
+
+            rgb_key, depth_key = dataset_keys[
+                camera_name
+            ]
+
+            # Dataset RGB images are stored in BGR/OpenCV format.
+            rgb_image = self.bridge.imgmsg_to_cv2(
+                rgb_msgs[camera_name],
+                desired_encoding="bgr8",
+            )
+
+            # Keep native depth representation (normally float32).
+            depth_image = self.bridge.imgmsg_to_cv2(
+                depth_msgs[camera_name],
+                desired_encoding="passthrough",
+            )
+
+            camera_data[rgb_key] = np.asarray(
+                rgb_image
+            )
+
+            camera_data[depth_key] = np.asarray(
+                depth_image,
+                dtype=np.float32,
+            )
+
+        return camera_data
+
+
+    def _compress_seedo_dataset_rgb(
+        self,
+        camera_data,
+    ):
+        """
+        JPEG-compress only the RGB images stored in the SeeDo
+        dataset rollout. This does not affect legacy controllers.
+        """
+
+        rgb_keys = (
+            "camera_front_image",
+            "camera_lateral_left_image",
+            "camera_lateral_right_image",
+            "eye_in_hand_image",
+        )
+
+        compressed = dict(
+            camera_data
+        )
+
+        for key in rgb_keys:
+            if key not in compressed:
+                raise RuntimeError(
+                    f"Missing SeeDo rollout RGB image: {key}"
+                )
+
+            image = np.asarray(
+                compressed[key]
+            )
+
+            if image.ndim != 3 or image.shape[2] != 3:
+                raise RuntimeError(
+                    f"Invalid image shape for {key}: "
+                    f"{image.shape}"
+                )
+
+            okay, encoded = cv2.imencode(
+                ".jpg",
+                image,
+            )
+
+            if not okay:
+                raise RuntimeError(
+                    f"JPEG encoding failed for {key}"
+                )
+
+            compressed[key] = encoded
+
+        return compressed
+
+    def _build_seedo_front_obj_bb(self):
+        """
+        Build the reference-dataset obj_bb structure from the
+        runtime ScenePerceiver detections.
+
+        Bounding boxes are derived from the SAM masks produced
+        on the live front-camera scene.
+        """
+
+        perception_result = (
+            self.controller.perception_result
+        )
+
+        scene_state = (
+            self.controller.scene_state
+        )
+
+        if perception_result is None:
+            raise RuntimeError(
+                "SeeDo perception_result is not available."
+            )
+
+        if scene_state is None:
+            raise RuntimeError(
+                "SeeDo scene_state is not available."
+            )
+
+        raw_objects = (
+            perception_result
+            .raw_scene
+            .objects
+        )
+
+        semantic_objects = (
+            scene_state.objects
+        )
+
+        if len(raw_objects) != len(semantic_objects):
+            raise RuntimeError(
+                "Raw and semantic scene object counts differ: "
+                f"{len(raw_objects)} != "
+                f"{len(semantic_objects)}"
+            )
+
+        semantic_to_dataset_name = {
+            "red cube": "redbox",
+            "green cube": "greenbox",
+            "blue cube": "bluebox",
+            "yellow cube": "yellowbox",
+
+            "first bin from the left": "bin_0",
+            "second bin from the left": "bin_1",
+            "third bin from the left": "bin_2",
+            "fourth bin from the left": "bin_3",
+        }
+
+        camera_front_bb = {}
+
+        for raw_object, semantic_object in zip(
+            raw_objects,
+            semantic_objects,
+        ):
+            semantic_name = (
+                semantic_object.object_id
+                .strip()
+                .lower()
+            )
+
+            if semantic_name not in semantic_to_dataset_name:
+                raise RuntimeError(
+                    "Unsupported semantic object name while "
+                    "building dataset bounding boxes: "
+                    f"{semantic_name!r}"
+                )
+
+            dataset_name = semantic_to_dataset_name[
+                semantic_name
+            ]
+
+            mask = raw_object.mask
+
+            if mask is None:
+                raise RuntimeError(
+                    f"Object {semantic_name!r} has no SAM mask."
+                )
+
+            mask = np.asarray(
+                mask,
+                dtype=bool,
+            )
+
+            ys, xs = np.where(mask)
+
+            if xs.size == 0 or ys.size == 0:
+                raise RuntimeError(
+                    f"Object {semantic_name!r} has an empty SAM mask."
+                )
+
+            x_min = int(xs.min())
+            x_max = int(xs.max())
+
+            y_min = int(ys.min())
+            y_max = int(ys.max())
+
+            center_x = int(
+                np.rint(
+                    (x_min + x_max) / 2.0
+                )
+            )
+
+            center_y = int(
+                np.rint(
+                    (y_min + y_max) / 2.0
+                )
+            )
+
+            camera_front_bb[
+                dataset_name
+            ] = {
+                "upper_left_corner": [
+                    x_max,
+                    y_max,
+                ],
+                "bottom_right_corner": [
+                    x_min,
+                    y_min,
+                ],
+                "center": [
+                    center_x,
+                    center_y,
+                ],
+            }
+
+        return {
+            "camera_front": camera_front_bb
+        }
+
+    def _get_seedo_dataset_status(
+        self,
+        primitive_name,
+        is_final_action=False,
+    ):
+        """
+        Map a SeeDo primitive to the trajectory status used
+        by the reference robot dataset.
+        """
+
+        if is_final_action:
+            return "end"
+
+        status_map = {
+            "reach": "start",
+            "approaching": "approaching",
+            "pick": "picking",
+            "lift_up": "picking",
+            "moving": "moving",
+            "placing": "placing",
+        }
+
+        primitive_name = str(
+            primitive_name
+        ).strip().lower()
+
+        if primitive_name not in status_map:
+            raise RuntimeError(
+                "Unsupported SeeDo primitive for dataset status: "
+                f"{primitive_name!r}"
+            )
+
+        return status_map[
+            primitive_name
+        ]
 
     def _seedo_camera_info_callback(
         self,
@@ -747,6 +1200,88 @@ class AIControllerNode(Node):
         self.latest_joint_state = msg
         self.joint_state_event.set()
 
+    def _quat2axisangle(self, quat):
+        """
+        Convert quaternion [x, y, z, w] to axis-angle representation.
+        """
+
+        quat = np.asarray(
+            quat,
+            dtype=np.float64,
+        ).copy()
+
+        quat[3] = np.clip(
+            quat[3],
+            -1.0,
+            1.0,
+        )
+
+        den = np.sqrt(
+            1.0 - quat[3] * quat[3]
+        )
+
+        if math.isclose(
+            den,
+            0.0,
+            abs_tol=1e-8,
+        ):
+            return np.zeros(
+                3,
+                dtype=np.float64,
+            )
+
+        return (
+            quat[:3]
+            * 2.0
+            * math.acos(quat[3])
+            / den
+        )
+
+    def _gripper_joint_position_to_raw(
+        self,
+        joint_position,
+    ):
+        """
+        Convert the Robotiq joint position in radians to the
+        raw representation used by the reference dataset.
+        """
+
+        joint_position = float(
+            np.asarray(
+                joint_position
+            ).reshape(-1)[0]
+        )
+
+        raw_open = 3
+        raw_closed = 230
+
+        joint_open = 0.0
+        joint_closed = 0.8
+
+        ratio = (
+            (joint_position - joint_open)
+            / (joint_closed - joint_open)
+        )
+
+        ratio = np.clip(
+            ratio,
+            0.0,
+            1.0,
+        )
+
+        raw_position = (
+            raw_open
+            + ratio * (
+                raw_closed - raw_open
+            )
+        )
+
+        return int(
+            np.rint(
+                raw_position
+            )
+        )
+
     def _capture_robot_state(self, timeout_sec=1.0):
         """Spin briefly to receive a fresh /joint_states + TF, then build a robot-state obs dict.
 
@@ -818,6 +1353,9 @@ class AIControllerNode(Node):
                                              trans.transform.rotation.y,
                                              trans.transform.rotation.z,
                                              trans.transform.rotation.w])
+            state["ee_aa"] = self._quat2axisangle(
+                state[EEF_QUAT_NAME]
+            )
         except Exception as exc:
             self.get_logger().warning(
                 f'Could not look up EEF pose via TF ({self.frame_id} -> {self.eef_frame_name}): {exc}')
@@ -989,6 +1527,83 @@ class AIControllerNode(Node):
                 'SeeDo gripper execution is disabled.'
             )
     
+    def save_rollout_failure(
+        self,
+        exception,
+    ):
+        """
+        Persist information about a failed rollout even when the normal
+        save_rollout() path is never reached.
+        """
+
+        if self.current_task_id is None:
+            self.get_logger().error(
+                "Cannot save rollout failure: current task ID is unknown."
+            )
+            return
+
+        complete_save_path = os.path.join(
+            self.save_rollout_path,
+            f"task_{self.current_task_id}",
+        )
+
+        os.makedirs(
+            complete_save_path,
+            exist_ok=True,
+        )
+
+        traj_name = "traj_{:03d}".format(
+            self.traj_cnt
+        )
+
+        json_path = os.path.join(
+            complete_save_path,
+            traj_name + ".json",
+        )
+
+        res_dict = {
+            "program_status": "failed",
+
+            "task_id": self.current_task_id,
+            "traj_number": self.traj_cnt,
+
+            "failure_stage": self.current_failure_stage,
+            "failed_step": self.current_failure_step,
+            "failed_action_index": self.current_failure_action_index,
+
+            "error_type": type(exception).__name__,
+            "error_message": str(exception),
+
+            "controller_execution_status": getattr(
+                self.controller,
+                "execution_status",
+                None,
+            ),
+
+            "controller_execution_error": getattr(
+                self.controller,
+                "execution_error",
+                None,
+            ),
+
+            "traceback": traceback.format_exc(),
+        }
+
+        with open(
+            json_path,
+            "w",
+            encoding="utf-8",
+        ) as f:
+            json.dump(
+                res_dict,
+                f,
+                indent=4,
+            )
+
+        self.get_logger().error(
+            f"Failure metadata saved to: {json_path}"
+        )
+
     def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None):
         """Save the current rollout Trajectory to a .pkl file, plus outcome metadata to a .json file."""
         complete_save_path = os.path.join(save_path, f'task_{task_id}')
@@ -998,17 +1613,40 @@ class AIControllerNode(Node):
         traj_name = 'traj_{:03d}'.format(traj_number)
 
         if traj is not None:
-            trajectory_path = os.path.join(complete_save_path, traj_name + '.pkl')
-            traj.save(
-                trajectory_path,
-                task_id=task_id,
-                traj_number=traj_number,
-                ai_controller_target=self.ai_controller_target,
-                task_name=self.task_name,
+            trajectory_path = os.path.join(
+                complete_save_path,
+                traj_name + '.pkl',
             )
-            self.get_logger().info(f'Saved rollout trajectory to {trajectory_path}')
+
+            if self.ai_controller_target == 'seedo_controller':
+                traj.save(
+                    trajectory_path,
+                    len=len(traj),
+                    env_type=self.task_name,
+                    task_id=task_id,
+                )
+            else:
+                traj.save(
+                    trajectory_path,
+                    task_id=task_id,
+                    traj_number=traj_number,
+                    ai_controller_target=self.ai_controller_target,
+                    task_name=self.task_name,
+                )
+
+            self.get_logger().info(
+                f'Saved rollout trajectory to {trajectory_path}'
+            )
 
         res_dict = dict()
+
+        res_dict["program_status"] = "completed"
+        res_dict["failure_stage"] = None
+        res_dict["error_type"] = None
+        res_dict["error_message"] = None
+        res_dict["failed_step"] = None
+        res_dict["failed_action_index"] = None
+
         # 1. Ask for object reached
         object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
         res_dict['object_reached'] = int(object_reached)
@@ -1063,6 +1701,12 @@ class AIControllerNode(Node):
             self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
+
+            self.current_task_id = enter_task_id
+
+            self.current_failure_stage = "initialization"
+            self.current_failure_step = None
+            self.current_failure_action_index = None
             
             # create a new trajectory
             traj = Trajectory()
@@ -1070,12 +1714,17 @@ class AIControllerNode(Node):
             # SeeDo runtime state
             seedo_runtime_input = None
             seedo_primitive_count = None
+            seedo_obj_bb = None
 
             # Timing state for the current episode
             end_to_end_start = None
             robot_execution_start = None
             
             for step in range(self.max_step):
+
+                self.current_failure_step = step
+                self.current_failure_action_index = None
+
                 if step == 0:
                     # resetting controller state for the new task
                     self.controller.reset()
@@ -1135,6 +1784,9 @@ class AIControllerNode(Node):
                         self.pause_executor.set()
 
                         try:
+
+                            self.current_failure_stage = "demonstration_understanding"
+
                             self.controller.load_command(
                                 demo_path=self.demo_path,
                                 task_id=enter_task_id,
@@ -1164,6 +1816,8 @@ class AIControllerNode(Node):
                             'Running SeeDo runtime perception and planning...'
                         )
 
+                        self.current_failure_stage = "scene_perception_and_planning"
+
                         result = self.controller.inference(
                             input_data=seedo_runtime_input,
                             t=0,
@@ -1173,6 +1827,17 @@ class AIControllerNode(Node):
                             raise RuntimeError(
                                 'SeeDo inference(t=0) must return None.'
                             )
+
+                        seedo_obj_bb = (
+                            self._build_seedo_front_obj_bb()
+                        )
+
+                        self.get_logger().info(
+                            "SeeDo runtime bounding boxes prepared "
+                            f"for {len(seedo_obj_bb['camera_front'])} objects."
+                        )
+
+                        self.current_failure_stage = "lmp_generation"
 
                         if self.controller.primitive_plan is None:
                             raise RuntimeError(
@@ -1252,6 +1917,7 @@ class AIControllerNode(Node):
                 step_save_path = f'{save_path}/step_{step}'
 
                 if self.ai_controller_target == 'seedo_controller':
+                    self.current_failure_stage = "motion_generation"
                     out = self.controller.inference(
                         input_data={
                             "robot_state": robot_state,
@@ -1275,6 +1941,13 @@ class AIControllerNode(Node):
                         )
 
                     actions = out
+
+                    current_seedo_primitive = (
+                        self.controller
+                        .primitive_plan
+                        .steps[step - 1]
+                        .name
+                    )
                 elif self.ai_controller_target == 'cod_controller':
                     pred_action, predicted_bb, target_obj_prediction = out
                     actions = [pred_action]
@@ -1312,6 +1985,7 @@ class AIControllerNode(Node):
                     primitive_execution_start = TIMING.start()
 
                 for indx, action in enumerate(actions):
+                    self.current_failure_action_index = indx
                     self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
 
                     if self.move_robot:
@@ -1330,6 +2004,7 @@ class AIControllerNode(Node):
                         pose_request.pose.pose.orientation.z = action[5]
                         pose_request.pose.pose.orientation.w = action[6]
 
+                        self.current_failure_stage = "robot_execution"
                         future = self.set_pose_client.call_async(
                             pose_request
                         )
@@ -1415,6 +2090,7 @@ class AIControllerNode(Node):
 
                                 gripper_goal.command.max_effort = 50.0
 
+                                self.current_failure_stage = "gripper_execution"
                                 future = (
                                     self.gripper_action_client
                                     .send_goal_async(gripper_goal)
@@ -1461,6 +2137,10 @@ class AIControllerNode(Node):
                                     self.previous_gripper_position = (
                                         desired_gripper_position
                                     )
+
+                                    # Allow the physical/simulated gripper state feedback
+                                    # to settle before recording the rollout observation.
+                                    time.sleep(0.5)
 
                                 else:
                                     rclpy.spin_until_future_complete(
@@ -1519,17 +2199,102 @@ class AIControllerNode(Node):
                             and indx == len(actions) - 1
                         )
 
-                        seedo_step_obs = dict(robot_state)
-                        seedo_step_obs['camera_front_image'] = cv2.cvtColor(
-                            images[0],
-                            cv2.COLOR_RGB2BGR,
+                        seedo_status = (
+                            self._get_seedo_dataset_status(
+                                primitive_name=(
+                                    current_seedo_primitive
+                                ),
+                                is_final_action=(
+                                    seedo_action_done
+                                ),
+                            )
+                        )
+
+                        if self.move_robot:
+                            rollout_robot_state = (
+                                self._capture_robot_state()
+                            )
+                        else:
+                            rollout_robot_state = robot_state
+
+                        seedo_step_obs = dict(
+                            rollout_robot_state
+                        )
+
+                        seedo_step_obs.pop(
+                            GRIPPER_QVEL_NAME,
+                            None,
+                        )
+
+                        if GRIPPER_QPOS_NAME in seedo_step_obs:
+                            seedo_step_obs[
+                                GRIPPER_QPOS_NAME
+                            ] = self._gripper_joint_position_to_raw(
+                                seedo_step_obs[
+                                    GRIPPER_QPOS_NAME
+                                ]
+                            )
+
+                        camera_data = (
+                            self._get_seedo_record_camera_data()
+                        )
+
+                        camera_data = (
+                            self._compress_seedo_dataset_rgb(
+                                camera_data
+                            )
+                        )
+
+                        seedo_step_obs.update(
+                            camera_data
+                        )
+
+                        if seedo_obj_bb is None:
+                            raise RuntimeError(
+                                "SeeDo runtime bounding boxes are not available."
+                            )
+
+                        seedo_step_obs[
+                            "obj_bb"
+                        ] = seedo_obj_bb
+
+                        if (
+                            EEF_POS_NAME not in rollout_robot_state
+                            or EEF_QUAT_NAME not in rollout_robot_state
+                        ):
+                            raise RuntimeError(
+                                "Missing EEF pose while building SeeDo dataset action."
+                            )
+
+                        seedo_dataset_action = np.zeros(
+                            8,
+                            dtype=np.float64,
+                        )
+
+                        seedo_dataset_action[0:3] = np.asarray(
+                            rollout_robot_state[EEF_POS_NAME],
+                            dtype=np.float64,
+                        )
+
+                        seedo_dataset_action[3:7] = np.asarray(
+                            rollout_robot_state[EEF_QUAT_NAME],
+                            dtype=np.float64,
+                        )
+
+                        seedo_dataset_action[7] = (
+                            1.0
+                            if float(action[7]) > 0.5
+                            else 0.0
                         )
 
                         traj.append(
                             obs=seedo_step_obs,
-                            action=action,
+                            action=seedo_dataset_action,
                             done=seedo_action_done,
                             reward=1 if seedo_action_done else 0,
+                            info={
+                                "status": f'"{seedo_status}"',
+                            },
                         )
 
                 if primitive_execution_start is not None:
@@ -1693,6 +2458,24 @@ def main(args=None):
             node.get_logger().info(
                 'Keyboard interrupt, shutting down.\n'
             )
+        
+        except Exception as exc:
+            node.get_logger().error(
+                f"SeeDo rollout failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            try:
+                node.save_rollout_failure(
+                    exception=exc,
+                )
+            except Exception as save_exc:
+                node.get_logger().error(
+                    "Failed to persist rollout failure metadata: "
+                    f"{save_exc}"
+                )
+
+            raise
 
         finally:
             executor.shutdown()

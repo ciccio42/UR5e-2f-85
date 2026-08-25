@@ -62,6 +62,7 @@ class SeeDoController(AIController):
         self.action_plan: ActionPlanningResult | None = None
 
         # Runtime state.
+        self.perception_result = None
         self.scene_state: SceneState | None = None
         self.primitive_plan: PrimitivePlan | None = None
 
@@ -431,6 +432,7 @@ class SeeDoController(AIController):
         return self.artifacts_dir
 
     def reset(self) -> None:
+        self.perception_result = None
         self.action_plan = None
         self.scene_state = None
         self.primitive_plan = None
@@ -535,7 +537,7 @@ class SeeDoController(AIController):
                 with TIMING.measure(
                     "scene_perception"
                 ):
-                    perception_result = self.scene_perceiver.run(
+                    self.perception_result = self.scene_perceiver.run(
                         rgb_image=processed_input["rgb"],
                         depth_image=processed_input["depth"],
                         camera_info=processed_input["camera_info"],
@@ -554,7 +556,7 @@ class SeeDoController(AIController):
                     "scene_interpretation"
                 ):
                     self.scene_state = self.scene_interpreter.run(
-                        perception_result=perception_result,
+                        perception_result=self.perception_result,
                         artifacts_dir=(
                             self.artifacts_dir
                             / "scene_interpreter"

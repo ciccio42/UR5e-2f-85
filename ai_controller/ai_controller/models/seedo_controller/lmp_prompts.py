@@ -27,6 +27,30 @@ prompt_tabletop_ui_ros = """
 # Do not use put_first_on_second or any other composite pick-and-place API.
 # Decide which primitives are necessary and in which order from the task.
 # Use only objects that exist in the provided objects list.
+#
+# **OUTPUT FORMAT REQUIREMENTS — STRICT:**
+# **Output ONLY valid executable Python code.**
+# **Do NOT output explanations, descriptions, reasoning, introductions, or conclusions.**
+# **Do NOT use Markdown code fences such as ```python or ```.**
+# **Do NOT write natural-language text before or after the Python code.**
+# **The first generated line must be valid Python code.**
+# **The last generated line must be valid Python code.**
+# **Use only calls to the available robot motion primitives.**
+#
+# Correct output example:
+# reach('red cube')
+# approaching('red cube')
+# pick('red cube')
+# lift_up('red cube')
+# moving('first bin from the left')
+# placing('first bin from the left')
+#
+# Incorrect output examples:
+# "To pick up the red cube, follow these steps:"
+# ```python
+# reach('red cube')
+# ```
+# "This sequence will complete the task."
 
 objects = [
     'red cube',
@@ -81,6 +105,10 @@ pick('blue cube')
 lift_up('blue cube')
 moving('first bin from the left')
 placing('first bin from the left')
+
+# FINAL REMINDER:
+# **For the next task, respond with Python statements only.**
+# **No prose. No Markdown. No code fences. No explanation.**
 """.strip()
 
 prompt_parse_obj_name_ros = """
