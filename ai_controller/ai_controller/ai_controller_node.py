@@ -127,6 +127,9 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'tinyvla_controller':
             from ai_controller.models.tinyvla_controller.tinyvla_controller import TinyVLAController
             self.controller = TinyVLAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'osvi_controller':
+            from ai_controller.models.osvi_controller.osvi_controller import OSVIController
+            self.controller = OSVIController(self.model_config_path, self.task_name)
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -641,11 +644,14 @@ class AIControllerNode(Node):
                     # 2. Get joint-states or other relevant robot states (if needed for inference).
                     # Each controller expects a different state format (or none at all), so branch
                     # on the loaded model: CODController.pre_process() raises NotImplementedError
-                    # if states is not None, while OpenVLAController needs the 8-dim proprio vector.
+                    # if states is not None, while OpenVLAController needs the 8-dim proprio vector,
+                    # OSVI uses the full robot_state dict for optional grasp refinement.
                     if self.ai_controller_target == 'openvla_controller':
                         states = self._build_openvla_state(robot_state)
                     elif self.ai_controller_target == 'tinyvla_controller':
                         states = self._build_tinyvla_state(robot_state)
+                    elif self.ai_controller_target == 'osvi_controller':
+                        states = robot_state
                     else:
                         states = None
 
@@ -661,6 +667,8 @@ class AIControllerNode(Node):
                     if self.ai_controller_target == 'cod_controller':
                         pred_action, predicted_bb, target_obj_prediction = out
                         actions = [pred_action]
+                    elif self.ai_controller_target == 'osvi_controller':
+                        actions = [np.asarray(action, dtype=np.float64) for action in out]
                     elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
                         actions = out
                         # OpenVLAController/TinyVLAController both return a list of

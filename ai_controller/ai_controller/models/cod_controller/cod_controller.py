@@ -39,7 +39,7 @@ class CODController(AIController):
         
         self.move_model_to_device(self.device) 
         # set random seed for reproducibility
-        seed_everything(42)
+        seed_everything(0)
         
         self.gripper_closed = False
         
@@ -71,12 +71,12 @@ class CODController(AIController):
             if 'object_detector' in key:
                 del weights[key]
         model.load_state_dict(weights, strict=False)
-        #print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")
-        #model.load_target_obj_detector(
-        #                                target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,
-        #                                target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step
-        #                            )
-        #model._object_detector.eval()
+        print(f"Loading target object detector from {self.model_config_omega.policy.target_obj_detector_path} at step {self.model_config_omega.policy.target_obj_detector_step}...")
+        model.load_target_obj_detector(
+                                       target_obj_detector_path=self.model_config_omega.policy.target_obj_detector_path,
+                                       target_obj_detector_step=self.model_config_omega.policy.target_obj_detector_step
+                                   )
+        model._object_detector.eval()
         model.eval()
         print("Model weights loaded successfully.")
 

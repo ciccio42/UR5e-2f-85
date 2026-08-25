@@ -117,7 +117,7 @@ source install/setup.bash
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True  \
     -p ai_controller_target:="cod_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-EYE-IN-HAND--Batch24/config.yaml"
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-Batch24/config.yaml"
 
 # Run AI-Controller (Open-VLA)
 pip install --upgrade protobuf --break-system-packages
@@ -133,6 +133,17 @@ ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True  \
     -p ai_controller_target:="tinyvla_controller" \
     -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml"
+
+#Run AI-Controller (OSVI-WM)
+docker exec -it ur_robotiq_teleoperation_container bash
+cd /home/ros2_ws
+colcon build --packages-select ai_controller --symlink-install
+source install/setup.bash
+python3 -m pip install einops hydra-core omegaconf torchsummary tqdm pyyaml matplotlib --break-system-packages
+ros2 run ai_controller ai_controller_node --ros-args \
+  -p move_robot:=True \
+  -p ai_controller_target:="osvi_controller" \
+  -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/osvi_config.yaml"
 
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check

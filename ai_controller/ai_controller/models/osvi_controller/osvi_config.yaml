@@ -1,0 +1,82 @@
+# OSVI controller configuration
+# Pass the path to this file via the 'model_config_path' ROS parameter.
+# Relative paths are resolved from this file's directory.
+
+# Files copied from the successful OSVI training run.
+checkpoint_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi_wm/best.pt"
+training_config_path: "/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/configs/training_config.yaml"
+projection_matrix_path: "/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_zed_front_projection.yaml"
+# Runtime device. Use "cuda" on the Spark machine when CUDA is available.
+device: "cuda"
+
+# Image pipeline expected by the trained model.
+image:
+  front_camera_index: 0
+  height: 240
+  width: 320
+  crop: [0, 0, 0, 0]
+  normalize: true
+  live_images_are_rgb: true
+  demo_convert_bgr_to_rgb: false
+
+# Demonstration/context frames used as the expert video condition.
+context:
+  num_frames: 10
+  sample_sides: true
+  deterministic: true
+
+# Agent observation sequence. Training used T_pair: 1, therefore two frames.
+# Live inference initially reuses the current front image for both slots.
+agent_observation:
+  num_frames: 2
+  repeat_current_image: true
+
+# Waypoint head parameters from training_config.yaml.
+waypoints:
+  base_count: 5
+  sub_waypoints: true
+  predicted_count: 15
+  selected_count: 5
+  selection: "last_group"
+  image_waypoints: true
+
+# Conversion from predicted image-normalized waypoint coordinates to base_link.
+projection:
+  output_frame: "base_link"
+
+# How OSVI waypoints become robot actions for ai_controller_node.py.
+control:
+  action_format: "absolute_pose_quat_gripper"
+  orientation_mode: "fixed_top_down"
+  fixed_orientation_xyzw:
+    - 0.9994452044624775
+    - 0.03161651380119412
+    - 0.0021438049655468088
+    - 0.010251021036213035
+  gripper_open_position: 0.0
+  gripper_closed_position: 255.0
+  # OSVI gripper signal: values below this threshold close, values >= threshold open.
+  gripper_close_threshold: 0.19
+  max_actions_per_inference: 5
+
+
+# Extra grasp aid inspired by the simulated OSVI refinement step: when OSVI first
+# predicts gripper close, descend vertically to that predicted grasp height, close,
+# optionally lift, then continue with the remaining predicted waypoints.
+grasp_refinement:
+  enabled: true
+  approach_height: 0.04
+  approach_step: 0.03
+  descent_step: 0.01
+  lift_after_close: true
+  lift_height: 0.05
+  lift_step: 0.01
+  resume_after_lift: true
+
+# Conservative runtime guards for the first tests. The wrapper can enforce these
+# before returning actions to the ROS node.
+safety:
+  clamp_workspace: false
+  workspace_min: [-0.50, 0.20, 0.02]
+  workspace_max: [0.50, 0.90, 0.50]
+  min_waypoint_distance: 0.005
