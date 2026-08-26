@@ -284,6 +284,8 @@ docker exec "$CONTAINER_NAME" bash -lc '
     set -e
     workspace=/workspace/mimic_video_workspace
     model_repo=/workspace/mimic_video_workspace/external/mimic-video
+    patch_workdir="$(dirname "$model_repo")"
+    model_repo_name="$(basename "$model_repo")"
     patches=(
         "$workspace/patches/action_head/004_register_ur5e_action_pipe.patch"
         "$workspace/patches/action_head/005_configure_ur5e_action_experiments.patch"
@@ -297,11 +299,15 @@ docker exec "$CONTAINER_NAME" bash -lc '
             exit 1
         fi
 
-        git_cmd=(git -c safe.directory="$model_repo" -C "$model_repo")
-        if "${git_cmd[@]}" apply --reverse --check "$patch_file" >/dev/null 2>&1; then
+        # Il submodule risulta montato senza il .git della repository principale.
+        # Applica quindi le patch al solo working tree, senza richiedere un indice Git.
+        git_apply=(
+            git -C "$patch_workdir" apply --no-index --directory="$model_repo_name"
+        )
+        if "${git_apply[@]}" --reverse --check "$patch_file" >/dev/null 2>&1; then
             echo "Gia applicata: $(basename "$patch_file")"
-        elif "${git_cmd[@]}" apply --check "$patch_file"; then
-            "${git_cmd[@]}" apply "$patch_file"
+        elif "${git_apply[@]}" --check "$patch_file"; then
+            "${git_apply[@]}" "$patch_file"
             echo "Applicata: $(basename "$patch_file")"
         else
             echo "Impossibile applicare la patch: $patch_file" >&2
