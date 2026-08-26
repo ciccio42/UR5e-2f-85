@@ -320,8 +320,36 @@ echo "Verifica del package ROS ai_controller..."
 docker exec "$CONTAINER_NAME" bash -lc '
     set -e
     source /opt/ros/jazzy/setup.bash
+    source /opt/mimic-video-runtime/bin/activate
+
+    runtime_python=/opt/mimic-video-runtime/bin/python
+    if [[ ! -x "$runtime_python" ]]; then
+        echo "Python del runtime non eseguibile: $runtime_python" >&2
+        exit 1
+    fi
+
     cd /home/ros2_ws
     colcon build --packages-select ai_controller
+
+    ai_entrypoint=/home/ros2_ws/install/ai_controller/lib/ai_controller/ai_controller_node
+    if [[ ! -f "$ai_entrypoint" ]]; then
+        echo "Entry point ROS non generato: $ai_entrypoint" >&2
+        exit 1
+    fi
+
+    expected_shebang="#!$runtime_python"
+    actual_shebang="$(head -n 1 "$ai_entrypoint")"
+    if [[ "$actual_shebang" != "$expected_shebang" ]]; then
+        sed -i "1c\\$expected_shebang" "$ai_entrypoint"
+    fi
+
+    actual_shebang="$(head -n 1 "$ai_entrypoint")"
+    if [[ "$actual_shebang" != "$expected_shebang" ]]; then
+        echo "Shebang non corretta per $ai_entrypoint: $actual_shebang" >&2
+        exit 1
+    fi
+    "$runtime_python" -c "import rclpy; import transformer_engine.pytorch"
+    echo "Entry point ai_controller: $actual_shebang"
 '
 
 echo "Apertura della shell Mimic Video nel container $CONTAINER_NAME..."
