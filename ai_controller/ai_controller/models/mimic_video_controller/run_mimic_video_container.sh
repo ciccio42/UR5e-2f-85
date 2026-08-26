@@ -48,6 +48,14 @@ setup_runtime_environment() {
     export NCCL_HOME="$NCCL_ROOT"
     export NVTE_WITH_NCCL_EP=0
 
+    # Transformers trova anche TensorFlow nei site-packages di sistema. Mimic
+    # Video usa esclusivamente PyTorch; evitare il backend TF previene conflitti
+    # tra il protobuf del runtime persistente e quello richiesto da TensorFlow.
+    export USE_TORCH=1
+    export USE_TF=0
+    export USE_FLAX=0
+    export TRANSFORMERS_NO_TF=1
+
     # Inserisce una directory in testa a una variabile PATH-like senza duplicarla.
     prepend_env_path() {
         local variable_name="$1"
@@ -348,7 +356,7 @@ docker exec "$CONTAINER_NAME" bash -lc '
         echo "Shebang non corretta per $ai_entrypoint: $actual_shebang" >&2
         exit 1
     fi
-    "$runtime_python" -c "import rclpy; import transformer_engine.pytorch"
+    "$runtime_python" -c "import rclpy; import transformer_engine.pytorch; from transformers import T5EncoderModel, T5TokenizerFast"
     echo "Entry point ai_controller: $actual_shebang"
 '
 
