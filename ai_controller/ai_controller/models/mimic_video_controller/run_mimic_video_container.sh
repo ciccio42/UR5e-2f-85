@@ -357,7 +357,7 @@ docker exec "$CONTAINER_NAME" bash -lc '
         echo "Shebang non corretta per $ai_entrypoint: $actual_shebang" >&2
         exit 1
     fi
-    "$runtime_python" -c "import rclpy; import transformer_engine.pytorch; from transformers import T5EncoderModel, T5TokenizerFast; from cosmos_predict2.configs.config import make_config"
+    "$runtime_python" -c "import rclpy; from transformers import T5EncoderModel, T5TokenizerFast; from ai_controller.models.mimic_video_controller.mimic_video import MimicVideoPolicy"
     echo "Entry point ai_controller: $actual_shebang"
 '
 
