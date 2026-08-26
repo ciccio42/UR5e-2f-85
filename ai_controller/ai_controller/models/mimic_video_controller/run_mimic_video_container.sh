@@ -226,6 +226,22 @@ else
 fi
 
 # L'entrypoint dell'immagine compila i package ROS prima di eseguire sleep.
+# Con --pid=host, /proc/1 nel container e' il PID 1 dell'host (tipicamente
+# systemd), quindi il vero processo principale va ricavato da Docker.
+get_container_init_process() {
+    local container_pid
+    container_pid="$(docker inspect --format '{{.State.Pid}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+
+    if [[ ! "$container_pid" =~ ^[0-9]+$ ]] || [[ "$container_pid" == "0" ]]; then
+        return 1
+    fi
+    if [[ ! -r "/proc/$container_pid/comm" ]]; then
+        return 1
+    fi
+
+    tr -d '[:space:]' < "/proc/$container_pid/comm"
+}
+
 for _ in $(seq 1 180); do
     if [[ "$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")" != "true" ]]; then
         echo "Il container si e arrestato durante l'avvio:" >&2
@@ -233,7 +249,7 @@ for _ in $(seq 1 180); do
         exit 1
     fi
 
-    init_process="$(docker exec "$CONTAINER_NAME" sh -c 'cat /proc/1/comm' 2>/dev/null || true)"
+    init_process="$(get_container_init_process || true)"
     if [[ "$init_process" == "sleep" ]]; then
         break
     fi
