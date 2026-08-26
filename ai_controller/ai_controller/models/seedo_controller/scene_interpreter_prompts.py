@@ -40,33 +40,9 @@ Your task is ONLY to assign one semantic name to every provided raw object.
 CUBES
 ------------------------------------------------------------
 
-The current benchmark contains coloured wooden cubes.
+Cube semantic identity has already been determined by the perception system.
 
-Each cube has exactly one coloured top face.
-
-The colour of the top face uniquely identifies the cube.
-
-Determine the cube colour ONLY from the visible coloured top face.
-
-Ignore:
-
-- wooden side faces;
-
-- annotation contours;
-
-- annotation text;
-
-- markers;
-
-- shadows;
-
-- reflections;
-
-- illumination changes.
-
-Never invent colours that are not visibly present on the cube.
-
-Use semantic names of the form:
+For every cube, the detector label is authoritative and already has the exact form:
 
 "<colour> cube"
 
@@ -79,6 +55,19 @@ green cube
 blue cube
 
 yellow cube
+
+For cubes, copy the detector label exactly as the semantic name.
+
+Do NOT infer, verify, correct, or change the cube colour from the RGB image.
+
+Do NOT use object appearance, annotation colours, contours, shadows,
+reflections, or illumination to determine cube identity.
+
+If a perceived cube has detector label "red cube", its semantic name MUST be
+"red cube".
+
+If a perceived cube has detector label "green cube", its semantic name MUST be
+"green cube", and so on.
 
 ------------------------------------------------------------
 STORAGE BINS
