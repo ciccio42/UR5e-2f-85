@@ -329,6 +329,30 @@ class SceneInterpreter:
             for item in result["objects"]
         }
 
+        for raw_object in raw_scene.objects:
+            detector_label = (
+                raw_object.label
+                .strip()
+                .lower()
+            )
+
+            if detector_label.endswith(" cube"):
+                returned_name = (
+                    semantic_names[
+                        raw_object.object_id
+                    ]
+                    .strip()
+                    .lower()
+                )
+
+                if returned_name != detector_label:
+                    raise RuntimeError(
+                        "Scene interpretation changed a semantic cube label: "
+                        f"raw_object_id={raw_object.object_id!r}, "
+                        f"detector_label={detector_label!r}, "
+                        f"semantic_name={returned_name!r}"
+                    )
+
         expected_ids = {
             obj.object_id
             for obj in raw_scene.objects

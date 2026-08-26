@@ -63,6 +63,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--objects",
+        type=str,
+        default=None,
+        help="Comma-separated object labels for visual prompting.",
+    )
+
+    parser.add_argument(
         "--grounding-checkpoint",
         type=Path,
         default=Path(

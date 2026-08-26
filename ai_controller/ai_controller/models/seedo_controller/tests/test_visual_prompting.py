@@ -24,6 +24,7 @@ def run_visual_prompting_test(
             bert_model=args.bert_model,
             sam_checkpoint=args.sam_checkpoint,
             sam2_checkpoint=args.sam2_checkpoint,
+            objects=args.objects,
         )
 
         expected_keyframes = tuple(args.expected_keyframes)

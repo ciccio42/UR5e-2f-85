@@ -4,6 +4,12 @@ import torch
 import numpy as np
 import cv2
 import json
+import base64
+import os
+import re
+
+from collections import Counter
+from openai import OpenAI
 
 from pathlib import Path
 from typing import Any
@@ -148,24 +154,12 @@ class ScenePerceiver:
         if self.device.type == "cuda":
             torch.cuda.set_device(self.device)
 
-        self.grounding_model = load_groundingdino_model(
-            str(self.grounding_config),
-            str(self.grounding_checkpoint),
-            device=str(self.device),
-            text_encoder_path=str(self.bert_model),
-        )
-
-        self.sam = build_sam(
-            checkpoint=str(self.sam_checkpoint)
-        )
-
-        self.sam.to(
-            device=self.device
-        )
-
-        self.sam_predictor = SamPredictor(
-            self.sam
-        )
+        # Models are loaded lazily when runtime scene perception is first used.
+        # This avoids keeping a second GroundingDINO + SAM instance on the GPU
+        # while the demonstration video is being processed.
+        self.grounding_model = None
+        self.sam = None
+        self.sam_predictor = None
 
     def pixel_to_base_link(
         self,
@@ -247,6 +241,45 @@ class ScenePerceiver:
             float(point_base[2]),
         )
     
+    def _ensure_models_loaded(self) -> None:
+        """Load GroundingDINO and SAM only when scene perception is needed."""
+
+        if (
+            self.grounding_model is not None
+            and self.sam is not None
+            and self.sam_predictor is not None
+        ):
+            return
+
+        print(
+            "[ScenePerceiver] Loading GroundingDINO and SAM...",
+            flush=True,
+        )
+
+        self.grounding_model = load_groundingdino_model(
+            str(self.grounding_config),
+            str(self.grounding_checkpoint),
+            device=str(self.device),
+            text_encoder_path=str(self.bert_model),
+        )
+
+        self.sam = build_sam(
+            checkpoint=str(self.sam_checkpoint)
+        )
+
+        self.sam.to(
+            device=self.device
+        )
+
+        self.sam_predictor = SamPredictor(
+            self.sam
+        )
+
+        print(
+            "[ScenePerceiver] GroundingDINO and SAM loaded.",
+            flush=True,
+        )
+
     def camera_matrix_from_info(
         self,
         camera_info: dict,
@@ -295,30 +328,216 @@ class ScenePerceiver:
             base_to_table_translation=base_to_table_translation,
         )
 
+    def _discover_detector_labels(
+        self,
+        rgb_image: np.ndarray,
+    ) -> list[str]:
+        """Discover semantic detector labels from the runtime RGB scene."""
+
+        if not isinstance(rgb_image, np.ndarray):
+            raise TypeError(
+                "rgb_image must be a numpy array."
+            )
+
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise ValueError(
+                "OPENAI_API_KEY is not configured."
+            )
+
+        # rgb_image is RGB, while OpenCV encoding expects BGR.
+        image_bgr = cv2.cvtColor(
+            rgb_image,
+            cv2.COLOR_RGB2BGR,
+        )
+
+        ok, encoded_image = cv2.imencode(
+            ".jpg",
+            image_bgr,
+            [
+                cv2.IMWRITE_JPEG_QUALITY,
+                95,
+            ],
+        )
+
+        if not ok:
+            raise RuntimeError(
+                "Could not encode runtime RGB image."
+            )
+
+        image_base64 = base64.b64encode(
+            encoded_image.tobytes()
+        ).decode("ascii")
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a visual object detector whose output will be used "
+                    "directly as text queries for GroundingDINO. "
+                    "The scene contains colored cubes and storage bins. "
+                    "For every cube, include its visible color in the detector "
+                    "label using the exact form '<color> cube'. "
+                    "For every storage bin, always use the exact detector label "
+                    "'storage bin' without adding color, position, material, "
+                    "or other attributes."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Inspect the physical objects visible on the table "
+                            "and classify them using these rules:\n"
+                            "1. For every visible cube or graspable colored block, "
+                            "identify its visible color and return '<color> cube'.\n"
+                            "The only valid cube colors in this benchmark are:"
+                            "red, green, blue, and yellow."
+                            "For every cube, the detector label MUST therefore be exactly one of:"
+                            "'red cube', 'green cube', 'blue cube', or 'yellow cube'."
+                            "Do not use any other cube color.\n"
+                            "2. Examples are 'red cube', 'green cube', "
+                            "'blue cube', and 'yellow cube'.\n"
+                            "3. For every bin, box, tray, container, or receptacle, "
+                            "return exactly 'storage bin'.\n"
+                            "4. Count every physical instance separately.\n"
+                            "5. Repeat 'storage bin' once for every visible bin.\n"
+                            "6. Do not include the robot, gripper, table, "
+                            "or background objects.\n"
+                            "7. Never use spatial descriptions such as "
+                            "'first bin from the left'.\n"
+                            "8. Do not add objects that are not visible.\n\n"
+                            "Return exactly two lines and no additional explanation:\n"
+                            "Number: <total number of instances>\n"
+                            "Objects: <comma-separated detector labels, "
+                            "repeated once per instance>"
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": (
+                                "data:image/jpeg;base64,"
+                                + image_base64
+                            ),
+                            "detail": "high",
+                        },
+                    },
+                ],
+            },
+        ]
+
+        response = OpenAI().chat.completions.create(
+            model="gpt-4o-2024-08-06",
+            messages=messages,
+            temperature=0,
+            max_tokens=300,
+        )
+
+        raw_output = (
+            response
+            .choices[0]
+            .message
+            .content
+        )
+
+        if not raw_output:
+            raise RuntimeError(
+                "Runtime object discovery returned no output."
+            )
+
+        number_match = re.search(
+            r"Number:\s*(\d+)",
+            raw_output,
+        )
+
+        objects_match = re.search(
+            r"Objects:\s*(.+)",
+            raw_output,
+        )
+
+        if objects_match is None:
+            raise RuntimeError(
+                "Could not parse object list from VLM output: "
+                f"{raw_output!r}"
+            )
+
+        detector_labels = [
+            label.strip().lower()
+            for label in objects_match.group(1).split(",")
+            if label.strip()
+        ]
+
+        if not detector_labels:
+            raise RuntimeError(
+                "VLM object discovery returned an empty object list."
+            )
+
+        reported_count = (
+            int(number_match.group(1))
+            if number_match is not None
+            else None
+        )
+
+        print(
+            "[ScenePerceiver] Discovered detector labels: "
+            f"{detector_labels}"
+        )
+
+        if (
+            reported_count is not None
+            and reported_count != len(detector_labels)
+        ):
+            print(
+                "[ScenePerceiver] WARNING: "
+                f"VLM reported {reported_count} objects but "
+                f"returned {len(detector_labels)} labels."
+            )
+
+        return detector_labels
+
     def _detect_objects(
         self,
         rgb_image: np.ndarray,
     ) -> list[DetectedObject]:
         """Detect and segment configured object categories in one RGB frame."""
+        
+        self._ensure_models_loaded()
 
         image_source, image = load_image_from_array(
             rgb_image
         )
 
-        box_threshold = 0.3
+        detector_labels = self._discover_detector_labels(
+            rgb_image
+        )
+
+        object_counts = Counter(
+            detector_labels
+        )
+
+        cube_box_threshold = 0.25
+        default_box_threshold = 0.30
         text_threshold = 0.25
 
         detected_boxes: list[torch.Tensor] = []
         detected_labels: list[str] = []
         detected_confidences: list[float] = []
 
-        for detector_label in self.detector_labels:
+        for detector_label, requested_count in object_counts.items():
 
             timing_label = detector_label.replace(" ", "_")
             with TIMING.measure(
                 f"scene.grounding_dino.{timing_label}",
                 cuda=True,
             ):
+
+                box_threshold = (
+                    cube_box_threshold
+                    if detector_label.endswith("cube")
+                    else default_box_threshold
+                )
 
                 boxes, logits, phrases = predict(
                     model=self.grounding_model,
@@ -328,6 +547,21 @@ class ScenePerceiver:
                     text_threshold=text_threshold,
                     device=self.device,
                 )
+
+
+            if detector_label.endswith("cube"):
+                box_areas = boxes[:, 2] * boxes[:, 3]
+                keep_mask = box_areas < 0.1
+
+                boxes = boxes[keep_mask]
+                logits = logits[keep_mask]
+
+                keep_values = keep_mask.detach().cpu().tolist()
+                phrases = [
+                    phrase
+                    for phrase, keep in zip(phrases, keep_values)
+                    if keep
+                ]
 
             # Task-specific correction already implemented in SeeDo.
             # For every other label this function is effectively a no-op.
@@ -345,6 +579,15 @@ class ScenePerceiver:
                     "[ScenePerceiver] Oversized detections removed: "
                     f"{diagnostics}"
                 )
+            
+            selected_count = min(
+                requested_count,
+                int(boxes.shape[0]),
+            )
+
+            boxes = boxes[:selected_count]
+            logits = logits[:selected_count]
+            phrases = phrases[:selected_count]
 
             for box, logit in zip(
                 boxes,
@@ -424,7 +667,7 @@ class ScenePerceiver:
 
         label_counters: dict[str, int] = {
             label: 0
-            for label in self.detector_labels
+            for label in object_counts
         }
 
         for detector_label, confidence, mask in zip(
