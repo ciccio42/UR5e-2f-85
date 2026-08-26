@@ -319,8 +319,8 @@ docker exec "$CONTAINER_NAME" bash -lc '
 echo "Verifica del package ROS ai_controller..."
 docker exec "$CONTAINER_NAME" bash -lc '
     set -e
-    source /opt/ros/jazzy/setup.bash
-    source /opt/mimic-video-runtime/bin/activate
+    runtime_script=/home/ros2_ws/src/ai_controller/ai_controller/models/mimic_video_controller/run_mimic_video_container.sh
+    source "$runtime_script" --env-only
 
     runtime_python=/opt/mimic-video-runtime/bin/python
     if [[ ! -x "$runtime_python" ]]; then
