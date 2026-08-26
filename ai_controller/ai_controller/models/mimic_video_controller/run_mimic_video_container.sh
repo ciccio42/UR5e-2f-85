@@ -299,6 +299,7 @@ docker exec "$CONTAINER_NAME" bash -lc '
         "$workspace/patches/action_head/005_configure_ur5e_action_experiments.patch"
         "$workspace/patches/action_head/007_register_ur5e_cosmos_checkpoint.patch"
         "$workspace/patches/inference/001_lazy_apex_optimizer_import.patch"
+        "$workspace/patches/inference/002_lazy_apex_standard_optimizer_import.patch"
     )
 
     for patch_file in "${patches[@]}"; do
@@ -356,7 +357,7 @@ docker exec "$CONTAINER_NAME" bash -lc '
         echo "Shebang non corretta per $ai_entrypoint: $actual_shebang" >&2
         exit 1
     fi
-    "$runtime_python" -c "import rclpy; import transformer_engine.pytorch; from transformers import T5EncoderModel, T5TokenizerFast"
+    "$runtime_python" -c "import rclpy; import transformer_engine.pytorch; from transformers import T5EncoderModel, T5TokenizerFast; from cosmos_predict2.configs.config import make_config"
     echo "Entry point ai_controller: $actual_shebang"
 '
 
