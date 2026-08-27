@@ -46,6 +46,7 @@ class MimicVideoConfig:
     seed: int = 0
     use_cuda_graphs: bool = False
     num_execute_actions: int = 10
+    trace_action_conversions: bool = False
 
 
 class MimicVideoController(AIController):
@@ -212,8 +213,74 @@ class MimicVideoController(AIController):
             current_position=output_data["reference_position"],
             current_quaternion=output_data["reference_quaternion"],
             gripper_closed=output_data["gripper_closed"],
+            diagnostics_callback=(
+                lambda diagnostics: self._trace_action_conversion(output_data["query_step"], diagnostics)
+                if diagnostics["index"] < self.cfg.num_execute_actions
+                else None
+            )
+            if self.cfg.trace_action_conversions
+            else None,
         )
         return absolute_chunk
+
+    @staticmethod
+    def _format_array(value) -> str:
+        return np.array2string(
+            np.asarray(value),
+            precision=7,
+            suppress_small=False,
+            separator=", ",
+        )
+
+    def _trace_model_input(self, query_step: int, processed: dict) -> None:
+        lowdim_state = processed["state"].detach().float().cpu().numpy()[0, 0]
+        print(
+            f"[MimicVideoTrace][query={query_step}][INPUT]\n"
+            f"  reference_position={self._format_array(processed['reference_position'])}\n"
+            f"  reference_quaternion_xyzw={self._format_array(processed['reference_quaternion'])} "
+            f"norm={np.linalg.norm(processed['reference_quaternion']):.9f}\n"
+            f"  lowdim_state_10d={self._format_array(lowdim_state)}\n"
+            f"  gripper_closed={processed['gripper_closed']}"
+        )
+
+    def _trace_action_conversion(self, query_step: int, diagnostics: dict[str, object]) -> None:
+        index = diagnostics["index"]
+        raw_action = np.asarray(diagnostics["raw_action"])
+        print(
+            f"[MimicVideoTrace][query={query_step}][action={index}][MODEL_OUTPUT_DENORMALIZED]\n"
+            f"  action_10d={self._format_array(raw_action)}\n"
+            f"  delta_xyz={self._format_array(raw_action[:3])}\n"
+            f"  rotation_6d={self._format_array(raw_action[3:9])}\n"
+            f"  gripper_model={raw_action[9]:.9f}"
+        )
+        print(
+            f"[MimicVideoTrace][query={query_step}][action={index}][ROT6D_TO_MATRIX]\n"
+            f"  raw_row_norms={self._format_array(diagnostics['raw_rotation_row_norms'])} "
+            f"raw_row_dot={diagnostics['raw_rotation_row_dot']:.9f}\n"
+            f"  delta_rotation=\n{self._format_array(diagnostics['delta_rotation'])}\n"
+            f"  determinant={diagnostics['delta_rotation_determinant']:.9f} "
+            f"orthogonality_error={diagnostics['delta_rotation_orthogonality_error']:.3e}\n"
+            f"  delta_euler_xyz_deg={self._format_array(diagnostics['delta_euler_xyz_deg'])} "
+            f"delta_angle_deg={diagnostics['delta_angle_deg']:.7f}"
+        )
+        print(
+            f"[MimicVideoTrace][query={query_step}][action={index}][COMPOSE]\n"
+            f"  previous_position={self._format_array(diagnostics['previous_position'])}\n"
+            f"  target_position={self._format_array(diagnostics['target_position'])}\n"
+            f"  previous_quaternion_xyzw={self._format_array(diagnostics['previous_quaternion'])}\n"
+            f"  previous_rotation=\n{self._format_array(diagnostics['previous_rotation'])}\n"
+            f"  target_rotation=delta_rotation@previous_rotation=\n"
+            f"{self._format_array(diagnostics['target_rotation'])}\n"
+            f"  target_euler_xyz_deg={self._format_array(diagnostics['target_euler_xyz_deg'])}\n"
+            f"  target_quaternion_xyzw={self._format_array(diagnostics['target_quaternion'])} "
+            f"norm={np.linalg.norm(diagnostics['target_quaternion']):.9f}"
+        )
+        print(
+            f"[MimicVideoTrace][query={query_step}][action={index}][GRIPPER]\n"
+            f"  was_closed={diagnostics['gripper_was_closed']} "
+            f"is_closed={diagnostics['gripper_is_closed']} "
+            f"command={diagnostics['gripper_command']}"
+        )
 
     @staticmethod
     def _save_processed_frame(processed_frame: np.ndarray, save_path: str | Path) -> None:
@@ -243,6 +310,8 @@ class MimicVideoController(AIController):
             )
 
         if self.action_buffer is None:
+            if self.cfg.trace_action_conversions:
+                self._trace_model_input(t, processed)
             raw_chunk = self._policy.predict(
                 input_vid=processed["video"],
                 state=processed["state"],
@@ -257,6 +326,7 @@ class MimicVideoController(AIController):
                     "reference_position": processed["reference_position"],
                     "reference_quaternion": processed["reference_quaternion"],
                     "gripper_closed": processed["gripper_closed"],
+                    "query_step": t,
                 }
             )
             self.action_buffer = absolute_chunk[: self.cfg.num_execute_actions].copy()

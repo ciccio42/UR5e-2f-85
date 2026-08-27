@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Literal
 
 import cv2
@@ -194,6 +195,7 @@ def action_chunk_to_absolute_poses(
     open_threshold: float = 0.7,
     open_position: float = 0.0,
     closed_position: float = 255.0,
+    diagnostics_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[np.ndarray, bool]:
     action_chunk = np.asarray(action_chunk, dtype=np.float64)
     if action_chunk.ndim == 3 and action_chunk.shape[0] == 1:
@@ -209,7 +211,14 @@ def action_chunk_to_absolute_poses(
 
     absolute_poses = np.empty((len(action_chunk), 8), dtype=np.float32)
     for index, action in enumerate(action_chunk):
+        previous_position = position.copy()
+        previous_quaternion = quaternion.copy()
+        previous_rotation = rotation.copy()
+        was_closed = gripper_closed
+
         position = position + action[:3]
+        raw_first_row = action[3:6]
+        raw_second_row = action[6:9]
         delta_rotation = rotation_6d_to_matrix(action[3:9])
         rotation = delta_rotation @ rotation
         quaternion = rotation_matrix_to_quaternion(rotation, reference_quaternion=quaternion)
@@ -222,5 +231,37 @@ def action_chunk_to_absolute_poses(
             closed_position=closed_position,
         )
         absolute_poses[index] = np.concatenate((position, quaternion, [gripper_command]))
+
+        if diagnostics_callback is not None:
+            diagnostics_callback(
+                {
+                    "index": index,
+                    "raw_action": action.copy(),
+                    "previous_position": previous_position,
+                    "target_position": position.copy(),
+                    "previous_quaternion": previous_quaternion,
+                    "target_quaternion": quaternion.copy(),
+                    "previous_rotation": previous_rotation,
+                    "delta_rotation": delta_rotation.copy(),
+                    "target_rotation": rotation.copy(),
+                    "raw_rotation_row_norms": np.array(
+                        [np.linalg.norm(raw_first_row), np.linalg.norm(raw_second_row)],
+                        dtype=np.float64,
+                    ),
+                    "raw_rotation_row_dot": float(np.dot(raw_first_row, raw_second_row)),
+                    "delta_rotation_determinant": float(np.linalg.det(delta_rotation)),
+                    "delta_rotation_orthogonality_error": float(
+                        np.linalg.norm(delta_rotation @ delta_rotation.T - np.eye(3))
+                    ),
+                    "delta_euler_xyz_deg": Rotation.from_matrix(delta_rotation).as_euler(
+                        "xyz", degrees=True
+                    ),
+                    "delta_angle_deg": float(np.degrees(Rotation.from_matrix(delta_rotation).magnitude())),
+                    "target_euler_xyz_deg": Rotation.from_matrix(rotation).as_euler("xyz", degrees=True),
+                    "gripper_was_closed": was_closed,
+                    "gripper_is_closed": gripper_closed,
+                    "gripper_command": gripper_command,
+                }
+            )
 
     return absolute_poses, gripper_closed

@@ -4,6 +4,7 @@ import math
 import pickle
 import sys
 import threading
+import time
 from pathlib import Path
 
 import message_filters
@@ -114,6 +115,7 @@ class AIControllerNode(Node):
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
+        self._last_mimic_query_time = None
 
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
@@ -413,6 +415,66 @@ class AIControllerNode(Node):
             [1.0 if self.gripper_closed else 0.0],
         ])
 
+    def _mimic_trace_enabled(self):
+        return (
+            self.ai_controller_target == 'mimic_video_controller'
+            and getattr(self.controller.cfg, 'trace_action_conversions', False)
+        )
+
+    def _trace_mimic_pose_execution(self, action, pose_duration_sec):
+        requested_position = np.asarray(action[:3], dtype=np.float64)
+        requested_quaternion = np.asarray(action[3:7], dtype=np.float64)
+
+        try:
+            trans = self.tf_buffer.lookup_transform(
+                self.frame_id,
+                self.eef_frame_name,
+                rclpy.time.Time(),
+            )
+        except Exception as exc:
+            self.get_logger().warning(
+                f'[MimicVideoTrace][ROBOT] Could not read the reached TCP pose: {exc}'
+            )
+            return
+
+        actual_position = np.array([
+            trans.transform.translation.x,
+            trans.transform.translation.y,
+            trans.transform.translation.z,
+        ])
+        actual_quaternion = np.array([
+            trans.transform.rotation.x,
+            trans.transform.rotation.y,
+            trans.transform.rotation.z,
+            trans.transform.rotation.w,
+        ])
+
+        requested_rotation = _quat2mat(requested_quaternion)
+        actual_rotation = _quat2mat(actual_quaternion)
+        residual_rotation = requested_rotation.T @ actual_rotation
+        angle_cos = np.clip((np.trace(residual_rotation) - 1.0) / 2.0, -1.0, 1.0)
+        orientation_error_deg = math.degrees(math.acos(angle_cos))
+        position_error_m = float(np.linalg.norm(actual_position - requested_position))
+        requested_euler_deg = np.degrees(_mat2euler_sxyz(requested_rotation))
+        actual_euler_deg = np.degrees(_mat2euler_sxyz(actual_rotation))
+
+        fmt = lambda value: np.array2string(
+            np.asarray(value), precision=7, suppress_small=False, separator=', '
+        )
+        self.get_logger().info(
+            '[MimicVideoTrace][ROBOT]\n'
+            f'  pose_duration_sec={pose_duration_sec:.6f}\n'
+            f'  requested_position={fmt(requested_position)}\n'
+            f'  actual_position={fmt(actual_position)} position_error_m={position_error_m:.9f}\n'
+            f'  requested_quaternion_xyzw={fmt(requested_quaternion)} '
+            f'norm={np.linalg.norm(requested_quaternion):.9f}\n'
+            f'  actual_quaternion_xyzw={fmt(actual_quaternion)} '
+            f'norm={np.linalg.norm(actual_quaternion):.9f}\n'
+            f'  requested_euler_xyz_deg={fmt(requested_euler_deg)}\n'
+            f'  actual_euler_xyz_deg={fmt(actual_euler_deg)}\n'
+            f'  orientation_error_deg={orientation_error_deg:.9f}'
+        )
+
     def _warmup_mimic_video_history(self):
         """Collect four real observations; the first inference adds the fifth frame."""
         for frame_index in range(4):
@@ -623,10 +685,26 @@ class AIControllerNode(Node):
 
                 # 3. Perform inference using the AI controller
                 step_save_path = f'{save_path}/step_{step}'
+                trace_mimic = self._mimic_trace_enabled()
+                inference_started_at = time.perf_counter()
                 out = self.controller.inference(
                                                 input_data=[images, states],
                                                 t=step,
                                                 save_path=step_save_path)
+                inference_duration_sec = time.perf_counter() - inference_started_at
+                if trace_mimic:
+                    query_interval = (
+                        None
+                        if self._last_mimic_query_time is None
+                        else inference_started_at - self._last_mimic_query_time
+                    )
+                    self._last_mimic_query_time = inference_started_at
+                    interval_text = 'first query' if query_interval is None else f'{query_interval:.6f}s'
+                    self.get_logger().info(
+                        '[MimicVideoTrace][TIMING] '
+                        f'query={step} inference_duration={inference_duration_sec:.6f}s '
+                        f'interval_since_previous_query={interval_text}'
+                    )
                 
                 predicted_bb = None
                 target_obj_prediction = None
@@ -667,13 +745,25 @@ class AIControllerNode(Node):
                         pose_request.pose.pose.orientation.y = action[4]
                         pose_request.pose.pose.orientation.z = action[5]
                         pose_request.pose.pose.orientation.w = action[6]
+                        pose_started_at = time.perf_counter()
                         future = self.set_pose_client.call_async(pose_request)
                         rclpy.spin_until_future_complete(self, future)
-                        if future.result() is not None:
-                            self.get_logger().info(f'Robot set to desired pose at step {step}')
-                        else:
+                        pose_duration_sec = time.perf_counter() - pose_started_at
+                        response = future.result()
+                        if response is None:
                             self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
                             raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                        if not response.success:
+                            self.get_logger().error(
+                                f'Failed to set robot pose at step {step}: {response.message}'
+                            )
+                            raise RuntimeError(
+                                f'Failed to set robot pose at step {step}: {response.message}'
+                            )
+
+                        self.get_logger().info(f'Robot set to desired pose at step {step}: {response.message}')
+                        if trace_mimic:
+                            self._trace_mimic_pose_execution(action, pose_duration_sec)
                         
                         # 6. Control the gripper based on the predicted action
                         self.get_logger().info(f'Controlling gripper at step {step}')   
