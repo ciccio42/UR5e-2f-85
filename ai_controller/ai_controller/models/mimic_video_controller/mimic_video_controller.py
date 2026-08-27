@@ -273,4 +273,4 @@ class MimicVideoController(AIController):
             self.action_buffer = None
             self.action_idx = 0
 
-        return [action]
+        return [[float(value) for value in action]]
