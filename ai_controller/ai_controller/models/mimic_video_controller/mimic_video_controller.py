@@ -47,6 +47,7 @@ class MimicVideoConfig:
     use_cuda_graphs: bool = False
     num_execute_actions: int = 10
     trace_action_conversions: bool = False
+    fixed_orientation_xyzw: Optional[list[float]] = None
 
 
 class MimicVideoController(AIController):
@@ -64,6 +65,7 @@ class MimicVideoController(AIController):
         self.prompt_embedding: Optional[torch.Tensor] = None
         self.gripper_closed = False
         self._embedding_cache: dict[str, torch.Tensor] = {}
+        self._fixed_orientation_xyzw: Optional[np.ndarray] = None
 
         super().__init__(model_config)
 
@@ -88,6 +90,21 @@ class MimicVideoController(AIController):
                 f"num_execute_actions must be between 1 and {ACTION_HORIZON}, "
                 f"got {self.cfg.num_execute_actions}"
             )
+        if self.cfg.fixed_orientation_xyzw is not None:
+            fixed_orientation = np.asarray(
+                self.cfg.fixed_orientation_xyzw,
+                dtype=np.float64,
+            )
+            if fixed_orientation.shape != (4,) or not np.all(np.isfinite(fixed_orientation)):
+                raise ValueError(
+                    "fixed_orientation_xyzw must contain four finite values in XYZW order."
+                )
+            fixed_orientation_norm = np.linalg.norm(fixed_orientation)
+            if fixed_orientation_norm < 1e-8:
+                raise ValueError("fixed_orientation_xyzw must not be a zero quaternion.")
+            self._fixed_orientation_xyzw = (
+                fixed_orientation / fixed_orientation_norm
+            ).astype(np.float32)
 
         self._policy = MimicVideoPolicy(
             experiment_name=self.cfg.experiment_name,
@@ -380,7 +397,30 @@ class MimicVideoController(AIController):
                 f"buffered {len(self.action_buffer)}"
             )
 
-        action = self.action_buffer[self.action_idx].copy()
+        buffer_action_idx = self.action_idx
+        action = self.action_buffer[buffer_action_idx].copy()
+        if self._fixed_orientation_xyzw is not None:
+            predicted_orientation = action[3:7].copy()
+            action[3:7] = self._fixed_orientation_xyzw
+
+            if self.cfg.trace_action_conversions:
+                quaternion_dot = np.clip(
+                    abs(float(np.dot(predicted_orientation, self._fixed_orientation_xyzw))),
+                    0.0,
+                    1.0,
+                )
+                orientation_difference_deg = float(
+                    np.degrees(2.0 * np.arccos(quaternion_dot))
+                )
+                print(
+                    f"[MimicVideoTrace][step={t}][buffer_action={buffer_action_idx}]"
+                    "[ORIENTATION_OVERRIDE]\n"
+                    f"  predicted_quaternion_xyzw="
+                    f"{self._format_array(predicted_orientation)}\n"
+                    f"  commanded_quaternion_xyzw="
+                    f"{self._format_array(self._fixed_orientation_xyzw)}\n"
+                    f"  difference_deg={orientation_difference_deg:.9f}"
+                )
         self.action_idx += 1
 
         if self.action_idx == len(self.action_buffer):

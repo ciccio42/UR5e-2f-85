@@ -43,3 +43,11 @@ num_execute_actions: 5
 
 # Print the model input and every conversion for all 15 predicted actions.
 trace_action_conversions: true
+
+# Test ablation: MoveIt receives this fixed absolute TCP orientation instead of
+# the quaternion predicted by Mimic Video. Values are in ROS XYZW order.
+fixed_orientation_xyzw:
+  - 0.9994452044624775
+  - 0.03161651380119412
+  - 0.0021438049655468088
+  - -0.010251021036213035
