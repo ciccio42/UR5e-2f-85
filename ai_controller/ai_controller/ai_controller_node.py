@@ -684,7 +684,15 @@ class AIControllerNode(Node):
                     states = None
 
                 # 3. Perform inference using the AI controller
-                step_save_path = f'{save_path}/step_{step}'
+                if self.ai_controller_target == 'mimic_video_controller':
+                    step_save_path = os.path.join(
+                        save_path,
+                        f'task_{enter_task_id}',
+                        f'traj_{self.traj_cnt:03d}',
+                        f'step_{step:06d}',
+                    )
+                else:
+                    step_save_path = f'{save_path}/step_{step}'
                 trace_mimic = self._mimic_trace_enabled()
                 inference_started_at = time.perf_counter()
                 out = self.controller.inference(

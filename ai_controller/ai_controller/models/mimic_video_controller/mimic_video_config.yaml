@@ -39,7 +39,7 @@ seed: 0
 use_cuda_graphs: false
 
 # Read only by MimicVideoController; MimicVideoPolicy always returns 15 actions.
-num_execute_actions: 1
+num_execute_actions: 5
 
-# Print the model input and every conversion for actions selected for execution.
+# Print the model input and every conversion for all 15 predicted actions.
 trace_action_conversions: true

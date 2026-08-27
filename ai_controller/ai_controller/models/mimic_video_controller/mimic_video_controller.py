@@ -214,9 +214,9 @@ class MimicVideoController(AIController):
             current_quaternion=output_data["reference_quaternion"],
             gripper_closed=output_data["gripper_closed"],
             diagnostics_callback=(
-                lambda diagnostics: self._trace_action_conversion(output_data["query_step"], diagnostics)
-                if diagnostics["index"] < self.cfg.num_execute_actions
-                else None
+                lambda diagnostics: self._trace_action_conversion(
+                    output_data["query_step"], diagnostics
+                )
             )
             if self.cfg.trace_action_conversions
             else None,
@@ -283,13 +283,51 @@ class MimicVideoController(AIController):
         )
 
     @staticmethod
-    def _save_processed_frame(processed_frame: np.ndarray, save_path: str | Path) -> None:
+    def _processed_frame_to_uint8(processed_frame: np.ndarray) -> np.ndarray:
+        """Converte un frame normalizzato Cx1xHxW in un'immagine RGB visualizzabile."""
+        processed_frame = np.asarray(processed_frame)
+        if processed_frame.ndim != 4 or processed_frame.shape[:2] != (3, 1):
+            raise ValueError(
+                "Expected a processed frame with shape (3, 1, H, W), "
+                f"got {processed_frame.shape}"
+            )
+
+        image = np.moveaxis(processed_frame[:, 0], 0, -1)
+        return np.clip((image + 1.0) * 127.5, 0, 255).astype(np.uint8)
+
+    @classmethod
+    def _save_processed_frame(cls, processed_frame: np.ndarray, save_path: str | Path) -> None:
         """Salva l'ultimo frame realmente fornito al modello per il debug del nodo."""
         save_path = Path(save_path)
         save_path.mkdir(parents=True, exist_ok=True)
-        image = np.moveaxis(processed_frame[:, 0], 0, -1)
-        image = np.clip((image + 1.0) * 127.5, 0, 255).astype(np.uint8)
-        PILImage.fromarray(image).save(save_path / "pre_processed_img_0.png")
+        PILImage.fromarray(cls._processed_frame_to_uint8(processed_frame)).save(
+            save_path / "pre_processed_img_0.png"
+        )
+
+    def _save_input_history(self, query_step: int, save_path: str | Path) -> Path:
+        """Salva, dal piu vecchio al piu recente, i cinque frame usati dalla query."""
+        if len(self.image_history) != NUM_INPUT_FRAMES:
+            raise RuntimeError(
+                f"Cannot save a {NUM_INPUT_FRAMES}-frame history: "
+                f"only {len(self.image_history)} frames are available."
+            )
+
+        history_root = Path(save_path).parent / "mimic_video_input_history"
+        query_path = history_root / f"query_step_{query_step:06d}"
+        query_path.mkdir(parents=True, exist_ok=True)
+
+        for frame_index, frame in enumerate(self.image_history):
+            suffix = ""
+            if frame_index == 0:
+                suffix = "_oldest"
+            elif frame_index == NUM_INPUT_FRAMES - 1:
+                suffix = "_newest"
+            frame_name = f"frame_{frame_index:02d}{suffix}.png"
+            PILImage.fromarray(self._processed_frame_to_uint8(frame)).save(
+                query_path / frame_name
+            )
+
+        return query_path
 
     def inference(self, input_data, t: int = 0, save_path: str | Path | None = None):
         """Restituisce una sola azione del buffer e rigenera il chunk ogni K azioni."""
@@ -310,6 +348,12 @@ class MimicVideoController(AIController):
             )
 
         if self.action_buffer is None:
+            if save_path is not None:
+                history_path = self._save_input_history(t, save_path)
+                print(
+                    f"[MimicVideoController] Saved {NUM_INPUT_FRAMES} model input frames "
+                    f"for query t={t} to {history_path}"
+                )
             if self.cfg.trace_action_conversions:
                 self._trace_model_input(t, processed)
             raw_chunk = self._policy.predict(
