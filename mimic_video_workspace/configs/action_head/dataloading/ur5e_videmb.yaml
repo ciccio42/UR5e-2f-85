@@ -5,5 +5,5 @@ defaults:
 
 dataset:
   dataset:
-    data_dir: /workspace/UR5e-2f-85/mimic_video_workspace/processed_data/ur5e_pick_place_action
+    data_dir: /workspace/UR5e-2f-85/mimic_video_workspace/processed_data/ur5e_pick_place_action_no_extension
     timestep_anchor: workspace_rgb_embedding

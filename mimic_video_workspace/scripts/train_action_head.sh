@@ -11,6 +11,8 @@
 # - Action head: 10 canali (posizione 3D, rotazione 6D, gripper), max horizon 16.
 # - DataLoader: 2 worker, prefetch factor 1, pin memory e worker persistenti attivi.
 # - Training completo: 10000 optimizer step predefiniti, configurabili con MAX_ITER.
+# - RUN_TAG aggiunge un identificatore al job; FRESH_START=1 impedisce il resume
+#   se esiste gia un latest_checkpoint.txt per lo stesso job.
 #   Gli optimizer step per epoca corrispondono al numero di chunk bilanciati diviso 12.
 # - Validation: una iniziale e una al termine di ogni epoca completa.
 # - Checkpoint: al termine di ogni epoca e alla conclusione del training.
@@ -36,6 +38,8 @@ if [[ -z "${GRAD_ACCUM_ITER:-}" ]]; then
     fi
 fi
 MAX_ITER="${MAX_ITER:-10000}"
+RUN_TAG="${RUN_TAG:-}"
+FRESH_START="${FRESH_START:-0}"
 COSMOS_CKPT_REL="${COSMOS_CKPT_REL:-checkpoints/posttraining/video2world/v2w_ur5e_pick_place_videmb_lora_rank64_lr1.778e-04_bsz1_alpha32_train/checkpoints/model/iter_000001520_fused.pt}"
 WANDB_ENV_FILE="${WANDB_ENV_FILE:-$HOME/.config/mimic-video/wandb.env}"
 
@@ -123,6 +127,7 @@ run_training() {
     local max_iter="$MAX_ITER"
     local suffix="train"
     local cosmos_checkpoint
+    local run_tag_suffix=""
     local -a smoke_overrides=()
 
     if [[ "$mode" == "smoke" ]]; then
@@ -158,8 +163,23 @@ run_training() {
     export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
 
     local experiment="w2a_ur5e_videmb_v2w_ur5e_finetuned_lr1.000e-04_layer20_bsz${BATCH_SIZE}"
-    local job_name="${experiment}_accum${GRAD_ACCUM_ITER}_${suffix}"
+    if [[ -n "$RUN_TAG" ]]; then
+        run_tag_suffix="_${RUN_TAG}"
+    fi
+    local job_name="${experiment}_accum${GRAD_ACCUM_ITER}${run_tag_suffix}_${suffix}"
+    local latest_checkpoint="$WORKSPACE/checkpoints/posttraining/world2action/$job_name/checkpoints/latest_checkpoint.txt"
     local log_dir="$WORKSPACE/outputs/training_logs"
+
+    if [[ "$FRESH_START" == "1" && -f "$latest_checkpoint" ]]; then
+        echo "Fresh start richiesto, ma il job possiede gia un checkpoint:" >&2
+        echo "$latest_checkpoint" >&2
+        echo "Usa un RUN_TAG nuovo; i checkpoint esistenti non verranno rimossi." >&2
+        exit 1
+    fi
+
+    echo "Dataset: /workspace/UR5e-2f-85/mimic_video_workspace/processed_data/ur5e_pick_place_action_no_extension"
+    echo "Job: $job_name"
+    echo "Fresh start: $FRESH_START"
 
     mkdir -p "$WANDB_DIR" "$log_dir"
     cd "$WORKSPACE/external/mimic-video/model"
@@ -196,6 +216,8 @@ run_container() {
         -e BATCH_SIZE="$BATCH_SIZE" \
         -e GRAD_ACCUM_ITER="$GRAD_ACCUM_ITER" \
         -e MAX_ITER="$MAX_ITER" \
+        -e RUN_TAG="$RUN_TAG" \
+        -e FRESH_START="$FRESH_START" \
         -e COSMOS_CKPT_REL="$COSMOS_CKPT_REL" \
         -e WANDB_ENV_FILE="$container_wandb_env" \
         -v "$REPO_ROOT":/workspace/UR5e-2f-85 \
@@ -208,9 +230,14 @@ run_container() {
 start_tmux() {
     local mode="$1"
     local command
+    local run_tag_suffix=""
 
-    SESSION_NAME="${SESSION_NAME:-action-head-bsz${BATCH_SIZE}-${mode}}"
-    CONTAINER_NAME="${CONTAINER_NAME:-mimic-video-action-bsz${BATCH_SIZE}-${mode}}"
+    if [[ -n "$RUN_TAG" ]]; then
+        run_tag_suffix="-${RUN_TAG}"
+    fi
+
+    SESSION_NAME="${SESSION_NAME:-action-head${run_tag_suffix}-bsz${BATCH_SIZE}-${mode}}"
+    CONTAINER_NAME="${CONTAINER_NAME:-mimic-video-action${run_tag_suffix}-bsz${BATCH_SIZE}-${mode}}"
 
     if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
         echo "Sessione tmux gia esistente: $SESSION_NAME" >&2
@@ -218,8 +245,8 @@ start_tmux() {
     fi
 
     printf -v command \
-        'IMAGE=%q BATCH_SIZE=%q GRAD_ACCUM_ITER=%q MAX_ITER=%q COSMOS_CKPT_REL=%q WANDB_ENV_FILE=%q CONTAINER_NAME=%q bash %q --container %q; status=$?; echo "Training terminato con stato $status"; exec bash' \
-        "$IMAGE" "$BATCH_SIZE" "$GRAD_ACCUM_ITER" "$MAX_ITER" "$COSMOS_CKPT_REL" \
+        'IMAGE=%q BATCH_SIZE=%q GRAD_ACCUM_ITER=%q MAX_ITER=%q RUN_TAG=%q FRESH_START=%q COSMOS_CKPT_REL=%q WANDB_ENV_FILE=%q CONTAINER_NAME=%q bash %q --container %q; status=$?; echo "Training terminato con stato $status"; exec bash' \
+        "$IMAGE" "$BATCH_SIZE" "$GRAD_ACCUM_ITER" "$MAX_ITER" "$RUN_TAG" "$FRESH_START" "$COSMOS_CKPT_REL" \
         "$WANDB_ENV_FILE" "$CONTAINER_NAME" "$SCRIPT_PATH" "$mode"
 
     tmux new-session -d -s "$SESSION_NAME" -n train "$command"
@@ -242,6 +269,14 @@ if [[ ! "$GRAD_ACCUM_ITER" =~ ^[1-9][0-9]*$ ]]; then
 fi
 if [[ ! "$MAX_ITER" =~ ^[1-9][0-9]*$ ]]; then
     echo "MAX_ITER deve essere un intero positivo." >&2
+    exit 1
+fi
+if [[ -n "$RUN_TAG" && ! "$RUN_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "RUN_TAG deve iniziare con un carattere alfanumerico e contenere solo lettere, numeri, punto, trattino o underscore." >&2
+    exit 1
+fi
+if [[ ! "$FRESH_START" =~ ^[01]$ ]]; then
+    echo "FRESH_START deve valere 0 oppure 1." >&2
     exit 1
 fi
 
