@@ -65,6 +65,10 @@ class EpisodeReport:
     new_embeddings: int
     dropped_nonfinal_embedding_anchors: int
     dropped_terminal_embedding_anchors: int
+    first_position_error_before_m: float
+    first_position_error_after_m: float
+    first_rotation_error_before_deg: float
+    first_rotation_error_after_deg: float
     position_error_median_m: float | None
     position_error_max_m: float | None
     rotation_error_median_deg: float | None
@@ -372,6 +376,32 @@ def kinematic_errors(data: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarra
     return position_errors, rotation_errors_deg
 
 
+def repair_first_pose_action(
+    data: dict[str, np.ndarray],
+    path: Path,
+) -> tuple[float, float, float, float]:
+    if len(data["eef_pos_lowdim"]) < 2:
+        raise ValueError(f"{path.name}: cannot repair the first action with fewer than two states.")
+
+    position_errors_before, rotation_errors_before = kinematic_errors(data)
+
+    positions = data["eef_pos_lowdim"].astype(np.float64)
+    rotations = quaternion_xyzw_to_matrix(data["eef_rot_lowdim"])
+    position_dtype = data["eef_pos_ref_delta_lowdim"].dtype
+    rotation_dtype = data["eef_rot_ref_delta_lowdim"].dtype
+
+    data["eef_pos_ref_delta_lowdim"][0] = (positions[1] - positions[0]).astype(position_dtype)
+    data["eef_rot_ref_delta_lowdim"][0] = (rotations[1] @ rotations[0].T).astype(rotation_dtype)
+
+    position_errors_after, rotation_errors_after = kinematic_errors(data)
+    return (
+        float(position_errors_before[0]),
+        float(position_errors_after[0]),
+        float(rotation_errors_before[0]),
+        float(rotation_errors_after[0]),
+    )
+
+
 def optional_error_stat(values: np.ndarray, operation: str) -> float | None:
     if not len(values):
         return None
@@ -450,6 +480,12 @@ def process_episode(
     nonfinal_dropped, terminal_dropped = remap_visual_embeddings(
         result, old_to_new, dt_ns, input_path
     )
+    (
+        first_position_error_before,
+        first_position_error_after,
+        first_rotation_error_before,
+        first_rotation_error_after,
+    ) = repair_first_pose_action(result, input_path)
     validate_compacted_data(result, step_keys, dt_ns, input_path)
 
     position_errors, rotation_errors = kinematic_errors(result)
@@ -465,6 +501,10 @@ def process_episode(
         new_embeddings=len(result[VISUAL_EMBEDDING_KEY]),
         dropped_nonfinal_embedding_anchors=nonfinal_dropped,
         dropped_terminal_embedding_anchors=terminal_dropped,
+        first_position_error_before_m=first_position_error_before,
+        first_position_error_after_m=first_position_error_after,
+        first_rotation_error_before_deg=first_rotation_error_before,
+        first_rotation_error_after_deg=first_rotation_error_after,
         position_error_median_m=optional_error_stat(position_errors, "median"),
         position_error_max_m=optional_error_stat(position_errors, "max"),
         rotation_error_median_deg=optional_error_stat(rotation_errors, "median"),
@@ -498,6 +538,7 @@ def aggregate_report(
         "removed_steps": sum(report.old_steps - report.new_steps for report in reports),
         "old_embeddings": sum(report.old_embeddings for report in reports),
         "new_embeddings": sum(report.new_embeddings for report in reports),
+        "repaired_first_pose_actions": len(reports),
         "episode_reports": [asdict(report) for report in reports],
     }
 
@@ -551,7 +592,12 @@ def main() -> None:
         print(
             f"[{episode_number}/{len(input_paths)}] {mode} {input_path.name}: "
             f"steps {report.old_steps}->{report.new_steps}, "
-            f"embeddings {report.old_embeddings}->{report.new_embeddings}"
+            f"embeddings {report.old_embeddings}->{report.new_embeddings}, "
+            f"first pose error "
+            f"pos {report.first_position_error_before_m * 1000:.6f}->"
+            f"{report.first_position_error_after_m * 1000:.6f} mm, "
+            f"rot {report.first_rotation_error_before_deg:.6f}->"
+            f"{report.first_rotation_error_after_deg:.6f} deg"
         )
 
     summary = aggregate_report(input_dir, output_dir, args.fps, reports)
