@@ -84,7 +84,7 @@ class Attention(nn.Module):
         q, k, v = qkv[0], qkv[1], qkv[2]  # [B, num_heads, N, D]
 
         if self.use_sdpa:
-            with torch.nn.attention.sdpa_kernel(SDPBackend.FLASH_ATTENTION):
+            with torch.nn.attention.sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.MATH]):
                 x = F.scaled_dot_product_attention(q, k, v, dropout_p=self.attn_drop_prob, is_causal=self.is_causal)
                 attn = None
         else:

@@ -4,6 +4,7 @@ import math
 import pickle
 import sys
 import threading
+import time
 from pathlib import Path
 
 import message_filters
@@ -89,7 +90,7 @@ class AIControllerNode(Node):
         self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
         self.declare_parameter('eef_frame_name', 'tcp_link')
         self.declare_parameter('move_robot', False)
-
+        self.declare_parameter('manual_step_waypoints', False)
 
 
         # get parameters
@@ -111,6 +112,7 @@ class AIControllerNode(Node):
         self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
         self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
         self.move_robot = self.get_parameter('move_robot').get_parameter_value().bool_value
+        self.manual_step_waypoints = self.get_parameter('manual_step_waypoints').get_parameter_value().bool_value
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
@@ -460,7 +462,7 @@ class AIControllerNode(Node):
             raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
     
     def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None,
-                     completed=True, abort_reason='', ask_results=None):
+                     completed=True, abort_reason='', ask_results=None, timing=None):
         """Save the current rollout Trajectory to a .pkl file, plus outcome metadata to a .json file."""
         complete_save_path = os.path.join(save_path, f'task_{task_id}')
         os.makedirs(complete_save_path,
@@ -476,6 +478,10 @@ class AIControllerNode(Node):
             'aborted': int(not completed),
             'abort_reason': abort_reason,
         }
+        if timing is not None:
+            trajectory_time = timing.get('trajectory_execution_sec') if isinstance(timing, dict) else timing
+            if trajectory_time is not None:
+                res_dict['trajectory_execution_sec'] = float(trajectory_time)            
         if ask_results:
             # 1. Ask for object reached
             object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
@@ -564,7 +570,8 @@ class AIControllerNode(Node):
                 return False
             
                 
-        
+    def _finish_timing(self, start_time):
+        return {'trajectory_execution_sec': time.perf_counter() - start_time} 
 
     def control_loop(self):
         """Main control loop for the AI controller."""
@@ -590,10 +597,11 @@ class AIControllerNode(Node):
 
             # create a new trajectory
             traj = Trajectory()
+            trajectory_start = time.perf_counter()
 
             try:
                 for step in range(self.max_step):
-
+                    
                     if step == 0:
                         # resetting controller state for the new task
                         self.controller.reset()
@@ -626,6 +634,7 @@ class AIControllerNode(Node):
                                                      traj_cnt=self.traj_cnt,
                                                      save_path=self.save_rollout_path)
 
+
                     # 1. Get sensor data (e.g., camera images)
                     images = self.get_synced_images()
                     if images is None:
@@ -645,7 +654,7 @@ class AIControllerNode(Node):
                     # Each controller expects a different state format (or none at all), so branch
                     # on the loaded model: CODController.pre_process() raises NotImplementedError
                     # if states is not None, while OpenVLAController needs the 8-dim proprio vector,
-                    # OSVI uses the full robot_state dict for optional grasp refinement.
+                    # OSVI uses the full robot_state dict.
                     if self.ai_controller_target == 'openvla_controller':
                         states = self._build_openvla_state(robot_state)
                     elif self.ai_controller_target == 'tinyvla_controller':
@@ -661,7 +670,6 @@ class AIControllerNode(Node):
                                                     input_data=[images, states],
                                                     t=step,
                                                     save_path=step_save_path)
-
                     predicted_bb = None
                     target_obj_prediction = None
                     if self.ai_controller_target == 'cod_controller':
@@ -689,6 +697,13 @@ class AIControllerNode(Node):
                             self._raise_if_esc_pressed()
                             # 5. Send commands to the robot (e.g., set pose, control gripper)
                             # call service to set robot to the desired pose
+                            if self.manual_step_waypoints:
+                                input(
+                                    "Press Enter to execute "
+                                    f"step {step}, waypoint/action {indx + 1}/{len(actions)} "
+                                    f"(xyz={action[:3]}, gripper={action[-1]})."
+                                )
+                                self._raise_if_esc_pressed()                            
                             self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
                             # input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
                             pose_request = GoToPose.Request()
@@ -725,6 +740,20 @@ class AIControllerNode(Node):
                             self._raise_if_esc_pressed()
                             rclpy.spin_until_future_complete(self, future)
                             self._raise_if_esc_pressed()
+
+                            if self.ai_controller_target == 'osvi_controller':
+                                goal_handle = future.result()
+                                if goal_handle is None or not goal_handle.accepted:
+                                    self.get_logger().error('Gripper goal was rejected.')
+                                    raise RuntimeError('Gripper goal was rejected.')
+                                result_future = goal_handle.get_result_async()
+                                self._raise_if_esc_pressed()
+                                rclpy.spin_until_future_complete(self, result_future)
+                                self._raise_if_esc_pressed()
+                                if result_future.result() is None:
+                                    self.get_logger().error('Failed to receive gripper action result.')
+                                    raise RuntimeError('Failed to receive gripper action result.')
+
                             if future.result() is not None:
                                 self.get_logger().info(f'Gripper command sent at step {step}')
                             else:
@@ -735,7 +764,7 @@ class AIControllerNode(Node):
                             if not self.gripper_closed and gripper_goal.command.position == 255.0:
                                 self.get_logger().info(f'Gripper is closing at step {step}')
                                 self.gripper_closed = True
-
+                        
                     # check if a transiction close->open has been made
                     episode_done = False
                     if self.gripper_closed and gripper_goal.command.position == 0.0:
@@ -757,7 +786,7 @@ class AIControllerNode(Node):
 
                     if predicted_bb is not None:
                         step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
-
+                    
                     traj.append(
                         obs=step_obs,
                         action=action,
@@ -772,7 +801,8 @@ class AIControllerNode(Node):
                                   traj=traj,
                                   save_path=self.save_rollout_path,
                                   task_id=enter_task_id,
-                                  traj_number=self.traj_cnt
+                                  traj_number=self.traj_cnt,
+                                  timing=self._finish_timing(trajectory_start)
                                   )
                 self.traj_cnt += 1
             except KeyboardInterrupt as exc:
@@ -786,7 +816,8 @@ class AIControllerNode(Node):
                                   traj_number=self.traj_cnt,
                                   completed=False,
                                   abort_reason=abort_reason,
-                                  ask_results=True
+                                  ask_results=True,
+                                  timing=self._finish_timing(trajectory_start)
                                   )
                 # OPEN GRIPPER
                 gripper_goal = GripperCommand.Goal()
@@ -810,7 +841,8 @@ class AIControllerNode(Node):
                                   traj_number=self.traj_cnt,
                                   completed=False,
                                   abort_reason=abort_reason,
-                                  ask_results=True
+                                  ask_results=True,
+                                  timing=self._finish_timing(trajectory_start)
                                   )
                 self.traj_cnt += 1
                     

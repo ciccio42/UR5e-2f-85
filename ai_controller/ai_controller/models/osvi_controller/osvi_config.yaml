@@ -56,7 +56,7 @@ control:
   gripper_open_position: 0.0
   gripper_closed_position: 255.0
   # OSVI gripper signal: values below this threshold close, values >= threshold open.
-  gripper_close_threshold: 0.19
+  gripper_close_threshold: 0.18
   max_actions_per_inference: 5
 
 
@@ -64,7 +64,24 @@ control:
 # predicts gripper close, descend vertically to that predicted grasp height, close,
 # optionally lift, then continue with the remaining predicted waypoints.
 grasp_refinement:
-  enabled: true
+  enabled: false
+  # Use the gripper-mounted ZED depth only at the first close transition.
+  # If depth/CameraInfo/TF is unavailable, OSVI falls back to the predicted waypoint.
+  use_gripper_depth: true
+  depth_camera_name: "zed_gripper"
+  depth_camera_node_name: "zed_node"
+  depth_target_frame: "base_link"
+  depth_timeout_sec: 0.25
+  camera_info_timeout_sec: 0.5
+  camera_info_retries: 3
+  tf_timeout_sec: 0.35
+  depth_scale: 1.0
+  depth_max_range_m: 1.0
+  depth_min_object_height_m: 0.01
+  depth_min_component_area_px: 20
+  depth_window_px: 5
+  depth_grasp_z_offset: 0.03
+  max_depth_xy_correction: 0.25
   approach_height: 0.04
   approach_step: 0.03
   descent_step: 0.01
@@ -80,3 +97,12 @@ safety:
   workspace_min: [-0.50, 0.20, 0.02]
   workspace_max: [0.50, 0.90, 0.50]
   min_waypoint_distance: 0.005
+
+# Debug visualization for online OSVI inference.
+# The overlay is drawn on the live front-camera frame:
+# cyan = waypoint with open gripper, red = waypoint with close gripper.
+debug:
+  show_waypoint_overlay: true
+  save_waypoint_overlay: true
+  waypoint_overlay_window: "OSVI waypoint overlay"
+  waypoint_overlay_wait_ms: 1

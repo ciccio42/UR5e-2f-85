@@ -16,6 +16,24 @@ from PIL import Image as PILImage
 from ai_controller.utils.ai_controller import AIController
 from ai_controller.utils.utils import EEF_POS_NAME, EEF_QUAT_NAME, seed_everything
 
+try:
+    import rclpy
+    import rclpy.wait_for_message
+    import tf2_ros
+    from cv_bridge import CvBridge
+    from rclpy.node import Node
+    from rclpy.time import Time as RclpyTime
+    from sensor_msgs.msg import CameraInfo
+    from sensor_msgs.msg import Image as RosImage
+except Exception:
+    rclpy = None
+    tf2_ros = None
+    CvBridge = None
+    Node = None
+    RclpyTime = None
+    CameraInfo = None
+    RosImage = None
+
 
 IMAGENET_MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 IMAGENET_STD = np.asarray([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
@@ -57,6 +75,7 @@ class OSVIConfig:
     control: dict = field(default_factory=dict)
     grasp_refinement: dict = field(default_factory=dict)
     safety: dict = field(default_factory=dict)
+    debug: dict = field(default_factory=dict)
 
 
 class TrajectoryUnpickler(pickle.Unpickler):
@@ -93,8 +112,16 @@ class OSVIController(AIController):
         self.gripper_closed = False
         self.epoch = "unknown"
         self.global_step = "unknown"
+        self._depth_ros_node = None
+        self._depth_bridge = None
+        self._depth_tf_buffer = None
+        self._depth_tf_listener = None
+        self._depth_camera_matrix = None
+        self._depth_camera_info_size = None
+        self._depth_warning_printed = False
 
         super().__init__(model_config)
+        self._maybe_init_gripper_depth_refinement()
 
         seed_everything(42)
         self.model.eval()
@@ -172,6 +199,387 @@ class OSVIController(AIController):
         self.context_source = None
         self.current_eef_quat = None
         self.gripper_closed = False
+
+    def _gripper_depth_enabled(self):
+        refine_cfg = self.cfg.grasp_refinement if self.cfg is not None else {}
+        return bool(refine_cfg.get("enabled", False)) and bool(refine_cfg.get("use_gripper_depth", False))
+
+    def _maybe_init_gripper_depth_refinement(self):
+        if not self._gripper_depth_enabled() or self._depth_ros_node is not None:
+            return
+
+        missing = [
+            name for name, value in (
+                ("rclpy", rclpy),
+                ("tf2_ros", tf2_ros),
+                ("CvBridge", CvBridge),
+                ("Node", Node),
+                ("CameraInfo", CameraInfo),
+                ("RosImage", RosImage),
+                ("RclpyTime", RclpyTime),
+            )
+            if value is None
+        ]
+        if missing:
+            self._print_depth_warning_once(
+                f"Gripper depth refinement disabled: missing ROS dependency/dependencies {missing}."
+            )
+            return
+
+        try:
+            if not rclpy.ok():
+                self._print_depth_warning_once(
+                    "Gripper depth refinement disabled: rclpy is not initialized."
+                )
+                return
+
+            refine_cfg = self.cfg.grasp_refinement
+            node_name = str(refine_cfg.get("depth_ros_node_name", "osvi_gripper_depth_refinement"))
+            self._depth_ros_node = Node(node_name)
+            self._depth_bridge = CvBridge()
+            self._depth_tf_buffer = tf2_ros.Buffer()
+            self._depth_tf_listener = tf2_ros.TransformListener(
+                self._depth_tf_buffer,
+                self._depth_ros_node,
+            )
+            print(
+                "[OSVIController] Gripper depth refinement enabled "
+                f"on {self._gripper_depth_topic()}"
+            )
+        except Exception as exc:
+            self._print_depth_warning_once(
+                f"Gripper depth refinement disabled: could not create ROS helpers ({exc})."
+            )
+            if self._depth_ros_node is not None:
+                try:
+                    self._depth_ros_node.destroy_node()
+                except Exception:
+                    pass
+            self._depth_ros_node = None
+            self._depth_bridge = None
+            self._depth_tf_buffer = None
+            self._depth_tf_listener = None
+
+    def _gripper_depth_topic(self):
+        refine_cfg = self.cfg.grasp_refinement
+        topic = refine_cfg.get("depth_topic")
+        if topic:
+            return str(topic)
+        camera_name = str(refine_cfg.get("depth_camera_name", "zed_gripper"))
+        camera_node = str(refine_cfg.get("depth_camera_node_name", "zed_node"))
+        return f"/{camera_name}/{camera_node}/depth/depth_registered"
+
+    def _gripper_camera_info_topic(self):
+        refine_cfg = self.cfg.grasp_refinement
+        topic = refine_cfg.get("camera_info_topic")
+        if topic:
+            return str(topic)
+        camera_name = str(refine_cfg.get("depth_camera_name", "zed_gripper"))
+        camera_node = str(refine_cfg.get("depth_camera_node_name", "zed_node"))
+        return f"/{camera_name}/{camera_node}/rgb/color/rect/camera_info"
+
+    def _ensure_gripper_depth_ros_ready(self):
+        if not self._gripper_depth_enabled():
+            return False
+        if self._depth_ros_node is None:
+            self._maybe_init_gripper_depth_refinement()
+        return self._depth_ros_node is not None
+
+    def _depth_refined_grasp_target(self, predicted_xyz):
+        predicted_xyz = self._apply_workspace_safety(predicted_xyz)
+        if not self._gripper_depth_enabled():
+            return predicted_xyz
+
+        depth_target = self._estimate_gripper_depth_target_base()
+        if depth_target is None:
+            return predicted_xyz
+
+        refine_cfg = self.cfg.grasp_refinement
+        refined_xyz = np.asarray(depth_target, dtype=np.float64)
+        refined_xyz[2] += float(refine_cfg.get("depth_grasp_z_offset", 0.03))
+
+        max_xy_correction = refine_cfg.get("max_depth_xy_correction", None)
+        if max_xy_correction is not None:
+            xy_delta = float(np.linalg.norm(refined_xyz[:2] - predicted_xyz[:2]))
+            if xy_delta > float(max_xy_correction):
+                print(
+                    "[OSVIController] Skipping gripper-depth refinement: "
+                    f"XY correction {xy_delta:.3f} m exceeds max_depth_xy_correction."
+                )
+                return predicted_xyz
+
+        refined_xyz = self._apply_workspace_safety(refined_xyz)
+        print(
+            "[OSVIController] Gripper-depth refinement target: "
+            f"predicted={predicted_xyz.tolist()} refined={refined_xyz.tolist()}"
+        )
+        return refined_xyz
+
+    def _estimate_gripper_depth_target_base(self):
+        if not self._ensure_gripper_depth_ros_ready():
+            return None
+        if not self._load_depth_camera_info():
+            return None
+
+        depth_m, frame_id = self._read_gripper_depth_image()
+        if depth_m is None:
+            return None
+
+        centroid = self._find_depth_object_centroid(depth_m)
+        if centroid is None:
+            self._print_depth_warning_once(
+                "Gripper depth refinement skipped: no foreground object found in depth image."
+            )
+            return None
+
+        u, v = centroid
+        depth = self._median_depth_at(depth_m, u, v)
+        if depth is None:
+            self._print_depth_warning_once(
+                "Gripper depth refinement skipped: no valid depth at object centroid."
+            )
+            return None
+
+        camera_matrix = self._scaled_depth_camera_matrix(depth_m.shape[:2])
+        point_camera = self._deproject_pixel(u, v, depth, camera_matrix)
+        return self._transform_depth_point_to_target_frame(point_camera, frame_id)
+
+    def _load_depth_camera_info(self):
+        if self._depth_camera_matrix is not None:
+            return True
+
+        refine_cfg = self.cfg.grasp_refinement
+        topic = self._gripper_camera_info_topic()
+        retries = max(1, int(refine_cfg.get("camera_info_retries", 3)))
+        timeout = float(refine_cfg.get("camera_info_timeout_sec", 0.5))
+        for _ in range(retries):
+            self._spin_depth_ros_once()
+            try:
+                ok, msg = rclpy.wait_for_message.wait_for_message(
+                    topic=topic,
+                    msg_type=CameraInfo,
+                    node=self._depth_ros_node,
+                    time_to_wait=timeout,
+                )
+            except Exception as exc:
+                self._print_depth_warning_once(
+                    f"Gripper depth refinement skipped: CameraInfo read failed ({exc})."
+                )
+                return False
+            if ok:
+                camera_matrix = np.asarray(msg.k, dtype=np.float64).reshape((3, 3))
+                if camera_matrix[0, 0] <= 0.0 or camera_matrix[1, 1] <= 0.0:
+                    self._print_depth_warning_once(
+                        f"Gripper depth refinement skipped: invalid CameraInfo K on {topic}."
+                    )
+                    return False
+                self._depth_camera_matrix = camera_matrix
+                self._depth_camera_info_size = (int(msg.width), int(msg.height))
+                return True
+
+        self._print_depth_warning_once(
+            f"Gripper depth refinement skipped: no CameraInfo received on {topic}."
+        )
+        return False
+
+    def _read_gripper_depth_image(self):
+        refine_cfg = self.cfg.grasp_refinement
+        topic = self._gripper_depth_topic()
+        timeout = float(refine_cfg.get("depth_timeout_sec", 0.25))
+        self._spin_depth_ros_once()
+        try:
+            ok, msg = rclpy.wait_for_message.wait_for_message(
+                topic=topic,
+                msg_type=RosImage,
+                node=self._depth_ros_node,
+                time_to_wait=timeout,
+            )
+        except Exception as exc:
+            self._print_depth_warning_once(
+                f"Gripper depth refinement skipped: depth read failed ({exc})."
+            )
+            return None, None
+        if not ok:
+            self._print_depth_warning_once(
+                f"Gripper depth refinement skipped: no depth image received on {topic}."
+            )
+            return None, None
+
+        frame_id = str(getattr(msg.header, "frame_id", "") or "").lstrip("/")
+        if not frame_id:
+            self._print_depth_warning_once(
+                "Gripper depth refinement skipped: depth image has no frame_id."
+            )
+            return None, None
+
+        try:
+            raw_depth = self._depth_bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
+        except Exception as exc:
+            self._print_depth_warning_once(
+                f"Gripper depth refinement skipped: depth conversion failed ({exc})."
+            )
+            return None, None
+        return self._depth_to_meters(raw_depth), frame_id
+
+    def _depth_to_meters(self, depth_image):
+        raw = np.asarray(depth_image)
+        if raw.ndim == 3:
+            raw = raw[:, :, 0]
+        scale = float(self.cfg.grasp_refinement.get("depth_scale", 1.0))
+        if np.issubdtype(raw.dtype, np.integer) and scale == 1.0:
+            scale = 0.001
+        return raw.astype(np.float64) * scale
+
+    def _find_depth_object_centroid(self, depth_m):
+        refine_cfg = self.cfg.grasp_refinement
+        max_depth = float(refine_cfg.get("depth_max_range_m", 1.0))
+        min_height = float(refine_cfg.get("depth_min_object_height_m", 0.01))
+        min_area = int(refine_cfg.get("depth_min_component_area_px", 20))
+
+        valid = np.isfinite(depth_m) & (depth_m > 0.0) & (depth_m <= max_depth)
+        if int(valid.sum()) < min_area:
+            return None
+
+        floor_depth = float(np.median(depth_m[valid]))
+        object_mask = valid & (depth_m <= floor_depth - min_height)
+        if int(object_mask.sum()) < min_area:
+            return None
+
+        mask = object_mask.astype(np.uint8)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), dtype=np.uint8))
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(mask, 8)
+
+        h, w = depth_m.shape[:2]
+        image_center = np.asarray([(w - 1) * 0.5, (h - 1) * 0.5], dtype=np.float64)
+        best_centroid = None
+        best_score = None
+        for label in range(1, num_labels):
+            area = int(stats[label, cv2.CC_STAT_AREA])
+            if area < min_area:
+                continue
+            centroid = np.asarray(centroids[label], dtype=np.float64)
+            score = float(np.linalg.norm(centroid - image_center))
+            if best_score is None or score < best_score:
+                best_score = score
+                best_centroid = centroid
+
+        if best_centroid is None:
+            return None
+        u = int(np.clip(round(best_centroid[0]), 0, w - 1))
+        v = int(np.clip(round(best_centroid[1]), 0, h - 1))
+        return u, v
+
+    def _median_depth_at(self, depth_m, u, v):
+        window = max(1, int(self.cfg.grasp_refinement.get("depth_window_px", 5)))
+        h, w = depth_m.shape[:2]
+        half = window // 2
+        u0, u1 = max(0, u - half), min(w, u + half + 1)
+        v0, v1 = max(0, v - half), min(h, v + half + 1)
+        patch = depth_m[v0:v1, u0:u1].reshape(-1)
+        max_depth = float(self.cfg.grasp_refinement.get("depth_max_range_m", 1.0))
+        valid = patch[np.isfinite(patch) & (patch > 0.0) & (patch <= max_depth)]
+        if valid.size == 0:
+            return None
+        return float(np.median(valid))
+
+    def _scaled_depth_camera_matrix(self, depth_shape):
+        camera_matrix = np.asarray(self._depth_camera_matrix, dtype=np.float64).copy()
+        if self._depth_camera_info_size is None:
+            return camera_matrix
+
+        info_w, info_h = self._depth_camera_info_size
+        depth_h, depth_w = int(depth_shape[0]), int(depth_shape[1])
+        if info_w > 0 and info_h > 0 and (info_w != depth_w or info_h != depth_h):
+            sx = depth_w / float(info_w)
+            sy = depth_h / float(info_h)
+            camera_matrix[0, 0] *= sx
+            camera_matrix[0, 2] *= sx
+            camera_matrix[1, 1] *= sy
+            camera_matrix[1, 2] *= sy
+        return camera_matrix
+
+    @staticmethod
+    def _deproject_pixel(u, v, depth, camera_matrix):
+        fx, fy = camera_matrix[0, 0], camera_matrix[1, 1]
+        cx, cy = camera_matrix[0, 2], camera_matrix[1, 2]
+        x = (float(u) - cx) * depth / fx
+        y = (float(v) - cy) * depth / fy
+        return np.asarray([x, y, depth], dtype=np.float64)
+
+    def _transform_depth_point_to_target_frame(self, point_camera, camera_frame):
+        refine_cfg = self.cfg.grasp_refinement
+        target_frame = str(
+            refine_cfg.get("depth_target_frame")
+            or self.cfg.projection.get("output_frame", "base_link")
+        ).lstrip("/")
+        camera_frame = str(camera_frame).lstrip("/")
+        if target_frame == camera_frame:
+            return np.asarray(point_camera, dtype=np.float64)
+
+        transform = self._lookup_depth_transform(target_frame, camera_frame)
+        if transform is None:
+            return None
+
+        trans = transform.transform.translation
+        rot = transform.transform.rotation
+        translation = np.asarray([trans.x, trans.y, trans.z], dtype=np.float64)
+        rotation = self._quat_xyzw_to_mat(np.asarray([rot.x, rot.y, rot.z, rot.w], dtype=np.float64))
+        return rotation @ np.asarray(point_camera, dtype=np.float64) + translation
+
+    def _lookup_depth_transform(self, target_frame, source_frame):
+        refine_cfg = self.cfg.grasp_refinement
+        timeout = float(refine_cfg.get("tf_timeout_sec", 0.35))
+        spin_dt = 0.02
+        attempts = max(1, int(np.ceil(timeout / spin_dt)))
+        last_exc = None
+        for _ in range(attempts):
+            try:
+                return self._depth_tf_buffer.lookup_transform(
+                    target_frame,
+                    source_frame,
+                    RclpyTime(),
+                )
+            except Exception as exc:
+                last_exc = exc
+                self._spin_depth_ros_once(spin_dt)
+
+        self._print_depth_warning_once(
+            "Gripper depth refinement skipped: could not transform "
+            f"{source_frame} -> {target_frame} ({last_exc})."
+        )
+        return None
+
+    def _spin_depth_ros_once(self, timeout_sec=0.02):
+        if self._depth_ros_node is None or rclpy is None:
+            return
+        try:
+            rclpy.spin_once(self._depth_ros_node, timeout_sec=timeout_sec)
+        except Exception:
+            pass
+
+    def _print_depth_warning_once(self, message):
+        if not self._depth_warning_printed:
+            print(f"[OSVIController] {message}")
+            self._depth_warning_printed = True
+
+    @staticmethod
+    def _quat_xyzw_to_mat(quat_xyzw):
+        quat_xyzw = np.asarray(quat_xyzw, dtype=np.float64)
+        norm = np.linalg.norm(quat_xyzw)
+        if norm <= 1e-8:
+            return np.eye(3, dtype=np.float64)
+        x, y, z, w = quat_xyzw / norm
+        xx, yy, zz = x * x, y * y, z * z
+        xy, xz, yz = x * y, x * z, y * z
+        wx, wy, wz = w * x, w * y, w * z
+        return np.asarray(
+            [
+                [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+                [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+                [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+            ],
+            dtype=np.float64,
+        )
 
     def load_command(self, demo_path: str, task_id: str, save_demo_frames=True, traj_cnt=0, save_path=None):
         task_folder = str(task_id)
@@ -257,9 +665,10 @@ class OSVIController(AIController):
             is_closing_transition = should_close and not self.gripper_closed
 
             if refine_enabled and is_closing_transition and not refinement_done:
+                grasp_target = self._depth_refined_grasp_target(xyz)
                 self._append_grasp_refinement(
                     actions=actions,
-                    target_xyz=xyz,
+                    target_xyz=grasp_target,
                     quat=quat,
                     open_pos=open_pos,
                     closed_pos=closed_pos,
@@ -360,9 +769,19 @@ class OSVIController(AIController):
             all_waypoints = out["waypoints"].float()
             selected_waypoints = self._select_waypoints(all_waypoints)
             base_waypoints = self._project_waypoints_to_base(selected_waypoints)
+            if self.device.type == "cuda":
+                torch.cuda.synchronize(self.device)
 
         image_np = selected_waypoints[0].detach().cpu().numpy()
         base_np = base_waypoints[0].detach().cpu().numpy()
+
+        actions = self.post_process(
+            {
+                "image_waypoints": image_np,
+                "base_waypoints": base_np,
+                "state": processed["state"],
+            }
+        )
 
         if save_path is not None:
             with open(os.path.join(save_path, f"osvi_waypoints_t{t:03d}.json"), "w") as f:
@@ -370,20 +789,70 @@ class OSVIController(AIController):
                     {
                         "image_waypoints": image_np.tolist(),
                         "base_waypoints": base_np.tolist(),
+                        "actions": [action.tolist() for action in actions],
                         "context_source": self.context_source,
                     },
                     f,
                     indent=2,
                 )
 
+            overlay = self._draw_waypoint_overlay(processed["live_frame"], image_np)
+            if bool(self.cfg.debug.get("save_waypoint_overlay", True)):
+                PILImage.fromarray(overlay).save(
+                    os.path.join(save_path, f"osvi_waypoints_overlay_t{t:03d}.png")
+                )
+        else:
+            overlay = None
+
+        if bool(self.cfg.debug.get("show_waypoint_overlay", False)):
+            if overlay is None:
+                overlay = self._draw_waypoint_overlay(processed["live_frame"], image_np)
+            self._show_waypoint_overlay(overlay)
+
+
         print(f"[OSVIController] Inference t={t}: selected {len(base_np)} waypoint(s)")
-        return self.post_process(
-            {
-                "image_waypoints": image_np,
-                "base_waypoints": base_np,
-                "state": processed["state"],
-            }
-        )
+        return actions
+
+    def _draw_waypoint_overlay(self, rgb_frame, image_waypoints):
+        overlay = np.ascontiguousarray(rgb_frame.copy())
+        height, width = overlay.shape[:2]
+        close_threshold = float(self.cfg.control.get("gripper_close_threshold", 0.1))
+
+        for idx, waypoint in enumerate(np.asarray(image_waypoints), start=1):
+            x_norm, y_norm, z_value, grip_value = [float(v) for v in waypoint[:4]]
+            col = int(round((x_norm + 1.0) * 0.5 * (width - 1)))
+            row = int(round((1.0 - y_norm) * 0.5 * (height - 1)))
+            col = int(np.clip(col, 0, width - 1))
+            row = int(np.clip(row, 0, height - 1))
+
+            is_close = grip_value >= close_threshold
+            color = (255, 40, 40) if is_close else (40, 220, 255)
+            radius = 7 if is_close else 5
+
+            cv2.circle(overlay, (col, row), radius, color, thickness=-1)
+            cv2.circle(overlay, (col, row), radius + 2, (255, 255, 255), thickness=1)
+            cv2.putText(
+                overlay,
+                f"{idx} g={grip_value:.2f} z={z_value:.2f}",
+                (min(col + 9, width - 1), max(row - 9, 12)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+        return overlay
+
+    def _show_waypoint_overlay(self, rgb_overlay):
+        window_name = str(self.cfg.debug.get("waypoint_overlay_window", "OSVI waypoint overlay"))
+        wait_ms = int(self.cfg.debug.get("waypoint_overlay_wait_ms", 1))
+        bgr_overlay = cv2.cvtColor(rgb_overlay, cv2.COLOR_RGB2BGR)
+        cv2.imshow(window_name, bgr_overlay)
+        key = cv2.waitKey(max(wait_ms, 1)) & 0xFF
+        if key == 27:
+            raise KeyboardInterrupt("OSVI waypoint overlay interrupted by ESC")
+
 
     def _select_waypoints(self, all_waypoints):
         wp_cfg = self.cfg.waypoints
