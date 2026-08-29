@@ -84,6 +84,7 @@ docker run -it --rm \
   -v "$(pwd)/../seedo_tests":/seedo_tests \
   -v "$(pwd)/../test_isaac":/test_isaac \
   -v "$(pwd)/../test_real":/test_real \
+  -v "$(pwd)/../scene_capture":/scene_capture \
   seedo_ros2:latest
 ```
 

@@ -92,7 +92,7 @@ ros2 run ai_controller ai_controller_node \
     -p model_config_path:="${CONFIG_PATH}" \
     -p task_name:=pick_place \
     -p demo_path:="${DEMO_PATH}" \
-    -p seedo_precomputed_action_plan_path:=/test_real/test_task03_1/action_planning/action_plan.json \
+    -p seedo_precomputed_action_plan_path:=/test_real/test_task04_1/action_planning/action_plan.json \
     -p seedo_artifacts_dir:="${RUN_DIR}" \
     -p save_rollout_path:="${RUN_DIR}/rollouts" \
     -p move_robot:=true \

@@ -37,39 +37,6 @@ Never invent, remove, merge or duplicate objects.
 Your task is ONLY to assign one semantic name to every provided raw object.
 
 ------------------------------------------------------------
-CUBES
-------------------------------------------------------------
-
-Cube semantic identity has already been determined by the perception system.
-
-For every cube, the detector label is authoritative and already has the exact form:
-
-"<colour> cube"
-
-Examples:
-
-red cube
-
-green cube
-
-blue cube
-
-yellow cube
-
-For cubes, copy the detector label exactly as the semantic name.
-
-Do NOT infer, verify, correct, or change the cube colour from the RGB image.
-
-Do NOT use object appearance, annotation colours, contours, shadows,
-reflections, or illumination to determine cube identity.
-
-If a perceived cube has detector label "red cube", its semantic name MUST be
-"red cube".
-
-If a perceived cube has detector label "green cube", its semantic name MUST be
-"green cube", and so on.
-
-------------------------------------------------------------
 STORAGE BINS
 ------------------------------------------------------------
 
@@ -94,6 +61,43 @@ The third smallest x coordinate corresponds to:
 and so on.
 
 Do NOT use the raw object numbering to infer the ordinal.
+
+------------------------------------------------------------
+NON-BIN OBJECTS
+------------------------------------------------------------
+
+Semantic identity for every non-bin object has already been
+determined by the perception system.
+
+For every non-bin object, detector_label is authoritative.
+
+The detector label has the form:
+
+"<colour> <object type>"
+
+Examples:
+
+"red cube"
+"blue ring"
+"green cylinder"
+"yellow star"
+
+Copy detector_label EXACTLY as semantic_name.
+
+Do NOT:
+- infer the colour again from RGB;
+- infer the object type again from RGB;
+- verify or correct the detector label;
+- replace the detector label with a synonym;
+- add spatial descriptions.
+
+For example:
+
+detector_label = "blue ring"
+semantic_name MUST be "blue ring"
+
+detector_label = "red cube"
+semantic_name MUST be "red cube"
 
 ------------------------------------------------------------
 OUTPUT

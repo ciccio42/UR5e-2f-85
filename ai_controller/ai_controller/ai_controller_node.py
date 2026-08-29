@@ -868,16 +868,24 @@ class AIControllerNode(Node):
                 .lower()
             )
 
-            if semantic_name not in semantic_to_dataset_name:
-                raise RuntimeError(
-                    "Unsupported semantic object name while "
-                    "building dataset bounding boxes: "
-                    f"{semantic_name!r}"
+            if semantic_name in semantic_to_dataset_name:
+                dataset_name = semantic_to_dataset_name[
+                    semantic_name
+                ]
+            else:
+                # Generic semantic objects introduced by the new
+                # ScenePerceiver, e.g.:
+                #
+                #   "blue ring"      -> "blue_ring"
+                #   "red cylinder"   -> "red_cylinder"
+                #   "green star"     -> "green_star"
+                #
+                # The four legacy cubes and storage bins keep their
+                # original dataset-compatible names through the map above.
+                dataset_name = (
+                    semantic_name
+                    .replace(" ", "_")
                 )
-
-            dataset_name = semantic_to_dataset_name[
-                semantic_name
-            ]
 
             mask = raw_object.mask
 
