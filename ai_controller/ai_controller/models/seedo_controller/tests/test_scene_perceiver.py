@@ -1,12 +1,130 @@
 from __future__ import annotations
 
 import argparse
+import json
+from pathlib import Path
 
 from .common import build_scene_perception_result
+
+
+def _ask_yes_no(question: str) -> bool:
+    while True:
+        answer = input(
+            f"{question} [y/n]: "
+        ).strip().lower()
+
+        if answer in {"y", "yes"}:
+            return True
+
+        if answer in {"n", "no"}:
+            return False
+
+        print(
+            "Please answer with 'y'/'yes' or 'n'/'no'."
+        )
+
+
+def _ask_int_range(
+    question: str,
+    min_value: int,
+    max_value: int,
+) -> int:
+    while True:
+        answer = input(
+            f"{question} [{min_value}-{max_value}]: "
+        ).strip()
+
+        try:
+            value = int(answer)
+        except ValueError:
+            print(
+                f"Please enter an integer between "
+                f"{min_value} and {max_value}."
+            )
+            continue
+
+        if min_value <= value <= max_value:
+            return value
+
+        print(
+            f"Please enter an integer between "
+            f"{min_value} and {max_value}."
+        )
+
+
+def _compute_metrics(
+    true_positives: int,
+    false_positives: int,
+    false_negatives: int,
+) -> dict[str, float]:
+    tp = true_positives
+    fp = false_positives
+    fn = false_negatives
+
+    accuracy_denominator = (
+        tp + fp + fn
+    )
+
+    precision_denominator = (
+        tp + fp
+    )
+
+    recall_denominator = (
+        tp + fn
+    )
+
+    f1_denominator = (
+        (2 * tp) + fp + fn
+    )
+
+    accuracy = (
+        tp / accuracy_denominator
+        if accuracy_denominator > 0
+        else 0.0
+    )
+
+    precision = (
+        tp / precision_denominator
+        if precision_denominator > 0
+        else 0.0
+    )
+
+    recall = (
+        tp / recall_denominator
+        if recall_denominator > 0
+        else 0.0
+    )
+
+    f1_score = (
+        (2 * tp) / f1_denominator
+        if f1_denominator > 0
+        else 0.0
+    )
+
+    return {
+        "accuracy_percent": round(
+            accuracy * 100.0,
+            2,
+        ),
+        "precision_percent": round(
+            precision * 100.0,
+            2,
+        ),
+        "recall_percent": round(
+            recall * 100.0,
+            2,
+        ),
+        "f1_score_percent": round(
+            f1_score * 100.0,
+            2,
+        ),
+    }
+
 
 def run_scene_perceiver_test(
     args: argparse.Namespace,
 ) -> int:
+
     perception_result = (
         build_scene_perception_result(
             args
@@ -35,6 +153,7 @@ def run_scene_perceiver_test(
         )
 
     for obj in raw_scene.objects:
+
         if not obj.object_id.strip():
             raise AssertionError(
                 "Detected object has an empty object ID."
@@ -66,12 +185,14 @@ def run_scene_perceiver_test(
             )
 
     if args.artifacts_dir is not None:
+
         if (
             perception_result.overlay_image_path
             is None
         ):
             raise AssertionError(
-                "ScenePerceiver did not return an overlay path."
+                "ScenePerceiver did not return "
+                "an overlay path."
             )
 
         if (
@@ -103,34 +224,48 @@ def run_scene_perceiver_test(
                 f"{perception_result.raw_scene_json_path}"
             )
 
-    print("\n=== RAW SCENE STATE ===")
+    # ---------------------------------------------------------
+    # Raw scene report
+    # ---------------------------------------------------------
+
+    print(
+        "\n=== RAW SCENE STATE ==="
+    )
+
     print(
         f"Detected objects: "
         f"{len(raw_scene.objects)}"
     )
 
     for obj in raw_scene.objects:
+
         print()
+
         print(
             f"Object ID:        "
             f"{obj.object_id}"
         )
+
         print(
             f"Label:            "
             f"{obj.label}"
         )
+
         print(
             f"Pixel:            "
             f"{obj.pixel_coordinates}"
         )
+
         print(
             f"Confidence:       "
             f"{obj.confidence}"
         )
+
         print(
             f"Camera position:  "
             f"{obj.position_camera}"
         )
+
         print(
             f"Base position:    "
             f"{obj.position_base}"
@@ -154,6 +289,459 @@ def run_scene_perceiver_test(
             f"{perception_result.raw_scene_json_path}"
         )
 
-    print("\nTEST PASSED")
+    # ---------------------------------------------------------
+    # Manual evaluation
+    # ---------------------------------------------------------
+
+    print(
+        "\n=== MANUAL SCENE PERCEPTION EVALUATION ==="
+    )
+
+    print(
+        "\nReview the raw scene labels and overlay "
+        "before answering."
+    )
+
+    distractors_present = _ask_yes_no(
+        "Are there distractors in the scene?"
+    )
+
+    # ---------------------------------------------------------
+    # Object class - cubes
+    # ---------------------------------------------------------
+
+    object_class_answers = {
+        "red_cube": _ask_yes_no(
+            "Was the red ground-truth cube correctly "
+            "detected as a cube?"
+        ),
+        "green_cube": _ask_yes_no(
+            "Was the green ground-truth cube correctly "
+            "detected as a cube?"
+        ),
+        "yellow_cube": _ask_yes_no(
+            "Was the yellow ground-truth cube correctly "
+            "detected as a cube?"
+        ),
+        "blue_cube": _ask_yes_no(
+            "Was the blue ground-truth cube correctly "
+            "detected as a cube?"
+        ),
+    }
+
+    storage_bins_detected = _ask_int_range(
+        "How many of the 4 storage bins were "
+        "detected correctly?",
+        0,
+        4,
+    )
+
+    # ---------------------------------------------------------
+    # Object class - distractors
+    # ---------------------------------------------------------
+
+    distractor_class_answers = {}
+
+    if distractors_present:
+
+        distractor_class_answers = {
+            "blue_ring": _ask_yes_no(
+                "Was the blue ground-truth ring correctly "
+                "detected as a ring?"
+            ),
+            "yellow_ring": _ask_yes_no(
+                "Was the yellow ground-truth ring correctly "
+                "detected as a ring?"
+            ),
+            "gray_ring": _ask_yes_no(
+                "Was the gray ground-truth ring correctly "
+                "detected as a ring?"
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # Object attributes - cubes
+    # ---------------------------------------------------------
+
+    object_attribute_answers = {
+        "red_cube": _ask_yes_no(
+            "Was the red color correctly associated "
+            "with the cube?"
+        ),
+        "yellow_cube": _ask_yes_no(
+            "Was the yellow color correctly associated "
+            "with the cube?"
+        ),
+        "green_cube": _ask_yes_no(
+            "Was the green color correctly associated "
+            "with the cube?"
+        ),
+        "blue_cube": _ask_yes_no(
+            "Was the blue color correctly associated "
+            "with the cube?"
+        ),
+    }
+
+    # ---------------------------------------------------------
+    # Object attributes - distractors
+    # ---------------------------------------------------------
+
+    distractor_attribute_answers = {}
+
+    if distractors_present:
+
+        distractor_attribute_answers = {
+            "blue_ring": _ask_yes_no(
+                "Was the blue color correctly associated "
+                "with the ring?"
+            ),
+            "yellow_ring": _ask_yes_no(
+                "Was the yellow color correctly associated "
+                "with the ring?"
+            ),
+            "gray_ring": _ask_yes_no(
+                "Was the gray color correctly associated "
+                "with the ring?"
+            ),
+        }
+
+    # ---------------------------------------------------------
+    # False positives
+    # ---------------------------------------------------------
+
+    object_class_false_positives = (
+        _ask_int_range(
+            "How many incorrect object-class "
+            "predictions were produced?",
+            0,
+            100,
+        )
+    )
+
+    object_attribute_false_positives = (
+        _ask_int_range(
+            "How many incorrect color associations "
+            "were produced?",
+            0,
+            100,
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Object class TP / FP / FN
+    # ---------------------------------------------------------
+
+    cube_class_true_positives = sum(
+        object_class_answers.values()
+    )
+
+    distractor_class_true_positives = sum(
+        distractor_class_answers.values()
+    )
+
+    object_class_true_positives = (
+        cube_class_true_positives
+        + storage_bins_detected
+        + distractor_class_true_positives
+    )
+
+    object_class_ground_truth = (
+        8
+        + (
+            3
+            if distractors_present
+            else 0
+        )
+    )
+
+    object_class_false_negatives = (
+        object_class_ground_truth
+        - object_class_true_positives
+    )
+
+    object_class_metrics = (
+        _compute_metrics(
+            true_positives=(
+                object_class_true_positives
+            ),
+            false_positives=(
+                object_class_false_positives
+            ),
+            false_negatives=(
+                object_class_false_negatives
+            ),
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Object attribute TP / FP / FN
+    # ---------------------------------------------------------
+
+    cube_attribute_true_positives = sum(
+        object_attribute_answers.values()
+    )
+
+    distractor_attribute_true_positives = sum(
+        distractor_attribute_answers.values()
+    )
+
+    object_attribute_true_positives = (
+        cube_attribute_true_positives
+        + distractor_attribute_true_positives
+    )
+
+    object_attribute_ground_truth = (
+        4
+        + (
+            3
+            if distractors_present
+            else 0
+        )
+    )
+
+    object_attribute_false_negatives = (
+        object_attribute_ground_truth
+        - object_attribute_true_positives
+    )
+
+    object_attribute_metrics = (
+        _compute_metrics(
+            true_positives=(
+                object_attribute_true_positives
+            ),
+            false_positives=(
+                object_attribute_false_positives
+            ),
+            false_negatives=(
+                object_attribute_false_negatives
+            ),
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Evaluation JSON
+    # ---------------------------------------------------------
+
+    evaluation_result = {
+        "test": "scene_perceiver",
+        "scene_dir": (
+            str(args.scene_dir)
+            if args.scene_dir is not None
+            else None
+        ),
+        "distractors_present": (
+            distractors_present
+        ),
+        "answers": {
+            "object_class_detection": {
+                "cubes": (
+                    object_class_answers
+                ),
+                "storage_bins": {
+                    "correctly_detected": (
+                        storage_bins_detected
+                    ),
+                    "expected": 4,
+                },
+                "distractors": (
+                    distractor_class_answers
+                ),
+            },
+            "object_attribute_association": {
+                "cubes": (
+                    object_attribute_answers
+                ),
+                "distractors": (
+                    distractor_attribute_answers
+                ),
+            },
+            "false_positives": {
+                "object_class": (
+                    object_class_false_positives
+                ),
+                "object_attribute": (
+                    object_attribute_false_positives
+                ),
+            },
+        },
+        "metrics": {
+            "object_class": {
+                "true_positives": (
+                    object_class_true_positives
+                ),
+                "false_positives": (
+                    object_class_false_positives
+                ),
+                "false_negatives": (
+                    object_class_false_negatives
+                ),
+                "ground_truth": (
+                    object_class_ground_truth
+                ),
+                **object_class_metrics,
+            },
+            "object_attribute": {
+                "true_positives": (
+                    object_attribute_true_positives
+                ),
+                "false_positives": (
+                    object_attribute_false_positives
+                ),
+                "false_negatives": (
+                    object_attribute_false_negatives
+                ),
+                "ground_truth": (
+                    object_attribute_ground_truth
+                ),
+                **object_attribute_metrics,
+            },
+        },
+    }
+
+    if args.artifacts_dir is not None:
+
+        evaluation_dir = (
+            Path(args.artifacts_dir)
+            .expanduser()
+            .resolve()
+        )
+
+    elif (
+        perception_result.raw_scene_json_path
+        is not None
+    ):
+
+        evaluation_dir = (
+            perception_result
+            .raw_scene_json_path
+            .parent
+        )
+
+    else:
+
+        evaluation_dir = (
+            Path.cwd()
+        )
+
+    evaluation_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    evaluation_json_path = (
+        evaluation_dir
+        / "scene_perceiver_evaluation.json"
+    )
+
+    with evaluation_json_path.open(
+        "w",
+        encoding="utf-8",
+    ) as stream:
+
+        json.dump(
+            evaluation_result,
+            stream,
+            indent=4,
+        )
+
+    # ---------------------------------------------------------
+    # Final report
+    # ---------------------------------------------------------
+
+    print(
+        "\n=== EVALUATION RESULTS ==="
+    )
+
+    print(
+        "Scene with distractors: "
+        f"{'yes' if distractors_present else 'no'}"
+    )
+
+    print(
+        "\n=== OBJECT CLASS METRICS ==="
+    )
+
+    print(
+        "TP: "
+        f"{object_class_true_positives}"
+    )
+
+    print(
+        "FP: "
+        f"{object_class_false_positives}"
+    )
+
+    print(
+        "FN: "
+        f"{object_class_false_negatives}"
+    )
+
+    print(
+        "Accuracy:  "
+        f"{object_class_metrics['accuracy_percent']:.2f}%"
+    )
+
+    print(
+        "Precision: "
+        f"{object_class_metrics['precision_percent']:.2f}%"
+    )
+
+    print(
+        "Recall:    "
+        f"{object_class_metrics['recall_percent']:.2f}%"
+    )
+
+    print(
+        "F1-score:  "
+        f"{object_class_metrics['f1_score_percent']:.2f}%"
+    )
+
+    print(
+        "\n=== OBJECT ATTRIBUTE METRICS ==="
+    )
+
+    print(
+        "TP: "
+        f"{object_attribute_true_positives}"
+    )
+
+    print(
+        "FP: "
+        f"{object_attribute_false_positives}"
+    )
+
+    print(
+        "FN: "
+        f"{object_attribute_false_negatives}"
+    )
+
+    print(
+        "Accuracy:  "
+        f"{object_attribute_metrics['accuracy_percent']:.2f}%"
+    )
+
+    print(
+        "Precision: "
+        f"{object_attribute_metrics['precision_percent']:.2f}%"
+    )
+
+    print(
+        "Recall:    "
+        f"{object_attribute_metrics['recall_percent']:.2f}%"
+    )
+
+    print(
+        "F1-score:  "
+        f"{object_attribute_metrics['f1_score_percent']:.2f}%"
+    )
+
+    print(
+        "\nEvaluation JSON: "
+        f"{evaluation_json_path}"
+    )
+
+    print(
+        "\nTEST PASSED"
+    )
 
     return 0
