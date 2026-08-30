@@ -4,7 +4,7 @@
 experiment_name: "w2a_ur5e_videmb_v2w_ur5e_finetuned_lr1.000e-04_layer20_bsz1"
 
 video_model_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/posttraining/video2world/v2w_ur5e_pick_place_videmb_lora_rank64_lr1.778e-04_bsz1_alpha32_train/checkpoints/model/iter_000001520_fused.pt"
-action_model_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/posttraining/world2action/w2a_ur5e_videmb_v2w_ur5e_finetuned_lr1.000e-04_layer20_bsz1_accum12_train/checkpoints/model/iter_000010000.pt"
+action_model_path: "${MIMIC_VIDEO_WORKSPACE}/checkpoints/posttraining/world2action/w2a_ur5e_videmb_v2w_ur5e_finetuned_lr1.000e-04_layer20_bsz1_accum12_no_extension_v1_train/checkpoints/model/iter_000010000.pt"
 dataset_statistics_path: "${MIMIC_VIDEO_DATASET_STATISTICS_PATH}"
 
 # precomputed: load a saved embedding without loading T5.
@@ -46,8 +46,10 @@ trace_action_conversions: true
 
 # Test ablation: MoveIt receives this fixed absolute TCP orientation instead of
 # the quaternion predicted by Mimic Video. Values are in ROS XYZW order.
-fixed_orientation_xyzw:
-  - 0.9994452044624775
-  - 0.03161651380119412
-  - 0.0021438049655468088
-  - -0.010251021036213035
+#fixed_orientation_xyzw:
+#  - 0.9994452044624775
+#  - 0.03161651380119412
+#  - 0.0021438049655468088
+#  - -0.010251021036213035
+
+fixed_orientation_xyzw: null
