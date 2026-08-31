@@ -1,3 +1,7 @@
 [submodule "mimic_video_workspace/external/mimic-video"]
     path = mimic_video_workspace/external/mimic-video
     url = https://github.com/mimic-video/mimic-video.git
+
+[submodule "interleave_pi_zero_workspace/external/Interleave-VLA"]
+    path = interleave_pi_zero_workspace/external/Interleave-VLA
+    url = https://github.com/Clex-Auciniello/Interleave-VLA.git
