@@ -435,24 +435,12 @@ def run_scene_perceiver_test(
         object_class_answers.values()
     )
 
-    distractor_class_true_positives = sum(
-        distractor_class_answers.values()
-    )
-
     object_class_true_positives = (
         cube_class_true_positives
         + storage_bins_detected
-        + distractor_class_true_positives
     )
 
-    object_class_ground_truth = (
-        8
-        + (
-            3
-            if distractors_present
-            else 0
-        )
-    )
+    object_class_ground_truth = 8
 
     object_class_false_negatives = (
         object_class_ground_truth
@@ -481,23 +469,11 @@ def run_scene_perceiver_test(
         object_attribute_answers.values()
     )
 
-    distractor_attribute_true_positives = sum(
-        distractor_attribute_answers.values()
-    )
-
     object_attribute_true_positives = (
         cube_attribute_true_positives
-        + distractor_attribute_true_positives
     )
 
-    object_attribute_ground_truth = (
-        4
-        + (
-            3
-            if distractors_present
-            else 0
-        )
-    )
+    object_attribute_ground_truth = 4
 
     object_attribute_false_negatives = (
         object_attribute_ground_truth
