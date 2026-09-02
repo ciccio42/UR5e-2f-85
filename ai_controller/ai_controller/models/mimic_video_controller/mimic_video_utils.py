@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from scipy.spatial.transform import Rotation
 
 
-FRONT_CROP_MARGINS = (0, 30, 140, 120)  # top, bottom, left, right --> valori presi dal codice che crea tfrecord
+FRONT_CROP_MARGINS = (0, 10, 130, 100)  # top, bottom, left, right --> valori presi dal codice che crea tfrecord
 DATASET_IMAGE_SIZE = (224, 224)  # width, height
 PREPROCESS_VIDEO_SIZE = (320, 240)  # width, height
 MODEL_IMAGE_SIZE = (640, 480)  # width, height
