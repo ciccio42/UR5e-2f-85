@@ -44,7 +44,7 @@ diff --git a/model/cosmos_predict2/data/resumable_sampler.py b/model/cosmos_pred
 +        chunk_reader = getattr(self.dataset, "_chunk_reader", None)
 +        return (
 +            dataset_dir is not None
-+            and dataset_dir.name == "ur5e_pick_place_action"
++            and dataset_dir.name == "ur5e_pick_place_action_7d"
 +            and chunk_reader is not None
 +        )
 +
