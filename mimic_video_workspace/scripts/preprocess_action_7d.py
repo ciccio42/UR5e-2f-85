@@ -29,9 +29,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 import safetensors.numpy as st_np
-import safetensors.torch as st_torch
 import tensorflow_datasets as tfds
-import torch
 from scipy.spatial.transform import Rotation
 
 
@@ -520,25 +518,29 @@ def video_embedding_path(
         / f"{episode_name}{video_suffix}.safetensors"
     )
 
-
 def read_language_embedding(
     path: Path,
 ) -> np.ndarray:
     """
-    Reuse the exact convention used by
-    transfer_embeddings_to_actions.py.
+    Load the already-computed T5 embedding directly as NumPy.
+
+    No PyTorch dependency is needed during preprocessing.
     """
-    encoded_text = (
-        st_torch.load_file(path)["encoded_text"]
+    data = st_np.load_file(path)
+
+    if "encoded_text" not in data:
+        raise KeyError(
+            f"{path.name}: missing 'encoded_text'"
+        )
+
+    encoded_text = data["encoded_text"].astype(
+        np.float32,
+        copy=False,
     )
 
     return np.ascontiguousarray(
-        encoded_text
-        .to(torch.float32)
-        .cpu()
-        .numpy()[None]
+        encoded_text[None]
     )
-
 
 # ======================================================================
 # EXTENSION MAPPING
