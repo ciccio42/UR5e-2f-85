@@ -16,7 +16,7 @@ data_components:
     obs_type: ${ObsType:CARTESIAN_POS}
     repr: ${LieRepr:OTHER}
   eef_rot_ref_delta_lowdim:
-    obs_type: ${ObsType:ROTATION_MATRIX}
+    obs_type: ${ObsType:CARTESIAN_POS}
     repr: ${LieRepr:OTHER}
   gripper_action_lowdim:
     obs_type: ${ObsType:BINARY_GRIPPER}
@@ -25,8 +25,8 @@ data_components:
     obs_type: ${ObsType:CARTESIAN_POS}
     repr: ${LieRepr:ABSOLUTE}
   eef_rot_lowdim:
-    obs_type: ${ObsType:QUAT}
-    repr: ${LieRepr:ABSOLUTE}
+    obs_type: ${ObsType:CARTESIAN_POS}
+    repr: ${LieRepr:OTHER}
   gripper_lowdim:
     obs_type: ${ObsType:BINARY_GRIPPER}
     repr: null

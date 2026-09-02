@@ -1,10 +1,4 @@
 data_transforms:
-  - name: ToRotationMatrix
-    targets: [obs/eef_rot_lowdim]
-
-  - name: RotationMatrixTo6D
-    targets: [action/eef_rot_ref_delta_lowdim, obs/eef_rot_lowdim]
-
   - name: Flatten
     targets: [action/eef_rot_ref_delta_lowdim, obs/eef_rot_lowdim]
 
