@@ -256,45 +256,108 @@ class MimicVideoController(AIController):
             f"  reference_position={self._format_array(processed['reference_position'])}\n"
             f"  reference_quaternion_xyzw={self._format_array(processed['reference_quaternion'])} "
             f"norm={np.linalg.norm(processed['reference_quaternion']):.9f}\n"
-            f"  lowdim_state_10d={self._format_array(lowdim_state)}\n"
+            #f"  lowdim_state_10d={self._format_array(lowdim_state)}\n"
+            f"  state_rpy_rad={self._format_array(lowdim_state[3:6])}\n"
+            f"  state_rpy_deg={self._format_array(np.degrees(lowdim_state[3:6]))}\n"
+            f"  lowdim_state_7d={self._format_array(lowdim_state)}\n"
             f"  gripper_closed={processed['gripper_closed']}"
         )
 
-    def _trace_action_conversion(self, query_step: int, diagnostics: dict[str, object]) -> None:
+    # def _trace_action_conversion(self, query_step: int, diagnostics: dict[str, object]) -> None:
+    #     index = diagnostics["index"]
+    #     raw_action = np.asarray(diagnostics["raw_action"])
+    #     print(
+    #         f"[MimicVideoTrace][query={query_step}][action={index}][MODEL_OUTPUT_DENORMALIZED]\n"
+    #         f"  action_10d={self._format_array(raw_action)}\n"
+    #         f"  delta_xyz={self._format_array(raw_action[:3])}\n"
+    #         f"  rotation_6d={self._format_array(raw_action[3:9])}\n"
+    #         f"  gripper_model={raw_action[9]:.9f}"
+    #     )
+    #     print(
+    #         f"[MimicVideoTrace][query={query_step}][action={index}][ROT6D_TO_MATRIX]\n"
+    #         f"  raw_row_norms={self._format_array(diagnostics['raw_rotation_row_norms'])} "
+    #         f"raw_row_dot={diagnostics['raw_rotation_row_dot']:.9f}\n"
+    #         f"  delta_rotation=\n{self._format_array(diagnostics['delta_rotation'])}\n"
+    #         f"  determinant={diagnostics['delta_rotation_determinant']:.9f} "
+    #         f"orthogonality_error={diagnostics['delta_rotation_orthogonality_error']:.3e}\n"
+    #         f"  delta_euler_xyz_deg={self._format_array(diagnostics['delta_euler_xyz_deg'])} "
+    #         f"delta_angle_deg={diagnostics['delta_angle_deg']:.7f}"
+    #     )
+    #     print(
+    #         f"[MimicVideoTrace][query={query_step}][action={index}][COMPOSE]\n"
+    #         f"  previous_position={self._format_array(diagnostics['previous_position'])}\n"
+    #         f"  target_position={self._format_array(diagnostics['target_position'])}\n"
+    #         f"  previous_quaternion_xyzw={self._format_array(diagnostics['previous_quaternion'])}\n"
+    #         f"  previous_rotation=\n{self._format_array(diagnostics['previous_rotation'])}\n"
+    #         f"  target_rotation=delta_rotation@previous_rotation=\n"
+    #         f"{self._format_array(diagnostics['target_rotation'])}\n"
+    #         f"  target_euler_xyz_deg={self._format_array(diagnostics['target_euler_xyz_deg'])}\n"
+    #         f"  target_quaternion_xyzw={self._format_array(diagnostics['target_quaternion'])} "
+    #         f"norm={np.linalg.norm(diagnostics['target_quaternion']):.9f}"
+    #     )
+    #     print(
+    #         f"[MimicVideoTrace][query={query_step}][action={index}][GRIPPER]\n"
+    #         f"  was_closed={diagnostics['gripper_was_closed']} "
+    #         f"is_closed={diagnostics['gripper_is_closed']} "
+    #         f"command={diagnostics['gripper_command']}"
+    #     )
+
+    def _trace_action_conversion(
+        self,
+        query_step: int,
+        diagnostics: dict[str, object],
+    ) -> None:
         index = diagnostics["index"]
         raw_action = np.asarray(diagnostics["raw_action"])
+
         print(
-            f"[MimicVideoTrace][query={query_step}][action={index}][MODEL_OUTPUT_DENORMALIZED]\n"
-            f"  action_10d={self._format_array(raw_action)}\n"
+            f"[MimicVideoTrace][query={query_step}][action={index}]"
+            "[MODEL_OUTPUT_DENORMALIZED]\n"
+            f"  action_7d={self._format_array(raw_action)}\n"
             f"  delta_xyz={self._format_array(raw_action[:3])}\n"
-            f"  rotation_6d={self._format_array(raw_action[3:9])}\n"
-            f"  gripper_model={raw_action[9]:.9f}"
+            f"  delta_rpy_rad={self._format_array(raw_action[3:6])}\n"
+            f"  delta_rpy_deg={self._format_array(diagnostics['raw_delta_rpy_deg'])}\n"
+            f"  gripper_model={raw_action[6]:.9f}"
         )
+
         print(
-            f"[MimicVideoTrace][query={query_step}][action={index}][ROT6D_TO_MATRIX]\n"
-            f"  raw_row_norms={self._format_array(diagnostics['raw_rotation_row_norms'])} "
-            f"raw_row_dot={diagnostics['raw_rotation_row_dot']:.9f}\n"
-            f"  delta_rotation=\n{self._format_array(diagnostics['delta_rotation'])}\n"
+            f"[MimicVideoTrace][query={query_step}][action={index}]"
+            "[RPY_TO_MATRIX]\n"
+            f"  delta_rotation=\n"
+            f"{self._format_array(diagnostics['delta_rotation'])}\n"
             f"  determinant={diagnostics['delta_rotation_determinant']:.9f} "
-            f"orthogonality_error={diagnostics['delta_rotation_orthogonality_error']:.3e}\n"
-            f"  delta_euler_xyz_deg={self._format_array(diagnostics['delta_euler_xyz_deg'])} "
+            f"orthogonality_error="
+            f"{diagnostics['delta_rotation_orthogonality_error']:.3e}\n"
+            f"  delta_euler_xyz_deg="
+            f"{self._format_array(diagnostics['delta_euler_xyz_deg'])} "
             f"delta_angle_deg={diagnostics['delta_angle_deg']:.7f}"
         )
+
         print(
-            f"[MimicVideoTrace][query={query_step}][action={index}][COMPOSE]\n"
-            f"  previous_position={self._format_array(diagnostics['previous_position'])}\n"
-            f"  target_position={self._format_array(diagnostics['target_position'])}\n"
-            f"  previous_quaternion_xyzw={self._format_array(diagnostics['previous_quaternion'])}\n"
-            f"  previous_rotation=\n{self._format_array(diagnostics['previous_rotation'])}\n"
+            f"[MimicVideoTrace][query={query_step}][action={index}]"
+            "[COMPOSE]\n"
+            f"  previous_position="
+            f"{self._format_array(diagnostics['previous_position'])}\n"
+            f"  target_position="
+            f"{self._format_array(diagnostics['target_position'])}\n"
+            f"  previous_quaternion_xyzw="
+            f"{self._format_array(diagnostics['previous_quaternion'])}\n"
+            f"  previous_rotation=\n"
+            f"{self._format_array(diagnostics['previous_rotation'])}\n"
             f"  target_rotation=delta_rotation@previous_rotation=\n"
             f"{self._format_array(diagnostics['target_rotation'])}\n"
-            f"  target_euler_xyz_deg={self._format_array(diagnostics['target_euler_xyz_deg'])}\n"
-            f"  target_quaternion_xyzw={self._format_array(diagnostics['target_quaternion'])} "
+            f"  target_euler_xyz_deg="
+            f"{self._format_array(diagnostics['target_euler_xyz_deg'])}\n"
+            f"  target_quaternion_xyzw="
+            f"{self._format_array(diagnostics['target_quaternion'])} "
             f"norm={np.linalg.norm(diagnostics['target_quaternion']):.9f}"
         )
+
         print(
-            f"[MimicVideoTrace][query={query_step}][action={index}][GRIPPER]\n"
-            f"  was_closed={diagnostics['gripper_was_closed']} "
+            f"[MimicVideoTrace][query={query_step}][action={index}]"
+            "[GRIPPER]\n"
+            f"  model_value={raw_action[6]:.9f} "
+            f"was_closed={diagnostics['gripper_was_closed']} "
             f"is_closed={diagnostics['gripper_is_closed']} "
             f"command={diagnostics['gripper_command']}"
         )

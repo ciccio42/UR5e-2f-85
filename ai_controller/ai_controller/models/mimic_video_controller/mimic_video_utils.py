@@ -91,14 +91,32 @@ def quaternion_to_rotation_matrix(quaternion: np.ndarray) -> np.ndarray:
         raise ValueError("Cannot convert a zero-norm quaternion")
     return Rotation.from_quat(quaternion / norm).as_matrix()
 
+# Viene eseguita durante la preparazione dello stato 7D: converte
+# il quaternion ROS XYZW assoluto direttamente in RPY xyz, nella stessa
+# convenzione usata per eef_rot_lowdim nel nuovo dataset.
+def quaternion_to_rpy(quaternion: np.ndarray) -> np.ndarray:
+    quaternion = np.asarray(quaternion, dtype=np.float64)
+    if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+        raise ValueError(
+            f"Expected a finite XYZW quaternion with shape (4,), got {quaternion}"
+        )
+
+    norm = np.linalg.norm(quaternion)
+    if norm < ROTATION_EPS:
+        raise ValueError("Cannot convert a zero-norm quaternion")
+
+    return Rotation.from_quat(
+        quaternion / norm
+    ).as_euler("xyz").astype(np.float32)
+
 
 # Viene eseguita nella preparazione dello stato 10D: mantiene le prime due righe
 # della matrice assoluta, nella stessa convenzione usata dagli YAML di training.
-def rotation_matrix_to_6d(rotation_matrix: np.ndarray) -> np.ndarray:
-    rotation_matrix = np.asarray(rotation_matrix, dtype=np.float64)
-    if rotation_matrix.shape != (3, 3) or not np.all(np.isfinite(rotation_matrix)):
-        raise ValueError(f"Expected a finite rotation matrix with shape (3, 3), got {rotation_matrix.shape}")
-    return rotation_matrix[:2].reshape(6).astype(np.float32)
+# def rotation_matrix_to_6d(rotation_matrix: np.ndarray) -> np.ndarray:
+#     rotation_matrix = np.asarray(rotation_matrix, dtype=np.float64)
+#     if rotation_matrix.shape != (3, 3) or not np.all(np.isfinite(rotation_matrix)):
+#         raise ValueError(f"Expected a finite rotation matrix with shape (3, 3), got {rotation_matrix.shape}")
+#     return rotation_matrix[:2].reshape(6).astype(np.float32)
 
 
 # Viene eseguita dopo aver ricevuto posa e gripper dal nodo ROS: costruisce il
@@ -115,33 +133,57 @@ def build_lowdim_state(
     if not np.isfinite(gripper_state) or not 0.0 <= gripper_state <= 1.0:
         raise ValueError(f"Expected a gripper state in [0, 1], got {gripper_state}")
 
-    rotation_matrix = quaternion_to_rotation_matrix(eef_quaternion)
-    rotation_6d = rotation_matrix_to_6d(rotation_matrix)
-    return np.concatenate((eef_position, rotation_6d, [gripper_state])).astype(np.float32)
-
+    # rotation_matrix = quaternion_to_rotation_matrix(eef_quaternion)
+    # rotation_6d = rotation_matrix_to_6d(rotation_matrix)
+    # return np.concatenate((eef_position, rotation_6d, [gripper_state])).astype(np.float32)
+    
+    eef_rpy = quaternion_to_rpy(eef_quaternion)
+    return np.concatenate(
+        (
+            eef_position,
+            eef_rpy,
+            [gripper_state],
+        )
+    ).astype(np.float32)
 
 # Viene eseguita sul blocco rotazionale 6D prodotto dall'Action Head: applica
 # Gram-Schmidt e ricostruisce una matrice relativa ortonormale con determinante +1.
-def rotation_6d_to_matrix(rotation_6d: np.ndarray) -> np.ndarray:
-    rotation_6d = np.asarray(rotation_6d, dtype=np.float64)
-    if rotation_6d.shape != (6,) or not np.all(np.isfinite(rotation_6d)):
-        raise ValueError(f"Expected a finite 6D rotation with shape (6,), got {rotation_6d}")
+# def rotation_6d_to_matrix(rotation_6d: np.ndarray) -> np.ndarray:
+#     rotation_6d = np.asarray(rotation_6d, dtype=np.float64)
+#     if rotation_6d.shape != (6,) or not np.all(np.isfinite(rotation_6d)):
+#         raise ValueError(f"Expected a finite 6D rotation with shape (6,), got {rotation_6d}")
 
-    first = rotation_6d[:3]
-    second = rotation_6d[3:]
-    first_norm = np.linalg.norm(first)
-    if first_norm < ROTATION_EPS:
-        raise ValueError("The first 6D rotation vector has zero norm")
+#     first = rotation_6d[:3]
+#     second = rotation_6d[3:]
+#     first_norm = np.linalg.norm(first)
+#     if first_norm < ROTATION_EPS:
+#         raise ValueError("The first 6D rotation vector has zero norm")
 
-    first = first / first_norm
-    second = second - np.dot(second, first) * first
-    second_norm = np.linalg.norm(second)
-    if second_norm < ROTATION_EPS:
-        raise ValueError("The two 6D rotation vectors are collinear")
+#     first = first / first_norm
+#     second = second - np.dot(second, first) * first
+#     second_norm = np.linalg.norm(second)
+#     if second_norm < ROTATION_EPS:
+#         raise ValueError("The two 6D rotation vectors are collinear")
 
-    second = second / second_norm
-    third = np.cross(first, second)
-    return np.stack((first, second, third), axis=0)
+#     second = second / second_norm
+#     third = np.cross(first, second)
+#     return np.stack((first, second, third), axis=0)
+
+# Viene eseguita sul blocco rotazionale RPY prodotto dal nuovo Action Head 7D:
+# interpreta [droll, dpitch, dyaw] come rotazione relativa nel frame base_link
+# e la converte in matrice per poterla comporre con la posa corrente.
+def delta_rpy_to_rotation_matrix(delta_rpy: np.ndarray) -> np.ndarray:
+    delta_rpy = np.asarray(delta_rpy, dtype=np.float64)
+
+    if delta_rpy.shape != (3,) or not np.all(np.isfinite(delta_rpy)):
+        raise ValueError(
+            f"Expected finite delta RPY with shape (3,), got {delta_rpy}"
+        )
+
+    return Rotation.from_euler(
+        "xyz",
+        delta_rpy,
+    ).as_matrix()
 
 
 # Viene eseguita dopo aver composto rotazione relativa e stato corrente: converte
@@ -200,8 +242,18 @@ def action_chunk_to_absolute_poses(
     action_chunk = np.asarray(action_chunk, dtype=np.float64)
     if action_chunk.ndim == 3 and action_chunk.shape[0] == 1:
         action_chunk = action_chunk[0]
-    if action_chunk.ndim != 2 or action_chunk.shape[1] != 10 or not np.all(np.isfinite(action_chunk)):
-        raise ValueError(f"Expected a finite action chunk with shape (H, 10), got {action_chunk.shape}")
+    # if action_chunk.ndim != 2 or action_chunk.shape[1] != 10 or not np.all(np.isfinite(action_chunk)):
+    #     raise ValueError(f"Expected a finite action chunk with shape (H, 10), got {action_chunk.shape}")
+
+    if (
+        action_chunk.ndim != 2
+        or action_chunk.shape[1] != 7
+        or not np.all(np.isfinite(action_chunk))
+    ):
+        raise ValueError(
+            f"Expected a finite action chunk with shape (H, 7), got {action_chunk.shape}"
+        )
+
 
     position = np.asarray(current_position, dtype=np.float64).copy()
     if position.shape != (3,) or not np.all(np.isfinite(position)):
@@ -217,13 +269,16 @@ def action_chunk_to_absolute_poses(
         was_closed = gripper_closed
 
         position = position + action[:3]
-        raw_first_row = action[3:6]
-        raw_second_row = action[6:9]
-        delta_rotation = rotation_6d_to_matrix(action[3:9])
+        # raw_first_row = action[3:6]
+        # raw_second_row = action[6:9]
+        # delta_rotation = rotation_6d_to_matrix(action[3:9])
+        delta_rpy = action[3:6]
+        delta_rotation = delta_rpy_to_rotation_matrix(delta_rpy)
         rotation = delta_rotation @ rotation
         quaternion = rotation_matrix_to_quaternion(rotation, reference_quaternion=quaternion)
         gripper_command, gripper_closed = convert_gripper(
-            action[9],
+            #action[9],
+            action[6],
             gripper_closed,
             close_threshold=close_threshold,
             open_threshold=open_threshold,
@@ -244,11 +299,16 @@ def action_chunk_to_absolute_poses(
                     "previous_rotation": previous_rotation,
                     "delta_rotation": delta_rotation.copy(),
                     "target_rotation": rotation.copy(),
-                    "raw_rotation_row_norms": np.array(
-                        [np.linalg.norm(raw_first_row), np.linalg.norm(raw_second_row)],
-                        dtype=np.float64,
-                    ),
-                    "raw_rotation_row_dot": float(np.dot(raw_first_row, raw_second_row)),
+                    # "raw_rotation_row_norms": np.array(
+                    #     [np.linalg.norm(raw_first_row), np.linalg.norm(raw_second_row)],
+                    #     dtype=np.float64,
+                    # ),
+                    # "raw_rotation_row_dot": float(np.dot(raw_first_row, raw_second_row)),
+                    "raw_delta_rpy": delta_rpy.copy(),
+
+                    "raw_delta_rpy_deg": np.degrees(
+                        delta_rpy
+                    ).astype(np.float64),
                     "delta_rotation_determinant": float(np.linalg.det(delta_rotation)),
                     "delta_rotation_orthogonality_error": float(
                         np.linalg.norm(delta_rotation @ delta_rotation.T - np.eye(3))
