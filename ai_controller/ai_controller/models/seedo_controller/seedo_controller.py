@@ -207,6 +207,35 @@ class SeeDoController(AIController):
             ),
         )
 
+        camera_pose_noise_config = perception_config.get(
+            "camera_pose_noise",
+            {},
+        )
+
+        camera_pose_noise_level = str(
+            camera_pose_noise_config.get(
+                "level",
+                "baseline",
+            )
+        ).strip().lower()
+
+        camera_pose_noise_levels = camera_pose_noise_config.get(
+            "levels",
+            {},
+        )
+
+        if camera_pose_noise_level not in camera_pose_noise_levels:
+            raise ValueError(
+                "Unknown camera pose noise level: "
+                f"'{camera_pose_noise_level}'. "
+                "Expected one of: "
+                f"{list(camera_pose_noise_levels.keys())}"
+            )
+
+        selected_camera_pose_noise = camera_pose_noise_levels[
+            camera_pose_noise_level
+        ]
+
         self.scene_perceiver = ScenePerceiver(
             camera_calibration_path=perception_config.get(
                 "camera_calibration_path"
@@ -229,6 +258,19 @@ class SeeDoController(AIController):
             ),
             detector_labels=perception_config.get(
                 "detector_labels"
+            ),
+            camera_pose_noise_level=camera_pose_noise_level,
+            translation_noise_std_mm=float(
+                selected_camera_pose_noise.get(
+                    "translation_std_mm",
+                    0.0,
+                )
+            ),
+            rotation_noise_std_deg=float(
+                selected_camera_pose_noise.get(
+                    "rotation_std_deg",
+                    0.0,
+                )
             ),
         )
 

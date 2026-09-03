@@ -56,7 +56,7 @@ cd /home/asus-mivia/Desktop/Angelo/UR5e-2f-85
 Start the SeeDo container:
 
 ```bash
-export ROBOT_IP=172.16.174.59
+export ROBOT_IP=192.168.1.100
 
 docker run -it --rm \
   --name seedo_ros2_container \
@@ -95,7 +95,7 @@ source /home/ros2_ws/install/setup.bash
 
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
-  robot_ip:=172.16.174.59 \
+  robot_ip:=192.168.1.100 \
   use_tool_communication:=true \
   tool_voltage:=24 \
   tool_parity:=0 \

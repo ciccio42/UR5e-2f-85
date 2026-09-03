@@ -86,30 +86,30 @@ cp \
 
 set +e
 
-ros2 run ai_controller ai_controller_node \
-    --ros-args \
-    -p ai_controller_target:=seedo_controller \
-    -p model_config_path:="${CONFIG_PATH}" \
-    -p task_name:=pick_place \
-    -p demo_path:="${DEMO_PATH}" \
-    -p seedo_precomputed_action_plan_path:=/test_real/test_task04_1/action_planning/action_plan.json \
-    -p seedo_artifacts_dir:="${RUN_DIR}" \
-    -p save_rollout_path:="${RUN_DIR}/rollouts" \
-    -p move_robot:=true \
-    -p seedo_execute_gripper:=true \
-    2>&1 | tee "${RUN_DIR}/console.log"
-
 # ros2 run ai_controller ai_controller_node \
 #     --ros-args \
 #     -p ai_controller_target:=seedo_controller \
 #     -p model_config_path:="${CONFIG_PATH}" \
 #     -p task_name:=pick_place \
 #     -p demo_path:="${DEMO_PATH}" \
+#     -p seedo_precomputed_action_plan_path:=/test_real/test_solo_verde/test_task00_1/action_planning/action_plan.json \
 #     -p seedo_artifacts_dir:="${RUN_DIR}" \
 #     -p save_rollout_path:="${RUN_DIR}/rollouts" \
 #     -p move_robot:=true \
 #     -p seedo_execute_gripper:=true \
 #     2>&1 | tee "${RUN_DIR}/console.log"
+
+ros2 run ai_controller ai_controller_node \
+    --ros-args \
+    -p ai_controller_target:=seedo_controller \
+    -p model_config_path:="${CONFIG_PATH}" \
+    -p task_name:=pick_place \
+    -p demo_path:="${DEMO_PATH}" \
+    -p seedo_artifacts_dir:="${RUN_DIR}" \
+    -p save_rollout_path:="${RUN_DIR}/rollouts" \
+    -p move_robot:=true \
+    -p seedo_execute_gripper:=true \
+    2>&1 | tee "${RUN_DIR}/console.log"
 
 EXIT_CODE=${PIPESTATUS[0]}
 

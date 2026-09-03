@@ -24,6 +24,60 @@ scene_perceiver:
   workspace_bottom_left: [0.0, 0.0]
   workspace_top_right: [1.0, 1.0]
 
+  camera_pose_noise:
+    level: baseline
+
+    levels:
+      baseline:
+        translation4_std_mm: 0.0
+        rotation_std_deg: 0.0
+
+      # Noise levels both translation and rotation are applied to the camera pose. 
+      # The translation noise is applied independently to each axis (x, y, z) with a Gaussian distribution centered at 0 and the specified standard deviation in millimeters. 
+      # The rotation noise is applied independently to each axis (roll, pitch, yaw) with a Gaussian distribution centered at 0 and the specified standard deviation in degrees
+      noise_1.0_0.1:
+        translation_std_mm: 1.0
+        rotation_std_deg: 0.1
+
+      noise_3.0_0.25:
+        translation_std_mm: 3.0
+        rotation_std_deg: 0.25
+
+      noise_5.0_1.0:
+        translation_std_mm: 5.0
+        rotation_std_deg: 1.0
+
+      noise_10.0_2.0:
+        translation_std_mm: 10.0
+        rotation_std_deg: 2.0
+
+      noise_25.0_5.0:
+        translation_std_mm: 25.0
+        rotation_std_deg: 5.0
+
+      # Noise levels where only translation noise is applied to the camera pose. 
+      # The translation noise is applied independently to each axis (x, y, z) with a Gaussian distribution centered at 0 and the specified standard deviation in millimeters. 
+      # The rotation noise is set to 0 degrees.
+      noise_1.0_0.0:
+        translation_std_mm: 1.0
+        rotation_std_deg: 0.0
+
+      noise_3.0_0.0:
+        translation_std_mm: 3.0
+        rotation_std_deg: 0.0
+
+      noise_5.0_0.0:
+        translation_std_mm: 5.0
+        rotation_std_deg: 0.0
+
+      noise_10.0_0.0:
+        translation_std_mm: 10.0
+        rotation_std_deg: 0.0
+
+      noise_25.0_0.0:
+        translation_std_mm: 25.0
+        rotation_std_deg: 0.0
+
   detector_labels:
     - cube
     - storage bin

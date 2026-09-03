@@ -62,6 +62,9 @@ class ScenePerceiver:
         bert_model: str | Path | None = None,
         sam_checkpoint: str | Path | None = None,
         detector_labels: list[str] | tuple[str, ...] | None = None,
+        camera_pose_noise_level: str = "baseline",
+        translation_noise_std_mm: float = 0.0,
+        rotation_noise_std_deg: float = 0.0,
     ) -> None:
         self.camera_calibration_path = (
             Path(camera_calibration_path)
@@ -145,6 +148,32 @@ class ScenePerceiver:
                 "At least one non-empty detector label must be configured."
             )
 
+        self.camera_pose_noise_level = str(
+            camera_pose_noise_level
+        ).strip().lower()
+
+        self.translation_noise_std_mm = float(
+            translation_noise_std_mm
+        )
+
+        self.rotation_noise_std_deg = float(
+            rotation_noise_std_deg
+        )
+
+        if self.translation_noise_std_mm < 0.0:
+            raise ValueError(
+                "translation_noise_std_mm cannot be negative."
+            )
+
+        if self.rotation_noise_std_deg < 0.0:
+            raise ValueError(
+                "rotation_noise_std_deg cannot be negative."
+            )
+
+        # Nondeterministic generator.
+        # A new camera-pose perturbation is sampled once per ScenePerceiver.run().
+        self._noise_rng = np.random.default_rng()
+
         self.device = torch.device(
             "cuda:0"
             if torch.cuda.is_available()
@@ -161,6 +190,88 @@ class ScenePerceiver:
         self.sam = None
         self.sam_predictor = None
 
+    def _sample_camera_pose_noise(
+        self,
+    ) -> dict[str, np.ndarray]:
+        """Sample one camera extrinsic perturbation for the current run."""
+
+        translation_std_m = (
+            self.translation_noise_std_mm / 1000.0
+        )
+
+        rotation_std_rad = np.deg2rad(
+            self.rotation_noise_std_deg
+        )
+
+        delta_translation = self._noise_rng.normal(
+            loc=0.0,
+            scale=translation_std_m,
+            size=3,
+        ).astype(np.float64)
+
+        delta_rotation_vector = self._noise_rng.normal(
+            loc=0.0,
+            scale=rotation_std_rad,
+            size=3,
+        ).astype(np.float64)
+
+        delta_rotation_matrix, _ = cv2.Rodrigues(
+            delta_rotation_vector.reshape(3, 1)
+        )
+
+        return {
+            "translation_m": delta_translation,
+            "rotation_vector_rad": delta_rotation_vector,
+            "rotation_matrix": delta_rotation_matrix,
+        }
+
+
+    def _build_noisy_camera_calibration(
+        self,
+        noise_sample: dict[str, np.ndarray],
+    ) -> dict[str, np.ndarray]:
+        """Apply the sampled perturbation to the camera->ArUco extrinsic."""
+
+        original = self.camera_calibration[
+            self.camera_name
+        ]
+
+        original_position = np.asarray(
+            original["position"],
+            dtype=np.float64,
+        )
+
+        original_rotation = np.asarray(
+            original["orientation_matrix"],
+            dtype=np.float64,
+        )
+
+        # Keep baseline exactly on the original calibration path.
+        if (
+            self.translation_noise_std_mm == 0.0
+            and self.rotation_noise_std_deg == 0.0
+        ):
+            return {
+                "position": original_position.copy(),
+                "orientation_matrix": original_rotation.copy(),
+            }
+
+        noisy_position = (
+            original_position
+            + noise_sample["translation_m"]
+        )
+
+        # The random rotation is expressed in the ArUco/world frame.
+        noisy_rotation = (
+            noise_sample["rotation_matrix"]
+            @ original_rotation
+        )
+
+        return {
+            "position": noisy_position,
+            "orientation_matrix": noisy_rotation,
+        }
+
     def pixel_to_base_link(
         self,
         pixel: tuple[int, int],
@@ -168,6 +279,7 @@ class ScenePerceiver:
         camera_matrix: np.ndarray,
         base_to_table_rotation: np.ndarray,
         base_to_table_translation: np.ndarray,
+        camera_calibration_override: dict[str, np.ndarray] | None = None,
     ) -> tuple[float, float, float]:
         """Convert an RGB pixel into a 3D point in base_link."""
 
@@ -216,9 +328,12 @@ class ScenePerceiver:
             camera_matrix,
         )
 
-        camera_calibration = self.camera_calibration[
-            self.camera_name
-        ]
+        if camera_calibration_override is None:
+            camera_calibration = self.camera_calibration[
+                self.camera_name
+            ]
+        else:
+            camera_calibration = camera_calibration_override
 
         point_aruco = camera_point_to_aruco(
             point_camera,
@@ -1363,6 +1478,35 @@ class ScenePerceiver:
             )
         )
 
+        #
+        # Sample camera calibration noise ONCE for this complete run.
+        # The same perturbed camera pose is therefore used for every
+        # object detected in the scene.
+        #
+        camera_pose_noise = self._sample_camera_pose_noise()
+
+        runtime_camera_calibration = (
+            self._build_noisy_camera_calibration(
+                camera_pose_noise
+            )
+        )
+
+        sampled_translation_mm = (
+            camera_pose_noise["translation_m"] * 1000.0
+        )
+
+        sampled_rotation_deg = np.rad2deg(
+            camera_pose_noise["rotation_vector_rad"]
+        )
+
+        print(
+            "[ScenePerceiver] Camera pose noise "
+            f"level='{self.camera_pose_noise_level}' | "
+            f"translation [mm]={sampled_translation_mm.tolist()} | "
+            f"rotation [deg]={sampled_rotation_deg.tolist()}",
+            flush=True,
+        )
+
         detections = self._detect_objects(
             rgb_image
         )
@@ -1390,6 +1534,7 @@ class ScenePerceiver:
                     camera_matrix=camera_matrix,
                     base_to_table_rotation=rotation,
                     base_to_table_translation=translation,
+                    camera_calibration_override=runtime_camera_calibration,
                 )
 
                 depth = robust_depth_at(
@@ -1451,6 +1596,91 @@ class ScenePerceiver:
                     parents=True,
                     exist_ok=True,
                 )
+
+                original_camera_calibration = (
+                    self.camera_calibration[
+                        self.camera_name
+                    ]
+                )
+
+                camera_pose_noise_json_path = (
+                    artifacts_dir
+                    / "camera_pose_noise.json"
+                )
+
+                with camera_pose_noise_json_path.open(
+                    "w",
+                    encoding="utf-8",
+                ) as stream:
+                    json.dump(
+                        {
+                            "level": self.camera_pose_noise_level,
+
+                            "distribution": {
+                                "translation_mean_mm": 0.0,
+                                "translation_std_mm_per_axis": (
+                                    self.translation_noise_std_mm
+                                ),
+                                "rotation_mean_deg": 0.0,
+                                "rotation_std_deg_per_axis": (
+                                    self.rotation_noise_std_deg
+                                ),
+                            },
+
+                            "sampled_translation_mm": (
+                                sampled_translation_mm.tolist()
+                            ),
+
+                            "sampled_rotation_deg": (
+                                sampled_rotation_deg.tolist()
+                            ),
+
+                            "translation_error_norm_mm": float(
+                                np.linalg.norm(
+                                    sampled_translation_mm
+                                )
+                            ),
+
+                            "rotation_error_norm_deg": float(
+                                np.linalg.norm(
+                                    sampled_rotation_deg
+                                )
+                            ),
+
+                            "original_calibration": {
+                                "position_m": (
+                                    np.asarray(
+                                        original_camera_calibration[
+                                            "position"
+                                        ]
+                                    ).tolist()
+                                ),
+                                "orientation_matrix": (
+                                    np.asarray(
+                                        original_camera_calibration[
+                                            "orientation_matrix"
+                                        ]
+                                    ).tolist()
+                                ),
+                            },
+
+                            "perturbed_calibration": {
+                                "position_m": (
+                                    runtime_camera_calibration[
+                                        "position"
+                                    ].tolist()
+                                ),
+                                "orientation_matrix": (
+                                    runtime_camera_calibration[
+                                        "orientation_matrix"
+                                    ].tolist()
+                                ),
+                            },
+                        },
+                        stream,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
 
                 overlay = self._build_raw_scene_overlay(
                     rgb_image=rgb_image,
