@@ -5,6 +5,7 @@ if __name__ == "__main__":
 from ai_controller.models.cod_controller.cond_target_obj_detector import CondTargetObjectDetector
 from ai_controller.models.cod_controller.utils import build_tvf_formatter, move_to_device, seed_everything, denormalize_action, axisangle2quat
 from ai_controller.utils.ai_controller import AIController
+from ai_controller.utils.utils import _quat2mat, _mat2euler_sxyz, _euler2quat
 import hydra
 from omegaconf import OmegaConf
 import glob
@@ -42,7 +43,46 @@ class CODController(AIController):
         seed_everything(0)
         
         self.gripper_closed = False
-        
+        # whether the gripper has closed (grasped) at least once this episode.
+        # once true, an opening prediction means "release at the place
+        # location" rather than "still approaching the object to grasp", so
+        # the position clip is skipped for that step (see _post_process_action).
+        self.has_grasped = False
+
+        # current end-effector position (x, y, z) and orientation (x, y, z, w),
+        # set by the caller (ai_controller_node.py) before each inference()
+        # call so that the predicted pose can be bounded relative to it below.
+        self.current_eef_pos = None
+        self.current_eef_quat = None
+
+        # max per-axis (x, y, z) translation step, in meters, allowed from
+        # the robot's current position in a single inference step.
+        self.max_position_step = 0.01
+
+        # once the model first predicts gripper closure, the arm keeps
+        # descending (still bounded by max_position_step) instead of
+        # closing on the object too early, until the current z reaches this
+        # fixed height (meters, eef frame), within grasp_z_tolerance.
+        # self.grasp_z_threshold = -0.01
+        self.grasp_z_tolerance = -0.03
+
+        # per-axis (roll, pitch, yaw) bounds, in radians, on how far the
+        # commanded orientation may deviate from the robot's current
+        # orientation: allowed range is current_rpy + [min_rotation_delta,
+        # max_rotation_delta]. The source values are scaled by 1/0.05, so
+        # they're descaled here to get radians.
+        rotation_delta_scale = 0.05
+        self.min_rotation_delta = np.array([
+            -0.053339000791311264,
+            -0.01868296228349209,
+            -7.064111709594727,
+        ]) * rotation_delta_scale
+        self.max_rotation_delta = np.array([
+            0.062398649752140045,
+            0.01685403846204281,
+            8.441994667053223,
+        ]) * rotation_delta_scale
+
     def load_model(self, model_config):
         """Load the COD model from the given configuration.
         
@@ -86,9 +126,7 @@ class CODController(AIController):
         print(f"Model uses wrist/eye-in-hand image stream: {self.use_wrist_img}")
 
         return model
-        
 
-    
     def move_model_to_device(self, device):
         """Move the model to the specified device.
         
@@ -250,6 +288,9 @@ class CODController(AIController):
         # 1. Save current trajectory data if needed
         # 2. Load the demo dataset for the current task
         self.gripper_closed = False
+        self.has_grasped = False
+        self.current_eef_pos = None
+        self.current_eef_quat = None
         if hasattr(self.model, 'reset_detection_filter'):
             self.model.reset_detection_filter()
         
@@ -305,32 +346,78 @@ class CODController(AIController):
         else:
             action = denormalize_action(action, self.action_ranges)
         
-        desired_position = action[:3]
-        desired_orientation = axisangle2quat(vec=action[3:6])
+        raw_position = action[:3]
+        desired_position = raw_position
         predicted_gripper = action[-1]
-        # if not self.gripper_closed:
-        #     action[0] += 0.02
 
-        # if self.gripper_closed:
-        #     action[0] += 0.02
-        
+        # once the object has been grasped, an opening prediction means
+        # "release at the place location": skip the position clip for that
+        # step so the arm can move directly there instead of crawling at
+        # max_position_step per inference step.
+        releasing_at_place = self.has_grasped and predicted_gripper <= 0.1
+
+        if self.current_eef_pos is not None and not releasing_at_place:
+            # bound the commanded position to the robot's current position
+            # +/- max_position_step per axis, so a single inference step
+            # can't request a translation MoveIt can't plan for
+            desired_position = np.clip(
+                desired_position,
+                self.current_eef_pos - self.max_position_step,
+                self.current_eef_pos + self.max_position_step)
+
+        # the model predicts an axis-angle rotation vector, whose components
+        # are not roll/pitch/yaw angles: convert to Euler angles (static/
+        # extrinsic XYZ, matching the convention used to generate this
+        # model's training data) so the rotation can be clipped per axis.
+        predicted_quat = axisangle2quat(vec=action[3:6])
+        predicted_rpy = _mat2euler_sxyz(_quat2mat(predicted_quat))
+
+        if self.current_eef_quat is not None:
+            # bound the commanded orientation to the robot's current
+            # orientation +/- a per-axis (roll, pitch, yaw) delta, so a
+            # single inference step can't request a reorientation MoveIt
+            # can't plan for
+            current_rpy = _mat2euler_sxyz(_quat2mat(self.current_eef_quat))
+            lower_bound = current_rpy + self.min_rotation_delta
+            upper_bound = current_rpy + self.max_rotation_delta
+            predicted_rpy = np.clip(predicted_rpy, lower_bound, upper_bound)
+
+        desired_orientation = _euler2quat(*predicted_rpy)
 
         print(f"Predicted gripper value: {predicted_gripper}")
-        if predicted_gripper > 0.8:
+        if predicted_gripper > 0.8 and not releasing_at_place:
+            if self.gripper_closed:
+                # already closed from a previous step: keep it closed
+                gripper_finger_pos = 255
+            else:
+                # closure requested for the first time: keep the gripper open and
+                # let the arm keep descending (still bounded by the position clip
+                # above) until it actually reaches grasp_z_threshold, instead of
+                # closing early on/above the object
+                current_z = self.current_eef_pos[2] if self.current_eef_pos is not None else desired_position[2]
+                if desired_position[2] <= self.grasp_z_tolerance:
+                    # z target reached: close now, nudging the gripper a little
+                    # forward to avoid collision when closing
+                    desired_position = desired_position.copy()
+                    desired_position[1] += 0.01
+                    desired_position[2] -= 0.04
+                    gripper_finger_pos = 255
+                    self.gripper_closed = True
+                    self.has_grasped = True
+                else:
+                    gripper_finger_pos = 0
+        elif predicted_gripper < 0.8 and self.gripper_closed and not releasing_at_place:
+            # keep the gripper closed until the model predicts an opening, to avoid
+            # accidentally dropping the object while moving to the place location
             gripper_finger_pos = 255
-            
-            if not self.gripper_closed:
-                # if the gripper is not closed and the predicted action is closing move the gripper a little bit forward
-                action[1] += 0.00  # Move the robot slightly forward to avoid collision when closing the gripper
-                #input("Press Enter to continue after adjusting the action to avoid collision...")
-                #print(f"Adjusted action to avoid collision when closing the gripper: {action}")
-            self.gripper_closed = True
-            
+        elif predicted_gripper < 0.1 and self.gripper_closed and releasing_at_place:
+            gripper_finger_pos = 0
+            self.gripper_closed = False
         else:
             gripper_finger_pos = 0
-            
+
         action = np.concatenate([desired_position, desired_orientation, [gripper_finger_pos]])
-        
+        print(f"Post-processed action: {action}")
         return action    
         
     

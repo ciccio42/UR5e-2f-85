@@ -9,5 +9,5 @@ resource/
 test/
 checkpoint_folder/
 *png
-save_images/
+saved_images/
 saved_rollouts/

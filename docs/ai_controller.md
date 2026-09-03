@@ -2,7 +2,7 @@
 
 ## UR-Container
 ```bash
-export ROBOT_IP=172.16.174.59
+export ROBOT_IP=192.168.1.100
 
 docker build -t ur_robotiq_teleoperation . -f UR_Robotiq_Teleoperation
 xhost +local:docker

@@ -215,7 +215,7 @@ class AIControllerNode(Node):
             self.camera_sync.registerCallback(self.synced_images_callback)
 
         self.traj_cnt = 0
-        self.max_step = 90
+        self.max_step = 200
 
         self.gripper_closed = False
         self.previous_gripper_position = 0.0
@@ -663,6 +663,12 @@ class AIControllerNode(Node):
                         states = robot_state
                     else:
                         states = None
+
+                    if self.ai_controller_target == 'cod_controller':
+                        # let CODController bound its predicted pose relative to the
+                        # robot's actual current pose (see _post_process_action)
+                        self.controller.current_eef_pos = robot_state.get(EEF_POS_NAME)
+                        self.controller.current_eef_quat = robot_state.get(EEF_QUAT_NAME)
 
                     # 3. Perform inference using the AI controller
                     step_save_path = f'{save_path}/step_{step}'

@@ -61,6 +61,39 @@ if _MODEL_ROOT is None:
 from models.model import StateSpaceModel
 
 
+def _compute_crop_adjustment(crop_values, size_before):
+    top, bottom, left, right = [int(x) for x in crop_values]
+    rows_before, cols_before = [int(x) for x in size_before]
+    rows_after = rows_before - (top + bottom)
+    cols_after = cols_before - (left + right)
+    if rows_before <= 0 or cols_before <= 0 or rows_after <= 0 or cols_after <= 0:
+        raise ValueError(
+            f"Invalid crop {crop_values} for source image size "
+            f"(height={rows_before}, width={cols_before})"
+        )
+
+    to_01 = np.array(
+        [
+            [0.5, 0.0, 0.5, 0.0],
+            [0.0, 0.5, 0.5, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    from_01 = np.linalg.inv(to_01)
+    crop_adjustment = np.array(
+        [
+            [cols_after / cols_before, 0.0, left / cols_before, 0.0],
+            [0.0, rows_after / rows_before, bottom / rows_before, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    return from_01 @ np.linalg.inv(crop_adjustment) @ to_01
+
+
 @dataclass
 class OSVIConfig:
     checkpoint_path: str = "checkpoints/best.pt"
@@ -110,6 +143,7 @@ class OSVIController(AIController):
         self.context_source = None
         self.current_eef_quat = None
         self.gripper_closed = False
+        self.last_gripper_decisions = []
         self.epoch = "unknown"
         self.global_step = "unknown"
         self._depth_ros_node = None
@@ -155,7 +189,31 @@ class OSVIController(AIController):
         with open(self.projection_matrix_path, "r") as f:
             projection_data = yaml.safe_load(f)
 
+        
         matrix = projection_data["projection_matrix"] if isinstance(projection_data, dict) else projection_data
+        matrix = np.asarray(matrix, dtype=np.float64)
+        if matrix.shape != (4, 4):
+            raise ValueError(f"projection_matrix must be 4x4, got {tuple(matrix.shape)}")
+
+        crop = [int(x) for x in self.cfg.image.get("crop", [0, 0, 0, 0])]
+        apply_crop_adjustment = bool(self.cfg.projection.get("apply_crop_adjustment", True))
+        if any(crop) and apply_crop_adjustment:
+            source_size = self.cfg.projection.get("source_image_size")
+            if source_size is None and isinstance(projection_data, dict):
+                camera_cfg = projection_data.get("camera", {}) or {}
+                source_size = (camera_cfg.get("image_height"), camera_cfg.get("image_width"))
+            if source_size is None or source_size[0] is None or source_size[1] is None:
+                raise ValueError(
+                    "Non-zero image.crop requires projection.camera.image_height/image_width "
+                    "or projection.source_image_size=[height, width] in the OSVI config."
+                )
+            crop_adjust = _compute_crop_adjustment(crop, source_size)
+            matrix = matrix @ np.linalg.inv(crop_adjust)
+            print(
+                "[OSVIController] Applied crop adjustment to projection matrix: "
+                f"crop={crop}, source_size={tuple(int(x) for x in source_size)}"
+            )
+
         self.projection_matrix = torch.as_tensor(matrix, dtype=torch.float32, device=self.device)
         if self.projection_matrix.shape != (4, 4):
             raise ValueError(f"projection_matrix must be 4x4, got {tuple(self.projection_matrix.shape)}")
@@ -199,6 +257,7 @@ class OSVIController(AIController):
         self.context_source = None
         self.current_eef_quat = None
         self.gripper_closed = False
+        self.last_gripper_decisions = []
 
     def _gripper_depth_enabled(self):
         refine_cfg = self.cfg.grasp_refinement if self.cfg is not None else {}
@@ -638,6 +697,7 @@ class OSVIController(AIController):
             "context": self.context_tensor,
             "state": state,
             "live_frame": live_frame,
+            "model_frame": model_frame,
         }
 
     def post_process(self, output_data):
@@ -651,17 +711,33 @@ class OSVIController(AIController):
         close_threshold = float(control_cfg.get("gripper_close_threshold", 0.1))
         open_pos = float(control_cfg.get("gripper_open_position", 0.0))
         closed_pos = float(control_cfg.get("gripper_closed_position", 255.0))
-        max_actions = int(control_cfg.get("max_actions_per_inference", len(base_waypoints)))
+        max_actions = min(
+            int(control_cfg.get("max_actions_per_inference", len(base_waypoints))),
+            len(base_waypoints),
+            len(image_waypoints),
+        )
         min_dist = float(safety_cfg.get("min_waypoint_distance", 0.0))
+        close_transition_offset = int(control_cfg.get("gripper_close_transition_offset", 0))
+
+        selected_base_waypoints = base_waypoints[:max_actions]
+        selected_image_waypoints = image_waypoints[:max_actions]
+        raw_grippers = [float(image_wp[3]) for image_wp in selected_image_waypoints]
+        threshold_close_flags = [raw_gripper >= close_threshold for raw_gripper in raw_grippers]
+        should_close_flags = self._offset_first_close_transition(
+            threshold_close_flags,
+            close_transition_offset,
+        )
 
         refine_cfg = self.cfg.grasp_refinement
         refine_enabled = bool(refine_cfg.get("enabled", False))
         refinement_done = False
         actions = []
-        for base_wp, image_wp in zip(base_waypoints[:max_actions], image_waypoints[:max_actions]):
+        self.last_gripper_decisions = []
+        for waypoint_index, (base_wp, raw_gripper, threshold_close, should_close) in enumerate(
+            zip(selected_base_waypoints, raw_grippers, threshold_close_flags, should_close_flags),
+            start=1,
+        ):
             xyz = self._apply_workspace_safety(base_wp[:3])
-            raw_gripper = float(image_wp[3])
-            should_close = raw_gripper >= close_threshold
             is_closing_transition = should_close and not self.gripper_closed
 
             if refine_enabled and is_closing_transition and not refinement_done:
@@ -677,6 +753,18 @@ class OSVIController(AIController):
                 )
                 self.gripper_closed = True
                 refinement_done = True
+                self.last_gripper_decisions.append(
+                    {
+                        "waypoint_index": waypoint_index,
+                        "raw_gripper": raw_gripper,
+                        "close_threshold": close_threshold,
+                        "closed_by_threshold": bool(threshold_close),
+                        "commanded_closed": True,
+                        "command_position": closed_pos,
+                        "close_transition_offset": close_transition_offset,
+                        "grasp_refinement_inserted": True,
+                    }
+                )
                 if not bool(refine_cfg.get("resume_after_lift", True)):
                     break
                 continue
@@ -684,7 +772,18 @@ class OSVIController(AIController):
             self.gripper_closed = should_close
             gripper_cmd = closed_pos if should_close else open_pos
             self._append_action(actions, xyz, quat, gripper_cmd, min_dist=min_dist)
-
+            self.last_gripper_decisions.append(
+                {
+                    "waypoint_index": waypoint_index,
+                    "raw_gripper": raw_gripper,
+                    "close_threshold": close_threshold,
+                    "closed_by_threshold": bool(threshold_close),
+                    "commanded_closed": bool(should_close),
+                    "command_position": float(gripper_cmd),
+                    "close_transition_offset": close_transition_offset,
+                    "grasp_refinement_inserted": False,
+                }
+            )
         if not actions and len(base_waypoints):
             xyz = self._apply_workspace_safety(base_waypoints[-1, :3])
             raw_gripper = float(image_waypoints[-1, 3])
@@ -692,6 +791,35 @@ class OSVIController(AIController):
             self._append_action(actions, xyz, quat, gripper_cmd)
 
         return actions
+
+    @staticmethod
+    def _offset_first_close_transition(close_flags, offset):
+        flags = [bool(flag) for flag in close_flags]
+        if not flags or offset == 0:
+            return flags
+
+        close_index = None
+        previous_closed = False
+        for index, is_closed in enumerate(flags):
+            if is_closed and not previous_closed:
+                close_index = index
+                break
+            previous_closed = is_closed
+
+        if close_index is None:
+            return flags
+
+        shifted_index = int(np.clip(close_index + int(offset), 0, len(flags) - 1))
+        if shifted_index < close_index:
+            for index in range(shifted_index, close_index):
+                flags[index] = True
+        elif shifted_index > close_index:
+            for index in range(close_index, shifted_index):
+                flags[index] = False
+            flags[shifted_index] = True
+
+        return flags
+
 
     def _append_grasp_refinement(self, actions, target_xyz, quat, open_pos, closed_pos, min_dist, state):
         refine_cfg = self.cfg.grasp_refinement
@@ -763,6 +891,9 @@ class OSVIController(AIController):
             PILImage.fromarray(processed["live_frame"]).save(
                 os.path.join(save_path, f"osvi_input_front_t{t:03d}.png")
             )
+            PILImage.fromarray(self._chw_to_uint8(processed["model_frame"])).save(
+                os.path.join(save_path, f"osvi_model_input_front_t{t:03d}.png")
+            )
 
         with torch.no_grad():
             out = self.model(processed["images"], processed["context"])
@@ -790,13 +921,15 @@ class OSVIController(AIController):
                         "image_waypoints": image_np.tolist(),
                         "base_waypoints": base_np.tolist(),
                         "actions": [action.tolist() for action in actions],
+                        "gripper_decisions": self.last_gripper_decisions,
                         "context_source": self.context_source,
                     },
                     f,
                     indent=2,
                 )
 
-            overlay = self._draw_waypoint_overlay(processed["live_frame"], image_np)
+            overlay_frame = self._chw_to_uint8(processed["model_frame"])
+            overlay = self._draw_waypoint_overlay(overlay_frame, image_np)
             if bool(self.cfg.debug.get("save_waypoint_overlay", True)):
                 PILImage.fromarray(overlay).save(
                     os.path.join(save_path, f"osvi_waypoints_overlay_t{t:03d}.png")
@@ -806,7 +939,8 @@ class OSVIController(AIController):
 
         if bool(self.cfg.debug.get("show_waypoint_overlay", False)):
             if overlay is None:
-                overlay = self._draw_waypoint_overlay(processed["live_frame"], image_np)
+                overlay_frame = self._chw_to_uint8(processed["model_frame"])
+                overlay = self._draw_waypoint_overlay(overlay_frame, image_np)
             self._show_waypoint_overlay(overlay)
 
 
@@ -817,15 +951,20 @@ class OSVIController(AIController):
         overlay = np.ascontiguousarray(rgb_frame.copy())
         height, width = overlay.shape[:2]
         close_threshold = float(self.cfg.control.get("gripper_close_threshold", 0.1))
-
-        for idx, waypoint in enumerate(np.asarray(image_waypoints), start=1):
+        close_transition_offset = int(self.cfg.control.get("gripper_close_transition_offset", 0))
+        waypoints = np.asarray(image_waypoints)
+        close_flags = [
+            float(waypoint[3]) >= close_threshold
+            for waypoint in waypoints
+        ]
+        close_flags = self._offset_first_close_transition(close_flags, close_transition_offset)
+        for idx, (waypoint, is_close) in enumerate(zip(waypoints, close_flags), start=1):
             x_norm, y_norm, z_value, grip_value = [float(v) for v in waypoint[:4]]
             col = int(round((x_norm + 1.0) * 0.5 * (width - 1)))
             row = int(round((1.0 - y_norm) * 0.5 * (height - 1)))
             col = int(np.clip(col, 0, width - 1))
             row = int(np.clip(row, 0, height - 1))
 
-            is_close = grip_value >= close_threshold
             color = (255, 40, 40) if is_close else (40, 220, 255)
             radius = 7 if is_close else 5
 
