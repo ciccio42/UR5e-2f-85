@@ -29,7 +29,7 @@ docker run -it --rm \
   -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
   -v ${UR5e_2f_85_PATH}/ai_controller:/home/ros2_ws/src/ai_controller \
   -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
-  -v ${UR5e_2f_85_PATH}/zed_camera/zed_camera_calibration:/home/ros2_ws/src/zed_camera/zed_camera_calibration:ro \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed-ros2-description:/home/ros2_ws/src/zed-ros2-description\
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
   -v /home/asus-mivia/Desktop/saved_trajectories:/home/saved_trajectories \
   -v /home/asus-mivia/Desktop/dataset:/dataset \

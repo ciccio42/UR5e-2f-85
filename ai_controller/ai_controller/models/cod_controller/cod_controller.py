@@ -144,7 +144,8 @@ class CODController(AIController):
             random_frames: Whether to sample frames randomly.
         """
         selected_frames_indx = []
-        def clip(x): return int(max(0, min(x, len(frames) - 1)))
+        #def clip(x): return int(max(0, min(x, len(frames) - 1)))
+        def clip(x): return int(max(0, 0))
         per_bracket = max(len(frames) / n_select, 1)
 
         if random_frames:

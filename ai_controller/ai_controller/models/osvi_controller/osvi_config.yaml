@@ -1,11 +1,11 @@
 #config di eval
-#checkpoint_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi_wm/last.pt"
-#training_config_path: "/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_pick_place_new_training.yaml"
-#projection_matrix_path: "/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_zed_front_projection.yaml"
+checkpoint_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi_wm/last.pt"
+training_config_path: "/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_pick_place_new_training.yaml"
+projection_matrix_path: "/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_zed_front_projection.yaml"
 
-checkpoint_path: "/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/checkpoint_folder/osvi_wm/best.pt"
-training_config_path: "/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_pick_place_new_training.yaml"
-projection_matrix_path: "/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_zed_front_projection.yaml"
+#checkpoint_path: "/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/checkpoint_folder/osvi_wm/best.pt"
+#training_config_path: "/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_pick_place_new_training.yaml"
+#projection_matrix_path: "/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/osvi_controller/configs/ur5e_zed_front_projection.yaml"
 
 device: "cuda"
 
@@ -15,8 +15,8 @@ image:
   width: 320
   crop: [0, 10, 140, 100]
   normalize: false
-  #live_images_are_rgb: true #se live_camera
-  live_images_are_rgb: false #se scripted_rollout
+  live_images_are_rgb: true #se live_camera
+  #live_images_are_rgb: false #se scripted_rollout
   demo_convert_bgr_to_rgb: false
 
 context:
