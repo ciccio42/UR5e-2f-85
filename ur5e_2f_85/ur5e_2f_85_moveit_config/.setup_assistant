@@ -1,13 +1,13 @@
 moveit_setup_assistant_config:
   urdf:
     package: ur5e_2f_85_description
-    relative_path: urdf/ur5e_2f_85_platform.urdf
+    relative_path: urdf/ur5e_2f_85_platform_control.urdf.xacro
   srdf:
     relative_path: config/ur5e_2f_85.srdf
   package_settings:
     author_name: Francesco Rosa
     author_email: frosa@unisa.it
-    generated_timestamp: 1766659854
+    generated_timestamp: 1788527087
   control_xacro:
     command:
       - position

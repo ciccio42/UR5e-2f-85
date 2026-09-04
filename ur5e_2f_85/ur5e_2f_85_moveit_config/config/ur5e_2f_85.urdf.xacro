@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="ur5e_2f_85">
-    <xacro:arg name="initial_positions_file" default="initial_positions.yaml" />
+    <xacro:arg name="initial_positions_file" default="$(find ur5e_2f_85_moveit_config)/config/initial_positions.yaml" />
 
     <!-- Import ur5e_2f_85 urdf file -->
-    <xacro:include filename="$(find ur5e_2f_85_description)/urdf/ur5e_2f_85_platform.urdf" />
+    <xacro:include filename="$(find ur5e_2f_85_description)/urdf/ur5e_2f_85_platform_control.urdf.xacro" />
 
     <!-- Import control_xacro -->
     <xacro:include filename="ur5e_2f_85.ros2_control.xacro" />
