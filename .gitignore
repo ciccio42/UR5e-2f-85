@@ -18,6 +18,7 @@ mimic_video_workspace/**/__pycache__/
 mimic_video_workspace/**/*.pyc
 mimic_video_workspace/tmp/
 interleave_pi_zero_workspace/outputs/
+interleave_pi_zero_workspace/models/
 interleave_pi_zero_workspace/checkpoints/
 interleave_pi_zero_workspace/logs/
 interleave_pi_zero_workspace/processed_data/
