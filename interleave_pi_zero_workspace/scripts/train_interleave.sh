@@ -90,7 +90,7 @@ CONTAINER_WORKSPACE="/workspace"
 
 CONTAINER_OPEN_PI_ZERO="$CONTAINER_WORKSPACE/external/Interleave-VLA/open-pi-zero"
 
-CONTAINER_VLA_DATA_DIR="$CONTAINER_WORKSPACE/processed_data/ur5e_interleave/0.1.0"
+CONTAINER_VLA_DATA_DIR="$CONTAINER_WORKSPACE/processed_data"
 
 CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/outputs"
 
@@ -173,6 +173,10 @@ run_training() {
     export VLA_LOG_DIR="$CONTAINER_VLA_LOG_DIR"
     export TRANSFORMERS_CACHE
     export INTERLEAVE_CHECKPOINT
+    export CUDA_HOME=/usr/local/cuda
+    export PATH="$CUDA_HOME/bin:$PATH"
+    export TRITON_PTXAS_PATH="$CUDA_HOME/bin/ptxas"
+    export TRITON_PTXAS_BLACKWELL_PATH="$CUDA_HOME/bin/ptxas"
 
     export WANDB_DIR="$CONTAINER_VLA_LOG_DIR/wandb"
 
@@ -252,8 +256,9 @@ run_training() {
 
     cd "$CONTAINER_OPEN_PI_ZERO"
 
+    export PYTHONPATH="$CONTAINER_OPEN_PI_ZERO${PYTHONPATH:+:$PYTHONPATH}"
 
-    uv run scripts/run.py \
+    /opt/interleave-pizero-venv/bin/python scripts/run.py \
         --config-name=interleaved_ur5e \
         "${overrides[@]}" \
         2>&1 | tee "$logfile"
