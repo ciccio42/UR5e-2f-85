@@ -132,6 +132,14 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'mimic_video_controller':
             from ai_controller.models.mimic_video_controller.mimic_video_controller import MimicVideoController
             self.controller = MimicVideoController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'interleave_pi0_controller':
+            from ai_controller.models.interleave_pi0_controller.interleave_pi0_controller import (
+                InterleavePi0Controller,
+            )
+            self.controller = InterleavePi0Controller(
+                self.model_config_path,
+                self.task_name,
+            )
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -415,6 +423,31 @@ class AIControllerNode(Node):
             [1.0 if self.gripper_closed else 0.0],
         ])
 
+    def _build_interleave_pi0_state(self, robot_state):
+        """
+        Build the 8D robot state consumed by InterleavePi0Controller:
+
+            [x, y, z, qx, qy, qz, qw, gripper_closed]
+
+        The controller converts the XYZW quaternion internally to RPY before
+        applying the same proprio normalization used during training.
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; '
+                'cannot build Interleave-Pi0 proprio state.'
+            )
+            return None
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+            [1.0 if self.gripper_closed else 0.0],
+        ])
+
     def _mimic_trace_enabled(self):
         return (
             self.ai_controller_target == 'mimic_video_controller'
@@ -647,6 +680,12 @@ class AIControllerNode(Node):
                             self.controller.load_command(self.demo_path, task_id=enter_task_id)
 
                         self._warmup_mimic_video_history()
+
+                    elif self.ai_controller_target == 'interleave_pi0_controller':
+                        self.controller.load_command(
+                            self.demo_path,
+                            task_id=enter_task_id,
+                        )
                     else:
                         self.controller.load_command(self.demo_path,
                                                      enter_task_id,
@@ -680,6 +719,8 @@ class AIControllerNode(Node):
                     states = self._build_tinyvla_state(robot_state)
                 elif self.ai_controller_target == 'mimic_video_controller':
                     states = self._build_mimic_video_state(robot_state)
+                elif self.ai_controller_target == 'interleave_pi0_controller':
+                    states = self._build_interleave_pi0_state(robot_state)
                 else:
                     states = None
 
@@ -719,7 +760,10 @@ class AIControllerNode(Node):
                 if self.ai_controller_target == 'cod_controller':
                     pred_action, predicted_bb, target_obj_prediction = out
                     actions = [pred_action]
-                elif self.ai_controller_target == 'mimic_video_controller':
+                elif self.ai_controller_target in (
+                    'mimic_video_controller',
+                    'interleave_pi0_controller',
+                ):
                     # Mimic Video already returns absolute 8D targets with XYZW quaternion.
                     actions = out
                 elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):

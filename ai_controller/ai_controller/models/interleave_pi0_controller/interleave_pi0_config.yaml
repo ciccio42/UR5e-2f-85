@@ -1,6 +1,10 @@
 # Runtime
 checkpoint_path: ${oc.env:INTERLEAVE_PI0_CHECKPOINT}
 pretrained_model_path: ${oc.env:INTERLEAVE_PI0_PALIGEMMA}
+
+dataset_statistics_path: "dataset_statistics.json"
+
+
 use_torch_compile: true
 use_bf16: true
 device: "cuda"
@@ -10,6 +14,9 @@ lora_dropout: 0.0
 
 num_inference_steps: 10
 final_action_clip_value: 1.0  # data normalized in [-1,1]
+
+num_execute_actions: 4
+trace_action_conversions: false
 
 cond_steps: 1
 horizon_steps: 4
@@ -127,75 +134,85 @@ tasks:
   # ---------------------------------------------------------------------------
   # GREEN
   # ---------------------------------------------------------------------------
-  0:
+  "00":
     prompt: "Pick the <image> and place it into the first bin"
     instruction_image: "instruction_images/green_box.png"
 
-  1:
+  "01":
     prompt: "Pick the <image> and place it into the second bin"
     instruction_image: "instruction_images/green_box.png"
 
-  2:
+  "02":
     prompt: "Pick the <image> and place it into the third bin"
     instruction_image: "instruction_images/green_box.png"
 
-  3:
+  "03":
     prompt: "Pick the <image> and place it into the fourth bin"
     instruction_image: "instruction_images/green_box.png"
 
   # ---------------------------------------------------------------------------
   # YELLOW
   # ---------------------------------------------------------------------------
-  4:
+  "04":
     prompt: "Pick the <image> and place it into the first bin"
     instruction_image: "instruction_images/yellow_box.png"
 
-  5:
+  "05":
     prompt: "Pick the <image> and place it into the second bin"
     instruction_image: "instruction_images/yellow_box.png"
 
-  6:
+  "06":
     prompt: "Pick the <image> and place it into the third bin"
     instruction_image: "instruction_images/yellow_box.png"
 
-  7:
+  "07":
     prompt: "Pick the <image> and place it into the fourth bin"
     instruction_image: "instruction_images/yellow_box.png"
 
   # ---------------------------------------------------------------------------
   # BLUE
   # ---------------------------------------------------------------------------
-  8:
+  "08":
     prompt: "Pick the <image> and place it into the first bin"
     instruction_image: "instruction_images/blue_box.png"
 
-  9:
+  "09":
     prompt: "Pick the <image> and place it into the second bin"
     instruction_image: "instruction_images/blue_box.png"
 
-  10:
+  "10":
     prompt: "Pick the <image> and place it into the third bin"
     instruction_image: "instruction_images/blue_box.png"
 
-  11:
+  "11":
     prompt: "Pick the <image> and place it into the fourth bin"
     instruction_image: "instruction_images/blue_box.png"
 
   # ---------------------------------------------------------------------------
   # RED
   # ---------------------------------------------------------------------------
-  12:
+  "12":
     prompt: "Pick the <image> and place it into the first bin"
     instruction_image: "instruction_images/red_box.png"
 
-  13:
+  "13":
     prompt: "Pick the <image> and place it into the second bin"
     instruction_image: "instruction_images/red_box.png"
 
-  14:
+  "14":
     prompt: "Pick the <image> and place it into the third bin"
     instruction_image: "instruction_images/red_box.png"
 
-  15:
+  "15":
     prompt: "Pick the <image> and place it into the fourth bin"
     instruction_image: "instruction_images/red_box.png"
+
+
+
+# Test ablation: MoveIt receives this fixed absolute TCP orientation instead of
+# the quaternion predicted by Interleave-Pi0. Values are in ROS XYZW order.
+# fixed_orientation_xyzw:
+#   - 0.9994452044624775
+#   - 0.03161651380119412
+#   - 0.0021438049655468088
+#   - -0.010251021036213035

@@ -1,0 +1,386 @@
+# =============================================================================
+# Interleave-Pi0 + ROS 2 Jazzy runtime
+# NVIDIA DGX Spark / GB10 / ARM64
+#
+# Base:
+#   interleave-pizero:spark
+#
+# La base contiene già lo stack GPU validato durante il training:
+#   - Ubuntu 24.04
+#   - CUDA 12.9.x
+#   - cuDNN
+#   - toolchain NVIDIA / ARM64
+#   - /opt/interleave-pizero-venv (Python 3.10, lasciato intatto)
+#
+# Questo Dockerfile aggiunge:
+#   - ROS 2 Jazzy
+#   - Python 3.12
+#   - /opt/interleave-pizero-ros
+#   - sole dipendenze Python necessarie all'inferenza Interleave-Pi0
+# =============================================================================
+
+ARG BASE_IMAGE=interleave-pizero:spark
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-c"]
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ROS_DISTRO=jazzy
+
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# Nuovo ambiente Python usato contemporaneamente da ROS e Interleave.
+ENV INTERLEAVE_ROS_VENV=/opt/interleave-pizero-ros
+
+# Workspace Interleave che verrà montato dall'host a runtime.
+ENV INTERLEAVE_PI0_WORKSPACE=/workspace
+ENV OPEN_PI_ZERO=/workspace/external/Interleave-VLA/open-pi-zero
+
+# Stack CUDA ereditato dalla training image.
+ENV CUDA_HOME=/usr/local/cuda
+ENV CUDA_PATH=/usr/local/cuda
+
+# DGX Spark / GB10.
+ENV TORCH_CUDA_ARCH_LIST="12.0+PTX"
+
+# Utilizzato da torch.compile / Triton.
+ENV TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+ENV TRITON_PTXAS_BLACKWELL_PATH=/usr/local/cuda/bin/ptxas
+
+
+# =============================================================================
+# 1. DIPENDENZE DI SISTEMA
+# =============================================================================
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        locales \
+        curl \
+        ca-certificates \
+        gnupg \
+        lsb-release \
+        software-properties-common \
+        build-essential \
+        cmake \
+        ninja-build \
+        git \
+    && locale-gen en_US.UTF-8 \
+    && add-apt-repository universe \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# =============================================================================
+# 2. REPOSITORY ROS 2
+# =============================================================================
+
+RUN curl -sSL \
+        https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
+        -o /usr/share/keyrings/ros-archive-keyring.gpg \
+    && echo \
+        "deb [arch=$(dpkg --print-architecture) \
+        signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
+        http://packages.ros.org/ros2/ubuntu \
+        $(. /etc/os-release && echo ${UBUNTU_CODENAME}) main" \
+        > /etc/apt/sources.list.d/ros2.list
+
+
+# =============================================================================
+# 3. ROS 2 JAZZY
+# =============================================================================
+#
+# Non installiamo:
+#   - UR driver
+#   - ZED driver
+#   - MoveIt completo
+#
+# Questi continuano a essere eseguiti negli altri container.
+#
+# Qui installiamo solo ciò che AIControllerNode deve IMPORTARE/usare
+# come client ROS.
+# =============================================================================
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        \
+        ros-jazzy-ros-base \
+        ros-jazzy-rclpy \
+        \
+        ros-jazzy-cv-bridge \
+        ros-jazzy-message-filters \
+        ros-jazzy-tf2-ros \
+        \
+        ros-jazzy-sensor-msgs \
+        ros-jazzy-geometry-msgs \
+        ros-jazzy-control-msgs \
+        ros-jazzy-action-msgs \
+        \
+        ros-jazzy-ament-cmake \
+        ros-jazzy-ament-cmake-python \
+        ros-jazzy-rosidl-default-generators \
+        ros-jazzy-rosidl-default-runtime \
+        \
+        python3-colcon-common-extensions \
+        python3-rosdep \
+        python3-vcstool \
+        \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
+        \
+        python3-opencv \
+    && rm -rf /var/lib/apt/lists/*
+
+
+# =============================================================================
+# 4. VENV PYTHON 3.12 PER ROS + INTERLEAVE
+# =============================================================================
+#
+# --system-site-packages è intenzionale:
+#
+# rclpy, cv_bridge, tf2_ros ecc. vengono installati via apt nella
+# distribuzione Python di Ubuntu. Devono essere visibili anche dal
+# virtual environment usato da Interleave.
+# =============================================================================
+
+RUN /usr/bin/python3.12 -m venv \
+        --system-site-packages \
+        ${INTERLEAVE_ROS_VENV}
+
+RUN ${INTERLEAVE_ROS_VENV}/bin/python -m pip install \
+        --upgrade \
+        pip \
+        setuptools \
+        wheel
+
+
+# =============================================================================
+# 5. PYTORCH 2.8.0 + CUDA 12.9
+# =============================================================================
+#
+# Manteniamo la stessa versione utilizzata durante il training.
+#
+# Esiste la wheel:
+#   CPython 3.12
+#   Linux aarch64
+#   CUDA 12.9
+#
+# =============================================================================
+
+RUN ${INTERLEAVE_ROS_VENV}/bin/python -m pip install \
+        --index-url https://download.pytorch.org/whl/cu129 \
+        "torch==2.8.0"
+
+
+# =============================================================================
+# 6. TRITON 3.4.0
+# =============================================================================
+#
+# Necessario perché il runtime attuale può utilizzare:
+#
+#   torch.compile(...)
+#
+# Usiamo l'indice PyTorch, che contiene la wheel ARM64 CPython 3.12.
+# =============================================================================
+
+RUN ${INTERLEAVE_ROS_VENV}/bin/python -m pip install \
+        --index-url https://download.pytorch.org/whl \
+        "triton==3.4.0"
+
+
+# =============================================================================
+# 7. DIPENDENZE MINIME INTERLEAVE-Pi0 INFERENCE
+# =============================================================================
+#
+# Non installiamo l'intero pyproject di open-pi-zero.
+#
+# In particolare NON servono:
+#
+#   tensorflow
+#   tensorflow-datasets
+#   wandb
+#   gsutil
+#   matplotlib
+#   imageio
+#   pre-commit
+#
+# Il dataset loader e tutta la pipeline di training non vengono usati
+# durante il deployment sul robot.
+#
+# open-pi-zero NON viene installato con `pip install -e .`, perché il
+# pyproject originale richiede Python ==3.10.*.
+#
+# Il sorgente verrà invece esposto tramite PYTHONPATH.
+# =============================================================================
+
+RUN ${INTERLEAVE_ROS_VENV}/bin/python -m pip install \
+        "transformers==4.47.1" \
+        "numpy==1.26.4" \
+        "scipy==1.11.4" \
+        "bitsandbytes==0.49.0" \
+        "hydra-core" \
+        "omegaconf" \
+        "einops" \
+        "pillow" \
+        "sentencepiece" \
+        "safetensors"
+
+
+# =============================================================================
+# 8. RUNTIME ENVIRONMENT
+# =============================================================================
+#
+# Questo file verrà source-ato dal launcher prima del colcon build e
+# prima dell'esecuzione di ai_controller_node.
+# =============================================================================
+
+RUN cat > ${INTERLEAVE_ROS_VENV}/setup_runtime.sh <<'EOF'
+#!/usr/bin/env bash
+
+# ---------------------------------------------------------------------------
+# ROS Jazzy
+# ---------------------------------------------------------------------------
+
+source /opt/ros/jazzy/setup.bash
+
+
+# ---------------------------------------------------------------------------
+# Python 3.12 ROS + Interleave
+# ---------------------------------------------------------------------------
+
+source /opt/interleave-pizero-ros/bin/activate
+
+
+# ---------------------------------------------------------------------------
+# Interleave-VLA sources
+# ---------------------------------------------------------------------------
+
+export INTERLEAVE_PI0_WORKSPACE=/workspace
+export OPEN_PI_ZERO=/workspace/external/Interleave-VLA/open-pi-zero
+
+case ":${PYTHONPATH:-}:" in
+    *":${OPEN_PI_ZERO}:"*)
+        ;;
+    *)
+        export PYTHONPATH="${OPEN_PI_ZERO}${PYTHONPATH:+:${PYTHONPATH}}"
+        ;;
+esac
+
+
+# ---------------------------------------------------------------------------
+# CUDA / Triton
+# ---------------------------------------------------------------------------
+
+export CUDA_HOME=/usr/local/cuda
+export CUDA_PATH=/usr/local/cuda
+
+export TORCH_CUDA_ARCH_LIST="12.0+PTX"
+
+export TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas
+export TRITON_PTXAS_BLACKWELL_PATH=/usr/local/cuda/bin/ptxas
+
+
+# ---------------------------------------------------------------------------
+# ROS workspace
+# ---------------------------------------------------------------------------
+#
+# Dopo che ai_controller e moveit_controller_srvs sono stati compilati,
+# rendiamo disponibile anche il workspace ROS.
+# ---------------------------------------------------------------------------
+
+if [[ -f /home/ros2_ws/install/setup.bash ]]; then
+    source /home/ros2_ws/install/setup.bash
+fi
+EOF
+
+RUN chmod +x ${INTERLEAVE_ROS_VENV}/setup_runtime.sh
+
+
+# =============================================================================
+# 9. DIRECTORY ROS WORKSPACE
+# =============================================================================
+
+RUN mkdir -p \
+        /home/ros2_ws/src \
+        /workspace
+
+
+# =============================================================================
+# 10. BUILD-TIME SMOKE TEST
+# =============================================================================
+#
+# Durante `docker build` non assumiamo che la GPU sia disponibile.
+#
+# Verifichiamo però che:
+#   - Python sia 3.12;
+#   - ROS sia importabile dallo stesso interprete;
+#   - lo stack ML minimale sia importabile;
+#   - Torch sia la versione CUDA 12.9;
+#   - Triton sia presente.
+#
+# Gli import di `src.model...` verranno verificati dal launcher, perché
+# la repository open-pi-zero viene montata solamente a runtime.
+# =============================================================================
+
+RUN source /opt/ros/jazzy/setup.bash && \
+    source ${INTERLEAVE_ROS_VENV}/bin/activate && \
+    python - <<'PY'
+import sys
+
+assert sys.version_info[:2] == (3, 12), sys.version
+
+# ROS
+import rclpy
+import cv_bridge
+import message_filters
+import tf2_ros
+
+from sensor_msgs.msg import Image, JointState
+from control_msgs.action import GripperCommand
+
+# Interleave runtime
+import torch
+import triton
+import transformers
+import numpy
+import scipy
+import hydra
+import omegaconf
+import einops
+import PIL
+import cv2
+import bitsandbytes
+import safetensors
+
+print()
+print("============================================================")
+print(" Interleave-Pi0 ROS runtime")
+print("============================================================")
+print(f"Python:        {sys.version.split()[0]}")
+print(f"PyTorch:       {torch.__version__}")
+print(f"PyTorch CUDA:  {torch.version.cuda}")
+print(f"Triton:        {triton.__version__}")
+print(f"Transformers:  {transformers.__version__}")
+print(f"NumPy:         {numpy.__version__}")
+print(f"SciPy:         {scipy.__version__}")
+print("rclpy:         OK")
+print("cv_bridge:     OK")
+print("tf2_ros:       OK")
+print("bitsandbytes:  OK")
+print("============================================================")
+print()
+PY
+
+
+# =============================================================================
+# 11. DEFAULT RUNTIME
+# =============================================================================
+
+WORKDIR /home/ros2_ws
+
+# Evitiamo di ereditare eventuali entrypoint particolari dalla training image.
+ENTRYPOINT []
+
+CMD ["/bin/bash"]
