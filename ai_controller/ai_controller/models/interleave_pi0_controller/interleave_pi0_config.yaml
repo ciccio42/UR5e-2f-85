@@ -1,0 +1,201 @@
+# Runtime
+checkpoint_path: ${oc.env:INTERLEAVE_PI0_CHECKPOINT}
+pretrained_model_path: ${oc.env:INTERLEAVE_PI0_PALIGEMMA}
+use_torch_compile: true
+use_bf16: true
+device: "cuda"
+lora: True 
+lora_r: 32 
+lora_dropout: 0.0 
+
+num_inference_steps: 10
+final_action_clip_value: 1.0  # data normalized in [-1,1]
+
+cond_steps: 1
+horizon_steps: 4
+action_dim: 7   # delta xyz + delta RPY + gripper
+proprio_dim: 7  # absolute xyz + RPY + gripper
+max_seq_len: 540  # 256 observation-image tokens + 256 instruction-image tokens + text/special tokens
+tokenizer_padding: max_length # instead of truncating to longest
+max_image_text_tokens: ${max_seq_len}
+
+quantize: false
+action_expert_adaptive_mode: null
+
+mixture:
+  vlm:   # gemma
+    hidden_size: 2048
+    intermediate_size: 16384
+    use_final_norm: False
+    cache: True
+    use_quantize: ${quantize}
+    use_lora: ${lora}
+    adaptive_mode:  # not applicable for gemma
+    rope_theta: 10000.0  # 10000 in gemma
+  proprio:
+    hidden_size: 1024
+    intermediate_size: 4096
+    use_final_norm: True  # technically no, but sharing weights with action anyway
+    cache: True
+    use_quantize: False
+    use_lora: False
+    adaptive_mode: ${action_expert_adaptive_mode}
+    rope_theta: ${action_expert_rope_theta}
+  action:
+    hidden_size: 1024
+    intermediate_size: 4096
+    use_final_norm: True
+    cache: False
+    use_quantize: False
+    use_lora: False
+    adaptive_mode: ${action_expert_adaptive_mode}
+    rope_theta: ${action_expert_rope_theta}
+time_hidden_size: 256 # only applicable if using adaptive
+time_max_period: 100.0
+action_expert_rope_theta: 100.0   # since action/proprio seq_len is pretty small
+
+# Fixed
+image_token_index: 257152
+vocab_size: 257216
+pad_token_id: 0
+# hidden_size: 2048 # for deepspeed
+
+vision:
+  _target_: src.model.paligemma.siglip.SiglipVisionModel
+  config:
+    hidden_size: 1152 # siglip
+    intermediate_size: 4304
+    num_hidden_layers: 27
+    num_attention_heads: 16
+    num_channels: 3
+    image_size: 224
+    patch_size: 14
+    layer_norm_eps: 1e-6
+    attention_dropout: 0.0
+    num_image_tokens: 256
+    lora:
+      r: ${lora_r}
+      dropout: ${lora_dropout}
+  use_quantize: ${quantize}
+  use_lora: ${lora}
+
+vision_projector:
+  _target_: src.model.paligemma.siglip.PaliGemmaMultiModalProjector
+  config:
+    vision_config:
+      hidden_size: 1152
+      projection_dim: 2048
+    lora:
+      r: ${lora_r}
+      dropout: ${lora_dropout}
+  use_quantize: ${quantize}
+  use_lora: ${lora}
+
+joint:
+  _target_: src.model.vla.joint_model.JointModel
+  config:
+    action_expert_adaptive_mode: ${action_expert_adaptive_mode}
+    time_hidden_size: ${time_hidden_size}
+    mixture: ${mixture}
+    lora:
+      r: ${lora_r}
+      dropout: ${lora_dropout}
+    #
+    num_hidden_layers: 18
+    num_attention_heads: 8
+    num_key_value_heads: 1
+    head_dim: 256
+    rms_norm_eps: 1e-6
+    attention_bias: False
+    attention_dropout: 0.0
+    pad_token_id: ${pad_token_id}
+
+
+
+# =============================================================================
+# TASKS
+# =============================================================================
+#
+# I 16 task rappresentano tutte le combinazioni:
+#   4 colori x 4 bin.
+#
+# Task non presenti nel training e usati per test di generalizzazione:
+#   0, 5, 10, 15
+#
+
+tasks:
+  # ---------------------------------------------------------------------------
+  # GREEN
+  # ---------------------------------------------------------------------------
+  0:
+    prompt: "Pick the <image> and place it into the first bin"
+    instruction_image: "instruction_images/green_box.png"
+
+  1:
+    prompt: "Pick the <image> and place it into the second bin"
+    instruction_image: "instruction_images/green_box.png"
+
+  2:
+    prompt: "Pick the <image> and place it into the third bin"
+    instruction_image: "instruction_images/green_box.png"
+
+  3:
+    prompt: "Pick the <image> and place it into the fourth bin"
+    instruction_image: "instruction_images/green_box.png"
+
+  # ---------------------------------------------------------------------------
+  # YELLOW
+  # ---------------------------------------------------------------------------
+  4:
+    prompt: "Pick the <image> and place it into the first bin"
+    instruction_image: "instruction_images/yellow_box.png"
+
+  5:
+    prompt: "Pick the <image> and place it into the second bin"
+    instruction_image: "instruction_images/yellow_box.png"
+
+  6:
+    prompt: "Pick the <image> and place it into the third bin"
+    instruction_image: "instruction_images/yellow_box.png"
+
+  7:
+    prompt: "Pick the <image> and place it into the fourth bin"
+    instruction_image: "instruction_images/yellow_box.png"
+
+  # ---------------------------------------------------------------------------
+  # BLUE
+  # ---------------------------------------------------------------------------
+  8:
+    prompt: "Pick the <image> and place it into the first bin"
+    instruction_image: "instruction_images/blue_box.png"
+
+  9:
+    prompt: "Pick the <image> and place it into the second bin"
+    instruction_image: "instruction_images/blue_box.png"
+
+  10:
+    prompt: "Pick the <image> and place it into the third bin"
+    instruction_image: "instruction_images/blue_box.png"
+
+  11:
+    prompt: "Pick the <image> and place it into the fourth bin"
+    instruction_image: "instruction_images/blue_box.png"
+
+  # ---------------------------------------------------------------------------
+  # RED
+  # ---------------------------------------------------------------------------
+  12:
+    prompt: "Pick the <image> and place it into the first bin"
+    instruction_image: "instruction_images/red_box.png"
+
+  13:
+    prompt: "Pick the <image> and place it into the second bin"
+    instruction_image: "instruction_images/red_box.png"
+
+  14:
+    prompt: "Pick the <image> and place it into the third bin"
+    instruction_image: "instruction_images/red_box.png"
+
+  15:
+    prompt: "Pick the <image> and place it into the fourth bin"
+    instruction_image: "instruction_images/red_box.png"
