@@ -84,7 +84,7 @@ dataset = builder.as_dataset(
 
 saved = set()
 
-for episode in tfds.as_numpy(dataset):
+for episode in dataset:
     task_id = int(
         episode["episode_metadata"]["task_id"].numpy()
     )
@@ -106,7 +106,7 @@ for episode in tfds.as_numpy(dataset):
 
     output_path = OUTPUT_DIR / TARGET_TASKS[task_id]
 
-    Image.fromarray(crop, mode="RGB").save(output_path)
+    Image.fromarray(crop).save(output_path)
 
     print(
         f"task_id={task_id} -> {output_path} "
