@@ -96,6 +96,10 @@ REPO_ROOT="${UR5e_2f_85_PATH:-$DEFAULT_REPO_ROOT}"
 
 INTERLEAVE_WORKSPACE_HOST="$REPO_ROOT/interleave_pi_zero_workspace"
 
+CHECKPOINT_HOST="$INTERLEAVE_WORKSPACE_HOST/checkpoints/posttraining/step66240.pt"
+
+PALIGEMMA_HOST="$INTERLEAVE_WORKSPACE_HOST/checkpoints/paligemma/paligemma-3b-pt-224"
+
 DOCKERFILE_HOST="$INTERLEAVE_WORKSPACE_HOST/Docker/Dockerfile.ros"
 
 
@@ -202,20 +206,7 @@ CONFIG_HOST="$REPO_ROOT/ai_controller/ai_controller/models/interleave_pi0_contro
 # se erano già state definite per il training.
 # =============================================================================
 
-CHECKPOINT_HOST_RAW="${INTERLEAVE_PI0_CHECKPOINT_HOST:-${INTERLEAVE_PI0_CHECKPOINT:-}}"
-PALIGEMMA_HOST_RAW="${INTERLEAVE_PI0_PALIGEMMA_HOST:-${INTERLEAVE_PI0_PALIGEMMA:-}}"
 
-if [[ -z "$CHECKPOINT_HOST_RAW" ]]; then
-    fail "Definire INTERLEAVE_PI0_CHECKPOINT_HOST con il checkpoint UR5e finale."
-fi
-
-if [[ -z "$PALIGEMMA_HOST_RAW" ]]; then
-    fail "Definire INTERLEAVE_PI0_PALIGEMMA_HOST con la directory PaliGemma."
-fi
-
-
-CHECKPOINT_HOST="$(workspace_path_to_host "$CHECKPOINT_HOST_RAW")"
-PALIGEMMA_HOST="$(workspace_path_to_host "$PALIGEMMA_HOST_RAW")"
 
 
 [[ -f "$CHECKPOINT_HOST" ]] || \

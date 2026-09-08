@@ -116,8 +116,6 @@ ros2 run moveit_controller moveit_controller_node
 # Quinto terminale
 cd Alex/UR5e-2f-85
 export UR5e_2f_85_PATH="$PWD"
-export INTERLEAVE_PI0_CHECKPOINT_HOST="/percorso/al/checkpoint_finale.pt"
-export INTERLEAVE_PI0_PALIGEMMA_HOST="/percorso/a/paligemma"
 
 bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh
 
