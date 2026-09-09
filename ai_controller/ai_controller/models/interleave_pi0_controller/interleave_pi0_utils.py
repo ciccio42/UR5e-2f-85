@@ -21,7 +21,7 @@ IMAGE_SIZE = 224
 #
 # Sono gli stessi margini usati durante la costruzione del dataset originale
 # UR5e prima del resize della camera frontale a 224x224.
-FRONT_CROP_MARGINS = (0, 10, 130, 100)
+FRONT_CROP_MARGINS = (0, 10, 140, 90) # top, bottom, left, right
 
 PROPRIO_DIM = 7
 ACTION_DIM = 7
@@ -793,35 +793,48 @@ def denormalize_action_chunk(
     return result
 
 
-def binarize_gripper(
-    value: float,
-    threshold: float = 0.5,
-) -> float:
-    """
-    Converte l'uscita continua del modello in comando binario del gripper.
+def convert_gripper(
+    model_value: float,
+    currently_closed: bool,
+    close_threshold: float = 0.9,
+    open_threshold: float = 0.7,
+    open_position: float = 0.0,
+    closed_position: float = 255.0,
+) -> tuple[float, bool]:
+    if not np.isfinite(model_value):
+        raise ValueError(
+            f"Invalid gripper prediction: {model_value}"
+        )
 
-    QUANDO VIENE ESEGUITA
-    --------------------
-    Viene usata nel `post_process()` prima di inviare ciascuna action
-    al controller del gripper.
+    if not 0.0 <= open_threshold <= close_threshold <= 1.0:
+        raise ValueError(
+            "Expected 0 <= open_threshold <= close_threshold <= 1"
+        )
 
-    Il training usa:
-        0 = open
-        1 = closed
-
-    Il flow matching può produrre valori continui vicini a questi estremi;
-    per l'esecuzione reale li trasformiamo quindi in un comando binario.
-    """
-    return float(
-        float(value) >= threshold
+    is_closed = (
+        model_value >= open_threshold
+        if currently_closed
+        else model_value > close_threshold
     )
+
+    command = (
+        closed_position
+        if is_closed
+        else open_position
+    )
+
+    return float(command), bool(is_closed)
 
 
 def delta_action_chunk_to_absolute_targets(
     action_chunk: np.ndarray,
     reference_position: np.ndarray,
     reference_quaternion_xyzw: np.ndarray,
-    gripper_threshold: float = 0.5,
+    gripper_closed: bool,
+    close_threshold: float = 0.9,
+    open_threshold: float = 0.7,
+    open_position: float = 0.0,
+    closed_position: float = 255.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Integra sequenzialmente le delta-action previste dal modello.
@@ -932,6 +945,8 @@ def delta_action_chunk_to_absolute_targets(
         dtype=np.float32,
     )
 
+    current_gripper_closed = bool(gripper_closed)
+
     for i, action in enumerate(action_chunk):
 
         # -------------------------------------------------------------
@@ -973,14 +988,18 @@ def delta_action_chunk_to_absolute_targets(
         # -------------------------------------------------------------
         # Gripper
         # -------------------------------------------------------------
-        gripper = binarize_gripper(
-            action[6],
-            threshold=gripper_threshold,
+        gripper_command, current_gripper_closed = convert_gripper(
+            model_value=action[6],
+            currently_closed=current_gripper_closed,
+            close_threshold=close_threshold,
+            open_threshold=open_threshold,
+            open_position=open_position,
+            closed_position=closed_position,
         )
 
         positions[i] = current_position
         quaternions_xyzw[i] = current_quaternion
-        gripper_commands[i] = gripper
+        gripper_commands[i] = gripper_command
 
     return (
         positions.astype(np.float32),

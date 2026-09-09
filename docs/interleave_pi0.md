@@ -1,4 +1,6 @@
 # primo terminale
+export ROBOT_IP=192.168.1.100
+export UR5e_2f_85_PATH="/home/asus-mivia/Desktop/Alex/UR5e-2f-85"
 ## UR-Container 
 ```bash
 xhost +local:docker
@@ -117,7 +119,7 @@ ros2 run moveit_controller moveit_controller_node
 cd Alex/UR5e-2f-85
 export UR5e_2f_85_PATH="$PWD"
 
-bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh
+bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh --no-full-preflight
 
 ros2 run ai_controller ai_controller_node --ros-args \
   -p move_robot:=True \

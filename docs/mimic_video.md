@@ -1,6 +1,8 @@
 # primo terminale
 ## UR-Container 
 ```bash
+export ROBOT_IP=192.168.1.100
+export UR5e_2f_85_PATH="/home/asus-mivia/Desktop/Alex/UR5e-2f-85"
 xhost +local:docker
 docker run -it --rm \
   --gpus all \

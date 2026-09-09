@@ -718,6 +718,9 @@ class InterleavePi0Controller(AIController):
                 reference_quaternion_xyzw=output_data[
                     "reference_quaternion"
                 ],
+                gripper_closed=output_data[
+                    "gripper_closed"
+                ],
             )
         )
 
@@ -1046,6 +1049,7 @@ class InterleavePi0Controller(AIController):
                     "reference_quaternion": processed[
                         "reference_quaternion"
                     ],
+                    "gripper_closed": processed["gripper_closed"],
                     "query_step": t,
                 }
             )

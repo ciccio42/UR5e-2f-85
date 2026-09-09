@@ -395,7 +395,7 @@ echo " PREFLIGHT 1/6 - Python / ROS / CUDA"
 echo "============================================================"
 
 docker exec "$CONTAINER_NAME" bash -lc "
-    set -Eeuo pipefail
+    set -Eeo pipefail
 
     [[ -f '$RUNTIME_SETUP' ]] || {
         echo 'Runtime setup mancante: $RUNTIME_SETUP' >&2
@@ -403,6 +403,7 @@ docker exec "$CONTAINER_NAME" bash -lc "
     }
 
     source '$RUNTIME_SETUP'
+    
 
     echo \"Python: \$(command -v python)\"
     python --version
@@ -465,8 +466,10 @@ echo " PREFLIGHT 2/6 - Open-Pi-Zero"
 echo "============================================================"
 
 docker exec "$CONTAINER_NAME" bash -lc "
-    set -Eeuo pipefail
+    set -Eeo pipefail
     source '$RUNTIME_SETUP'
+
+    set -u
 
     [[ -d \"\$OPEN_PI_ZERO\" ]] || {
         echo \"open-pi-zero mancante: \$OPEN_PI_ZERO\" >&2
@@ -499,7 +502,7 @@ echo " PREFLIGHT 3/6 - Asset runtime"
 echo "============================================================"
 
 docker exec "$CONTAINER_NAME" bash -lc "
-    set -Eeuo pipefail
+    set -Eeo pipefail
     source '$RUNTIME_SETUP'
 
     python - <<'PY'
@@ -651,7 +654,7 @@ echo " PREFLIGHT 4/6 - ROS workspace"
 echo "============================================================"
 
 docker exec "$CONTAINER_NAME" bash -lc "
-    set -Eeuo pipefail
+    set -Eeo pipefail
     source '$RUNTIME_SETUP'
 
     cd /home/ros2_ws
@@ -670,8 +673,7 @@ docker exec "$CONTAINER_NAME" bash -lc "
     fi
 
     colcon build \
-        --packages-select \
-        moveit_controller_srvs \
+        --packages-up-to \
         ai_controller
 
     source /home/ros2_ws/install/setup.bash
@@ -778,7 +780,7 @@ if [[ "$FULL_PREFLIGHT" == "1" ]]; then
     echo
 
     docker exec "$CONTAINER_NAME" bash -lc "
-        set -Eeuo pipefail
+        set -Eeo pipefail
         source '$RUNTIME_SETUP'
         source /home/ros2_ws/install/setup.bash
 
@@ -927,7 +929,7 @@ echo " PREFLIGHT 6/6 - ROS graph"
 echo "============================================================"
 
 docker exec "$CONTAINER_NAME" bash -lc "
-    set -Eeuo pipefail
+    set -Eeo pipefail
     source '$RUNTIME_SETUP'
     source /home/ros2_ws/install/setup.bash
 
