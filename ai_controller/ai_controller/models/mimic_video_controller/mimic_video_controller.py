@@ -47,6 +47,7 @@ class MimicVideoConfig:
     use_cuda_graphs: bool = False
     num_execute_actions: int = 10
     trace_action_conversions: bool = False
+    save_denoising_trace: bool = False
     fixed_orientation_xyzw: Optional[list[float]] = None
 
 
@@ -116,6 +117,19 @@ class MimicVideoController(AIController):
             offload_text_encoder=self.cfg.offload_text_encoder,
             downcast_text_encoder=self.cfg.downcast_text_encoder,
         )
+
+        action_pipe = self._policy.model.world2action_pipeline
+
+        if self.cfg.save_denoising_trace:
+            if not hasattr(action_pipe, "capture_denoising_trace"):
+                raise RuntimeError(
+                    "save_denoising_trace=true but the Mimic Video "
+                    "004_capture_action_denoising_trace.patch "
+                    "has not been applied."
+                )
+
+            action_pipe.capture_denoising_trace = True
+
         return self._policy.model
 
     def move_model_to_device(self, device):
@@ -409,6 +423,82 @@ class MimicVideoController(AIController):
 
         return query_path
 
+    def _save_action_denoising_trace(
+        self,
+        query_path: str | Path,
+    ) -> Path:
+        """Save the complete World2Action sampling trajectory."""
+
+        if self._policy is None:
+            raise RuntimeError("Mimic Video policy is not loaded.")
+
+        action_pipe = self._policy.model.world2action_pipeline
+
+        trace = getattr(
+            action_pipe,
+            "last_denoising_trace",
+            None,
+        )
+
+        if trace is None:
+            raise RuntimeError(
+                "No action denoising trace is available. "
+                "Make sure capture_denoising_trace is enabled."
+            )
+
+        samples_normalized = (
+            trace["action_samples_normalized"]
+            .numpy()
+        )
+
+        samples_denormalized = (
+            trace["action_samples_denormalized"]
+            .numpy()
+        )
+
+        timesteps = trace["timesteps"].numpy()
+
+        # B=1 nel nostro controller.
+        if samples_normalized.shape[1] != 1:
+            raise RuntimeError(
+                "Expected batch size 1 for Mimic Video inference, "
+                f"got {samples_normalized.shape[1]}"
+            )
+
+        query_path = Path(query_path)
+        query_path.mkdir(parents=True, exist_ok=True)
+
+        output_path = query_path / "action_denoising_trace.npz"
+
+        np.savez_compressed(
+            output_path,
+
+            # [11, 15, 7]:
+            # initial Gaussian sample + 10 denoising updates.
+            action_samples_normalized=samples_normalized[:, 0],
+
+            # Same trajectory mapped back to the physical
+            # action representation.
+            action_samples_denormalized=samples_denormalized[:, 0],
+
+            # One scalar flow time for each stored sample.
+            # All 15 actions share the same time.
+            timesteps=timesteps[:, 0, 0, 0],
+
+            # Convenience metadata.
+            step_index=np.arange(
+                samples_normalized.shape[0],
+                dtype=np.int32,
+            ),
+
+            seed=np.asarray(
+                [self.cfg.seed],
+                dtype=np.int32,
+            ),
+        )
+
+        return output_path
+
     def inference(self, input_data, t: int = 0, save_path: str | Path | None = None):
         """Restituisce una sola azione del buffer e rigenera il chunk ogni K azioni."""
         if self.prompt_embedding is None:
@@ -428,11 +518,12 @@ class MimicVideoController(AIController):
             )
 
         if self.action_buffer is None:
+            query_path = None
             if save_path is not None:
-                history_path = self._save_input_history(t, save_path)
+                query_path = self._save_input_history(t, save_path)
                 print(
                     f"[MimicVideoController] Saved {NUM_INPUT_FRAMES} model input frames "
-                    f"for query t={t} to {history_path}"
+                    f"for query t={t} to {query_path}"
                 )
             if self.cfg.trace_action_conversions:
                 self._trace_model_input(t, processed)
@@ -444,6 +535,20 @@ class MimicVideoController(AIController):
                 seed=self.cfg.seed,
                 use_cuda_graphs=self.cfg.use_cuda_graphs,
             )
+            if self.cfg.save_denoising_trace:
+                if query_path is None:
+                    raise RuntimeError(
+                        "save_denoising_trace=true requires a non-null save_path."
+                    )
+
+                trace_path = self._save_action_denoising_trace(
+                    query_path
+                )
+
+                print(
+                    f"[MimicVideoController] Saved action denoising trace "
+                    f"for query t={t} to {trace_path}"
+                )
             absolute_chunk = self.post_process(
                 {
                     "action_chunk": raw_chunk,

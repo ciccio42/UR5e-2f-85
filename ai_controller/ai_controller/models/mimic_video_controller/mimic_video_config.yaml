@@ -44,6 +44,10 @@ num_execute_actions: 5
 # Print the model input and every conversion for all 15 predicted actions.
 trace_action_conversions: true
 
+# Save the complete action-flow sampling trajectory:
+# initial Gaussian sample + one sample after every denoising step.
+save_denoising_trace: true
+
 # Test ablation: MoveIt receives this fixed absolute TCP orientation instead of
 # the quaternion predicted by Mimic Video. Values are in ROS XYZW order.
 # fixed_orientation_xyzw:

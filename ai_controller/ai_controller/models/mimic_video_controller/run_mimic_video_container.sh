@@ -301,6 +301,7 @@ docker exec "$CONTAINER_NAME" bash -lc '
         "$workspace/patches/inference/001_lazy_apex_optimizer_import.patch"
         "$workspace/patches/inference/002_lazy_apex_standard_optimizer_import.patch"
         "$workspace/patches/inference/003_lazy_lora_fusion_import.patch"
+        "$workspace/patches/inference/004_capture_action_denoising_trace.patch"
     )
 
     for patch_file in "${patches[@]}"; do
