@@ -15,7 +15,7 @@ lora_dropout: 0.0
 num_inference_steps: 10
 final_action_clip_value: 1.0  # data normalized in [-1,1]
 
-num_execute_actions: 1
+num_execute_actions: 3
 trace_action_conversions: false
 
 cond_steps: 1
