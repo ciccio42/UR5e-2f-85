@@ -97,10 +97,9 @@ RUN curl -sSL \
 # Qui installiamo ciò che AIControllerNode deve importare/usare.
 #
 # NOTA:
-# python3-opencv non viene installato esplicitamente.
-# LeRobot richiede opencv-python-headless e vogliamo evitare, per quanto
-# possibile, due installazioni Python concorrenti di cv2.
-# ros-jazzy-cv-bridge installerà comunque le proprie dipendenze di sistema.
+# Usiamo python3-opencv fornito da Ubuntu/ROS, insieme a NumPy 1.26.4,
+# per mantenere la compatibilità binaria con cv_bridge.
+# Non installiamo opencv-python-headless tramite pip.
 # =============================================================================
 
 RUN apt-get update && \
@@ -121,6 +120,7 @@ RUN apt-get update && \
         python3-colcon-common-extensions \
         python3-rosdep \
         python3-vcstool \
+        python3-opencv \
         python3.12 \
         python3.12-dev \
         python3.12-venv \
@@ -163,8 +163,7 @@ RUN cat > /opt/vla_jepa_constraints.txt <<'EOF'
 torch==2.8.0
 torchvision==0.23.0
 
-numpy==2.2.6
-opencv-python-headless==4.13.0.92
+numpy==1.26.4
 
 Pillow==12.2.0
 einops==0.8.2
@@ -248,8 +247,7 @@ RUN python -m pip install \
 
 RUN python -m pip install \
         --constraint /opt/vla_jepa_constraints.txt \
-        numpy==2.2.6 \
-        opencv-python-headless==4.13.0.92 \
+        numpy==1.26.4 \
         Pillow==12.2.0 \
         einops==0.8.2 \
         draccus==0.10.0 \
@@ -397,8 +395,9 @@ from control_msgs.action import GripperCommand
 import numpy as np
 import cv2
 
-assert np.__version__ == "2.2.6", np.__version__
-assert cv2.__version__.startswith("4.13."), cv2.__version__
+assert np.__version__ == "1.26.4", np.__version__
+
+print("OpenCV:", cv2.__version__)
 
 # Verifica concreta cv_bridge <-> NumPy.
 bridge = cv_bridge.CvBridge()
