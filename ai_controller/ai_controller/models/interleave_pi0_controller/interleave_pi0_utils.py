@@ -997,7 +997,17 @@ def delta_action_chunk_to_absolute_targets(
             closed_position=closed_position,
         )
 
-        positions[i] = current_position
+        # -------------------------------------------------------------
+        # Offset correttivo per MoveIt
+        # -------------------------------------------------------------
+        output_position = current_position.copy()
+
+        # Se il target è sotto z = -3 cm,
+        # trasla il target di +1 cm lungo x.
+        if output_position[2] < -0.03:
+            output_position[0] += 0.01
+
+        positions[i] = output_position
         quaternions_xyzw[i] = current_quaternion
         gripper_commands[i] = gripper_command
 

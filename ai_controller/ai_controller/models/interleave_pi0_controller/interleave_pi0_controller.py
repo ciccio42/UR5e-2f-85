@@ -12,6 +12,8 @@ import json
 from PIL import Image as PILImage
 
 from ai_controller.utils.ai_controller import AIController
+from ai_controller.utils.utils import seed_everything
+
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
@@ -66,6 +68,8 @@ class InterleavePi0Controller(AIController):
         self.action_p99: Optional[np.ndarray] = None
 
         super().__init__(str(self.config_path))
+
+        seed_everything(42)
 
 
     def load_model(self, model_config: str):
