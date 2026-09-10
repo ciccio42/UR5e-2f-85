@@ -5,3 +5,6 @@
 [submodule "interleave_pi_zero_workspace/external/Interleave-VLA"]
     path = interleave_pi_zero_workspace/external/Interleave-VLA
     url = https://github.com/Clex-Auciniello/Interleave-VLA.git
+[submodule "ai_controller/ai_controller/models/vla_jepa_controller/external/lerobot"]
+	path = ai_controller/ai_controller/models/vla_jepa_controller/external/lerobot
+	url = https://github.com/ciccio42/lerobot.git
