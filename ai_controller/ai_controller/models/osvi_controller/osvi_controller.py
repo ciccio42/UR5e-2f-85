@@ -253,7 +253,8 @@ class OSVIController(AIController):
             self.context_tensor = self.context_tensor.to(self.device)
 
     def reset(self):
-        self.context_tensor = None
+        self._destroy_waypoint_overlay_window()       
+        self.context_tensor = None 
         self.context_source = None
         self.current_eef_quat = None
         self.gripper_closed = False
@@ -896,7 +897,11 @@ class OSVIController(AIController):
             )
 
         with torch.no_grad():
-            out = self.model(processed["images"], processed["context"])
+            T_context = processed["context"].shape[1]
+            future_steps = int(self.training_config["data"].get("T_pair", 5))
+            T_tot = T_context + 1 + future_steps
+
+            out = self.model(processed["images"], processed["context"], T_tot=T_tot)
             all_waypoints = out["waypoints"].float()
             selected_waypoints = self._select_waypoints(all_waypoints)
             base_waypoints = self._project_waypoints_to_base(selected_waypoints)
@@ -987,10 +992,22 @@ class OSVIController(AIController):
         window_name = str(self.cfg.debug.get("waypoint_overlay_window", "OSVI waypoint overlay"))
         wait_ms = int(self.cfg.debug.get("waypoint_overlay_wait_ms", 1))
         bgr_overlay = cv2.cvtColor(rgb_overlay, cv2.COLOR_RGB2BGR)
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
         cv2.imshow(window_name, bgr_overlay)
         key = cv2.waitKey(max(wait_ms, 1)) & 0xFF
         if key == 27:
             raise KeyboardInterrupt("OSVI waypoint overlay interrupted by ESC")
+
+    def _destroy_waypoint_overlay_window(self):
+        if self.cfg is None or not bool(self.cfg.debug.get("show_waypoint_overlay", False)):
+            return
+
+        window_name = str(self.cfg.debug.get("waypoint_overlay_window", "OSVI waypoint overlay"))
+        try:
+            cv2.destroyWindow(window_name)
+            cv2.waitKey(1)
+        except cv2.error:
+            pass
 
 
     def _select_waypoints(self, all_waypoints):
@@ -1039,7 +1056,11 @@ class OSVIController(AIController):
         height = int(self.cfg.image.get("height", 240))
         width = int(self.cfg.image.get("width", 320))
         if img.shape[:2] != (height, width):
-            img = cv2.resize(img, (width, height), interpolation=cv2.INTER_AREA)
+            # Match utils.utils.resize(), which is used by UR5eTrajectoryDataset.
+            interpolation = cv2.INTER_AREA
+            if np.prod(img.shape[:2]) > width * height:
+                interpolation = cv2.INTER_LINEAR
+            img = cv2.resize(img, (width, height), interpolation=interpolation)
         chw = img.astype(np.float32).transpose(2, 0, 1) / 255.0
         if bool(self.cfg.image.get("normalize", True)):
             chw = (chw - IMAGENET_MEAN) / IMAGENET_STD

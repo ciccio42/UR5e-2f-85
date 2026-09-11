@@ -1,0 +1,95 @@
+# OSVI-AWDA runtime configuration.
+# Model and trajectory sources are bundled beside this file. checkpoint_dir is
+# resolved relative to this YAML and must contain config.yaml plus the checkpoint.
+checkpoint_dir: "../../../checkpoint_folder/osvi-awda/osvi_mtlfd_ckpt-1788896991"
+checkpoint_step: 70000
+
+# Use the calibration shipped with the real-data AWDA adaptation.
+projection_matrix_path: "configs/ur5e_zed_front_projection.yaml"
+device: "cuda"
+
+image:
+  front_camera_index: 0
+  height: 100
+  width: 180
+  crop: [0, 30, 140, 120]
+  normalize: true
+  live_images_are_rgb: true
+  demo_convert_bgr_to_rgb: false
+
+context:
+  num_frames: 10
+  sample_sides: true
+  deterministic: true
+
+agent_observation:
+  num_frames: 2
+  repeat_current_image: true
+
+waypoints:
+  base_count: 5
+  sub_waypoints: true
+  predicted_count: 15
+  selected_count: 5
+  selection: "last_group"
+  image_waypoints: true
+
+projection:
+  output_frame: "base_link"
+
+control:
+  action_format: "absolute_pose_quat_gripper"
+  orientation_mode: "fixed_top_down"
+  fixed_orientation_xyzw:
+    - 0.9994452044624775
+    - 0.03161651380119412
+    - 0.0021438049655468088
+    - 0.010251021036213035
+  gripper_open_position: 0.0
+  gripper_closed_position: 255.0
+  gripper_close_threshold: 0.1
+  # Mirrors test_mtlfd_rollout.py: grasp_flags = [flags[1:], False].
+  repository_grasp_shift_left: false
+  max_actions_per_inference: 5
+
+grasp_refinement:
+  # Implements mtlfd_adaptation/test_mtlfd_rollout.py::localize_grasp_target
+  # after the robot reaches grasp_hint + hover_height_m.
+  enabled: true
+  use_gripper_depth: true
+  depth_camera_name: "zed_gripper"
+  depth_camera_node_name: "zed_node"
+  depth_topic: "/zed_gripper/zed_node/depth/depth_registered"
+  camera_info_topic: "/zed_gripper/zed_node/rgb/color/rect/camera_info"
+  # The driver stamps zed_gripper_*, while the mounted camera in the robot
+  # description exposes the same physical optical frame as zed_mini_*.
+  depth_source_frame_override: "zed_mini_left_camera_frame_optical"
+  depth_target_frame: "base_link"
+  depth_ros_node_name: "osvi_awda_gripper_depth_refinement"
+  depth_scale: 1.0
+  depth_max_range_m: 1.0
+  floor_margin_m: 0.01
+  min_component_area_px: 4
+  # 1 uses exactly the depth at the component centroid, as in OSVI-AWDA.
+  depth_window_px: 1
+  camera_info_retries: 3
+  camera_info_timeout_sec: 0.5
+  depth_timeout_sec: 0.5
+  tf_timeout_sec: 0.5
+  depth_grasp_z_offset_m: -0.02
+  max_depth_xy_correction_m: 0.2
+  hover_height_m: 0.05
+  approach_height_m: 0.03
+  lift_height_m: 0.15
+
+safety:
+  clamp_workspace: true
+  workspace_min: [-0.50, 0.20, 0.01]
+  workspace_max: [0.50, 0.90, 0.50]
+  min_waypoint_distance: 0.005
+
+debug:
+  show_waypoint_overlay: true
+  save_waypoint_overlay: true
+  waypoint_overlay_window: "OSVI-AWDA waypoint overlay"
+  waypoint_overlay_wait_ms: 1

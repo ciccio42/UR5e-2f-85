@@ -132,6 +132,9 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'osvi_controller':
             from ai_controller.models.osvi_controller.osvi_controller import OSVIController
             self.controller = OSVIController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'osvi_awda_controller':
+            from ai_controller.models.osvi_awda_controller.osvi_awda_controller import OSVIAWDAController
+            self.controller = OSVIAWDAController(self.model_config_path, self.task_name)
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -171,7 +174,11 @@ class AIControllerNode(Node):
         self.create_subscription(JointState, self.joint_states_topic, self._joint_state_callback, 10)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-
+        if self.ai_controller_target == 'osvi_awda_controller':
+            # Reuse the node's continuously populated TF graph for eye-in-hand
+            # projection. The controller's auxiliary node is still used to read
+            # CameraInfo/depth, but no longer relies on a second, partial TF cache.
+            self.controller.set_depth_tf_buffer(self.tf_buffer, spin_node=self)
         if self.debug_mode:
             self.get_logger().warning(
                 'DEBUG MODE ENABLED: camera topics will NOT be used. '
@@ -659,8 +666,9 @@ class AIControllerNode(Node):
                         states = self._build_openvla_state(robot_state)
                     elif self.ai_controller_target == 'tinyvla_controller':
                         states = self._build_tinyvla_state(robot_state)
-                    elif self.ai_controller_target == 'osvi_controller':
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
                         states = robot_state
+                    
                     else:
                         states = None
 
@@ -681,7 +689,7 @@ class AIControllerNode(Node):
                     if self.ai_controller_target == 'cod_controller':
                         pred_action, predicted_bb, target_obj_prediction = out
                         actions = [pred_action]
-                    elif self.ai_controller_target == 'osvi_controller':
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
                         actions = [np.asarray(action, dtype=np.float64) for action in out]
                     elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
                         actions = out
@@ -747,7 +755,7 @@ class AIControllerNode(Node):
                             rclpy.spin_until_future_complete(self, future)
                             self._raise_if_esc_pressed()
 
-                            if self.ai_controller_target == 'osvi_controller':
+                            if self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
                                 goal_handle = future.result()
                                 if goal_handle is None or not goal_handle.accepted:
                                     self.get_logger().error('Gripper goal was rejected.')
