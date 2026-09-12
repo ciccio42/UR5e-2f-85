@@ -261,7 +261,7 @@ run_training() {
     export PYTHONPATH="$CONTAINER_OPEN_PI_ZERO${PYTHONPATH:+:$PYTHONPATH}"
 
     /opt/interleave-pizero-venv/bin/python scripts/run.py \
-        --config-name=interleaved_ur5e_bin_grounding \
+        --config-name=interleaved_ur5e_grounding_bin \
         "${overrides[@]}" \
         2>&1 | tee "$logfile"
 }
