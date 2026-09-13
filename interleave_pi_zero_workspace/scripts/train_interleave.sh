@@ -92,7 +92,10 @@ CONTAINER_OPEN_PI_ZERO="$CONTAINER_WORKSPACE/external/Interleave-VLA/open-pi-zer
 
 CONTAINER_VLA_DATA_DIR="$CONTAINER_WORKSPACE/processed_data"
 
-CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/outputs"
+#CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/outputs"
+
+CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/checkpoints/interleave_scaled_actions"
+CONTAINER_AUX_LOG_DIR="$CONTAINER_WORKSPACE/outputs/interleave_scaled_actions"
 
 CONTAINER_WANDB_ENV="/run/secrets/interleave-vla-wandb.env"
 
@@ -127,7 +130,7 @@ check_host_configuration() {
     [[ -d "$OPEN_PI_ZERO" ]] \
         || die "Repository open-pi-zero non trovata: $OPEN_PI_ZERO"
 
-    [[ -d "$WORKSPACE/processed_data/ur5e_interleave/0.1.0" ]] \
+    [[ -d "$WORKSPACE/processed_data/ur5e_interleave/0.2.0" ]] \
         || die "Dataset processato non trovato."
 
     [[ -d "$WORKSPACE/models/paligemma-3b-pt-224" ]] \
@@ -178,12 +181,12 @@ run_training() {
     export TRITON_PTXAS_PATH="$CUDA_HOME/bin/ptxas"
     export TRITON_PTXAS_BLACKWELL_PATH="$CUDA_HOME/bin/ptxas"
 
-    export WANDB_DIR="$CONTAINER_VLA_LOG_DIR/wandb"
+    export WANDB_DIR="$CONTAINER_AUX_LOG_DIR/wandb"
 
     mkdir -p \
         "$VLA_LOG_DIR" \
         "$WANDB_DIR" \
-        "$VLA_LOG_DIR/launcher_logs"
+        "$CONTAINER_AUX_LOG_DIR/launcher_logs"
 
     case "$mode" in
 
@@ -237,7 +240,7 @@ run_training() {
 
     local logfile
 
-    logfile="$VLA_LOG_DIR/launcher_logs/${run_name}_$(date +%Y%m%d_%H%M%S).log"
+    logfile="$CONTAINER_AUX_LOG_DIR/launcher_logs/${run_name}_$(date +%Y%m%d_%H%M%S).log"
 
 
     echo
@@ -257,6 +260,42 @@ run_training() {
     cd "$CONTAINER_OPEN_PI_ZERO"
 
     export PYTHONPATH="$CONTAINER_OPEN_PI_ZERO${PYTHONPATH:+:$PYTHONPATH}"
+
+    echo
+    echo "Verifica dataset TFDS..."
+    echo
+
+    /opt/interleave-pizero-venv/bin/python - <<'PY'
+import os
+import tensorflow_datasets as tfds
+
+dataset_name = "ur5e_interleave"
+expected_version = "0.2.0"
+
+builder = tfds.builder(
+    dataset_name,
+    data_dir=os.environ["VLA_DATA_DIR"],
+)
+
+print("Dataset name:   ", builder.name)
+print("Dataset version:", builder.info.version)
+print("Dataset dir:    ", builder.data_dir)
+
+if str(builder.info.version) != expected_version:
+    raise RuntimeError(
+        f"ERRORE: attesa versione {expected_version}, "
+        f"ma TFDS ha selezionato {builder.info.version}"
+    )
+
+expected_suffix = f"/{dataset_name}/{expected_version}"
+
+if not str(builder.data_dir).endswith(expected_suffix):
+    raise RuntimeError(
+        f"ERRORE: dataset directory inattesa: {builder.data_dir}"
+    )
+
+print("Dataset TFDS corretto.")
+PY
 
     /opt/interleave-pizero-venv/bin/python scripts/run.py \
         --config-name=interleaved_ur5e \
