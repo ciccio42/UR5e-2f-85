@@ -1004,8 +1004,8 @@ def delta_action_chunk_to_absolute_targets(
 
         # Se il target è sotto z = -3 cm,
         # trasla il target di +1 cm lungo x.
-        if output_position[2] < -0.03:
-            output_position[0] += 0.01
+        # if output_position[2] < -0.03:
+        #     output_position[0] += 0.01
 
         positions[i] = output_position
         quaternions_xyzw[i] = current_quaternion
