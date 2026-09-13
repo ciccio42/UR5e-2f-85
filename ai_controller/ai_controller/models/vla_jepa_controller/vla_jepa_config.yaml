@@ -1,0 +1,215 @@
+# =============================================================================
+# VLA-JEPA CONTROLLER CONFIGURATION
+# =============================================================================
+#
+# Configurazione runtime del controller VLA-JEPA per UR5e.
+#
+# IMPORTANTE:
+# Questo file NON descrive l'architettura VLA-JEPA.
+#
+# Parametri come:
+#   - action_dim
+#   - chunk_size
+#   - n_action_steps
+#   - num_inference_timesteps
+#   - Qwen / JEPA backbone
+#   - normalizzazione
+#   - gripper preprocessing/postprocessing
+#
+# vengono caricati direttamente dal config.json del checkpoint LeRobot.
+#
+# Questo YAML contiene soltanto i parametri specifici del deployment
+# all'interno di ai_controller.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# CHECKPOINT
+# -----------------------------------------------------------------------------
+
+# Path visto DENTRO il container.
+#
+# Lo script vla_jepa_controller.sh monterà:
+#
+#   host:
+#   .../checkpoint_folder/lerobot/vla-jepa/016000/pretrained_model
+#
+#   container:
+#   /workspace/checkpoints/vla-jepa/016000
+#
+# La directory deve contenere almeno:
+#   config.json
+#   model.safetensors
+#   policy_preprocessor.json
+#   policy_postprocessor.json
+#   relativi *.safetensors dei processor
+#
+checkpoint_path: /workspace/checkpoints/vla-jepa/016000
+
+
+# -----------------------------------------------------------------------------
+# DEVICE
+# -----------------------------------------------------------------------------
+
+# Il deployment sulla DGX Spark utilizza CUDA.
+device: cuda
+
+
+# -----------------------------------------------------------------------------
+# RANDOM SEED
+# -----------------------------------------------------------------------------
+
+# VLA-JEPA genera l'action chunk attraverso un processo di flow matching
+# inizializzato da rumore.
+#
+# Il seed viene impostato dal controller prima del caricamento della policy.
+#
+# Si mantiene il seed utilizzato nel training ricevuto.
+seed: 1000
+
+
+# -----------------------------------------------------------------------------
+# CAMERA INPUT
+# -----------------------------------------------------------------------------
+
+# Ordine delle camere fornito da AIControllerNode:
+#
+#   images[0] = front
+#   images[1] = left
+#   images[2] = right
+#   images[3] = gripper
+#
+# VLA-JEPA utilizza soltanto:
+#   - front
+#   - gripper
+#
+front_camera_index: 0
+gripper_camera_index: 3
+
+
+# AIControllerNode fornisce le immagini già in RGB.
+#
+# Valori supportati dalle utils:
+#   rgb
+#   bgr
+#
+input_color_order: rgb
+
+
+# -----------------------------------------------------------------------------
+# ACTION REPRESENTATION
+# -----------------------------------------------------------------------------
+
+# Nel dataset UR5e le prime sei componenti delle action sono state salvate
+# dividendo il delta fisico per 0.05.
+#
+# Dopo il postprocessor LeRobot:
+#
+#   physical_delta[:6] = predicted_action[:6] * 0.05
+#
+# La settima componente (gripper) NON viene moltiplicata per questo valore.
+#
+dataset_action_scale: 0.05
+
+
+# -----------------------------------------------------------------------------
+# GRIPPER
+# -----------------------------------------------------------------------------
+
+# Convenzione comune utilizzata dai controller:
+#
+#   0 = open
+#   1 = closed
+#
+# Le utils convertono successivamente lo stato binario nel comando
+# utilizzato dal Robotiq / MoveIt:
+#
+#   open   -> 0
+#   closed -> 255
+#
+gripper_open_position: 0.0
+gripper_closed_position: 255.0
+
+
+# -----------------------------------------------------------------------------
+# DEBUG
+# -----------------------------------------------------------------------------
+
+# Se true vengono stampati:
+#   - action restituita dal postprocessor LeRobot
+#   - delta xyz fisici
+#   - delta RPY in radianti e gradi
+#   - pose di riferimento
+#   - target assoluto
+#   - comando gripper
+#
+#
+trace_action_conversions: true
+
+
+# =============================================================================
+# TASKS
+# =============================================================================
+#
+# AIControllerNode utilizza task ID nel formato:
+#
+#   "00", "01", ..., "15"
+#
+# VLA-JEPA utilizza direttamente l'istruzione testuale originale:
+#
+#   "Pick the <color> box and place it into the <ordinal> bin"
+#
+# =============================================================================
+
+tasks:
+
+  "00":
+    prompt: "Pick the green box and place it into the first bin"
+
+  "01":
+    prompt: "Pick the green box and place it into the second bin"
+
+  "02":
+    prompt: "Pick the green box and place it into the third bin"
+
+  "03":
+    prompt: "Pick the green box and place it into the fourth bin"
+
+
+  "04":
+    prompt: "Pick the yellow box and place it into the first bin"
+
+  "05":
+    prompt: "Pick the yellow box and place it into the second bin"
+
+  "06":
+    prompt: "Pick the yellow box and place it into the third bin"
+
+  "07":
+    prompt: "Pick the yellow box and place it into the fourth bin"
+
+
+  "08":
+    prompt: "Pick the blue box and place it into the first bin"
+
+  "09":
+    prompt: "Pick the blue box and place it into the second bin"
+
+  "10":
+    prompt: "Pick the blue box and place it into the third bin"
+
+  "11":
+    prompt: "Pick the blue box and place it into the fourth bin"
+
+
+  "12":
+    prompt: "Pick the red box and place it into the first bin"
+
+  "13":
+    prompt: "Pick the red box and place it into the second bin"
+
+  "14":
+    prompt: "Pick the red box and place it into the third bin"
+
+  "15":
+    prompt: "Pick the red box and place it into the fourth bin"

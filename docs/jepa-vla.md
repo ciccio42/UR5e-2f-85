@@ -119,19 +119,11 @@ ros2 run moveit_controller moveit_controller_node
 cd Alex/UR5e-2f-85
 export UR5e_2f_85_PATH="$PWD"
 
-# Per singolo crop sul box
-INTERLEAVE_PI0_CONFIG_NAME=interleave_pi0_config.yaml \
-INTERLEAVE_PI0_CHECKPOINT_HOST=/home/asus-mivia/Desktop/Alex/UR5e-2f-85/interleave_pi_zero_workspace/checkpoints/posttraining/box_only/step66240.pt  \
-bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh --no-full-preflight
+bash ai_controller/ai_controller/models/vla_jepa_controller/vla_jepa_controller.sh --no-full-preflight
 
-# Per due crop
-INTERLEAVE_PI0_CONFIG_NAME=interleave_pi0_grounding_bin_config.yaml \
-INTERLEAVE_PI0_CHECKPOINT_HOST=/home/asus-mivia/Desktop/Alex/UR5e-2f-85/interleave_pi_zero_workspace/checkpoints/posttraining/bin_grounding/step66240.pt \
-bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh --no-full-preflight
 
 ros2 run ai_controller ai_controller_node --ros-args \
-  -p move_robot:=True \
-  -p ai_controller_target:=interleave_pi0_controller \
-  -p model_config_path:="$INTERLEAVE_PI0_CONTROLLER_CONFIG" \
-  -p task_name:=pick_place \
-  -p "camera_topic:=['/zed_front/zed_node/rgb/color/rect/image']"
+  -p move_robot:=true \
+  -p ai_controller_target:=vla_jepa_controller \
+  -p model_config_path:="$VLA_JEPA_CONTROLLER_CONFIG" \
+  -p task_name:=pick_place

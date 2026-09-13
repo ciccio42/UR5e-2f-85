@@ -148,6 +148,14 @@ class AIControllerNode(Node):
                 self.model_config_path,
                 self.task_name,
             )
+        elif self.ai_controller_target == 'vla_jepa_controller':
+            from ai_controller.models.vla_jepa_controller.vla_jepa_controller import (
+                VLAJEPAController,
+            )
+            self.controller = VLAJEPAController(
+                self.model_config_path,
+                self.task_name,
+            )
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -456,6 +464,42 @@ class AIControllerNode(Node):
             [1.0 if self.gripper_closed else 0.0],
         ])
 
+    def _build_vla_jepa_state(self, robot_state):
+        """
+        Build the 8D robot state consumed by VLAJEPAController:
+
+            [x, y, z, qx, qy, qz, qw, gripper_closed]
+
+        IMPORTANT:
+        This state is NOT passed to the VLA-JEPA neural policy.
+
+        The current checkpoint uses only:
+            - front image
+            - gripper image
+            - language instruction
+
+        The pose is required by VLAJEPAController only to convert the
+        predicted delta action into an absolute UR5e / MoveIt target:
+
+            p_new = p_current + delta_p
+            R_new = R_delta @ R_current
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; '
+                'cannot build VLA-JEPA reference state.'
+            )
+            return None
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+            [1.0 if self.gripper_closed else 0.0],
+        ])
+
     def _mimic_trace_enabled(self):
         return (
             self.ai_controller_target == 'mimic_video_controller'
@@ -693,7 +737,10 @@ class AIControllerNode(Node):
 
                             self._warmup_mimic_video_history()
 
-                        elif self.ai_controller_target == 'interleave_pi0_controller':
+                        elif self.ai_controller_target in (
+                            'interleave_pi0_controller',
+                            'vla_jepa_controller',
+                        ):
                             self.controller.load_command(
                                 self.demo_path,
                                 task_id=enter_task_id,
@@ -733,6 +780,8 @@ class AIControllerNode(Node):
                         states = self._build_mimic_video_state(robot_state)
                     elif self.ai_controller_target == 'interleave_pi0_controller':
                         states = self._build_interleave_pi0_state(robot_state)
+                    elif self.ai_controller_target == 'vla_jepa_controller':
+                        states = self._build_vla_jepa_state(robot_state)
                     else:
                         states = None
 
@@ -775,6 +824,7 @@ class AIControllerNode(Node):
                     elif self.ai_controller_target in (
                         'mimic_video_controller',
                         'interleave_pi0_controller',
+                        'vla_jepa_controller',
                     ):
                         # Mimic Video already returns absolute 8D targets with XYZW quaternion.
                         actions = out
@@ -863,6 +913,11 @@ class AIControllerNode(Node):
                     # bounding boxes, computed action and robot state) into the rollout Trajectory
                     step_obs = dict(robot_state)
                     step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+                    if self.ai_controller_target == 'vla_jepa_controller':
+                        step_obs['camera_gripper_image'] = cv2.cvtColor(
+                            images[3],
+                            cv2.COLOR_RGB2BGR,
+                        )
 
                     cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
                     if os.path.isfile(cropped_image_path):
@@ -870,6 +925,23 @@ class AIControllerNode(Node):
                     else:
                         self.get_logger().warning(
                             f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+
+                    if self.ai_controller_target == 'vla_jepa_controller':
+
+                        gripper_processed_path = os.path.join(
+                            step_save_path,
+                            'pre_processed_img_1.png',
+                        )
+
+                        if os.path.isfile(gripper_processed_path):
+                            step_obs['cropped_gripper_image'] = np.array(
+                                Image.open(gripper_processed_path)
+                            )
+                        else:
+                            self.get_logger().warning(
+                                'No VLA-JEPA gripper model-input image found at '
+                                f'{gripper_processed_path}.'
+                            )
 
                     if predicted_bb is not None:
                         step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
