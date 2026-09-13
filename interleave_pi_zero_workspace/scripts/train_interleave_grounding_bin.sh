@@ -92,11 +92,14 @@ CONTAINER_OPEN_PI_ZERO="$CONTAINER_WORKSPACE/external/Interleave-VLA/open-pi-zer
 
 CONTAINER_VLA_DATA_DIR="$CONTAINER_WORKSPACE/processed_data"
 
-CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/checkpoints/bin_grounding"
+#CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/checkpoints/bin_grounding"
+CONTAINER_VLA_LOG_DIR="$CONTAINER_WORKSPACE/checkpoints/bin_grounding_scaled_actions"
+
 
 CONTAINER_WANDB_ENV="/run/secrets/interleave-vla-wandb.env"
 
-CONTAINER_AUX_LOG_DIR="$CONTAINER_WORKSPACE/outputs/bin_grounding"
+#CONTAINER_AUX_LOG_DIR="$CONTAINER_WORKSPACE/outputs/bin_grounding"
+CONTAINER_AUX_LOG_DIR="$CONTAINER_WORKSPACE/outputs/bin_grounding_scaled_actions"
 
 
 # ================================================================
@@ -129,7 +132,10 @@ check_host_configuration() {
     [[ -d "$OPEN_PI_ZERO" ]] \
         || die "Repository open-pi-zero non trovata: $OPEN_PI_ZERO"
 
-    [[ -d "$WORKSPACE/processed_data/ur5e_interleave_grounding_bin/0.1.0" ]] \
+    # [[ -d "$WORKSPACE/processed_data/ur5e_interleave_grounding_bin/0.1.0" ]] \
+    #     || die "Dataset bin-grounding processato non trovato."
+
+    [[ -d "$WORKSPACE/processed_data/ur5e_interleave_grounding_bin/0.2.0" ]] \
         || die "Dataset bin-grounding processato non trovato."
 
     [[ -d "$WORKSPACE/models/paligemma-3b-pt-224" ]] \
