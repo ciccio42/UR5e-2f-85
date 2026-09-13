@@ -56,7 +56,7 @@ IMAGE="${IMAGE:-interleave-pizero:spark}"
 #
 # Esempio:
 # TRANSFORMERS_CACHE_HOST=/path/to/transformers
-TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/workspace/models}"
+TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-/workspace/checkpoints/paligemma}"
 
 
 # Checkpoint da usare come inizializzazione.
@@ -133,8 +133,8 @@ check_host_configuration() {
     [[ -d "$WORKSPACE/processed_data/ur5e_interleave/0.2.0" ]] \
         || die "Dataset processato non trovato."
 
-    [[ -d "$WORKSPACE/models/paligemma-3b-pt-224" ]] \
-        || die "PaliGemma non trovato: $WORKSPACE/models/paligemma-3b-pt-224"
+    [[ -d "$WORKSPACE/checkpoints/paligemma/paligemma-3b-pt-224" ]] \
+        || die "PaliGemma non trovato: $WORKSPACE/checkpoints/paligemma/paligemma-3b-pt-224"
 
     [[ -f "$WORKSPACE/models/interleave-pi0-bridge/step34799.pt" ]] \
         || die "Checkpoint Bridge non trovato: $WORKSPACE/models/interleave-pi0-bridge/step34799.pt"
