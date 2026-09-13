@@ -23,22 +23,31 @@ from src.model.vla.interleaved_processing import InterleavedVLAProcessor
 # errore un config incompatibile con il checkpoint UR5e.
 #
 # Training UR5e:
-#   - una observation image
-#   - una instruction image
-#   - un proprioceptive token
-#   - action chunk di 4 step
-#   - action e proprio 7D
-#   - immagini 224x224
-#   - 256 token per immagine
-#   - sequenza VLM massima di 540 token
+#   - una observation image;
+#   - una o più instruction image, definite dal runtime YAML;
+#   - un proprioceptive token;
+#   - action chunk di 4 step;
+#   - action e proprio 7D;
+#   - immagini 224x224;
+#   - 256 token per immagine;
+#   - max_seq_len definita dal config del modello.
+#
+# Config attuali:
+#   Interleave crop-only:
+#       num_instruction_images = 1
+#       num_images totali      = 2
+#       max_seq_len            = 540
+#
+#   Interleave Grounding-Bin:
+#       num_instruction_images = 2
+#       num_images totali      = 3
+#       max_seq_len            = 800
 #
 
 BATCH_SIZE = 1
 
 IMAGE_SIZE = 224
-NUM_IMAGES = 2
 NUM_IMAGE_TOKENS = 256
-MAX_SEQ_LEN = 540
 
 COND_STEPS = 1
 PROPRIO_DIM = 7
@@ -128,17 +137,16 @@ def _validate_ur5e_model_config(cfg: DictConfig) -> None:
         "proprio_dim": PROPRIO_DIM,
         "horizon_steps": ACTION_HORIZON,
         "action_dim": ACTION_DIM,
-        "max_seq_len": MAX_SEQ_LEN,
         "vision.config.image_size": IMAGE_SIZE,
         "vision.config.num_image_tokens": NUM_IMAGE_TOKENS,
     }
+
 
     actual_values = {
         "cond_steps": int(cfg.cond_steps),
         "proprio_dim": int(cfg.proprio_dim),
         "horizon_steps": int(cfg.horizon_steps),
         "action_dim": int(cfg.action_dim),
-        "max_seq_len": int(cfg.max_seq_len),
         "vision.config.image_size": int(cfg.vision.config.image_size),
         "vision.config.num_image_tokens": int(
             cfg.vision.config.num_image_tokens
@@ -159,6 +167,38 @@ def _validate_ur5e_model_config(cfg: DictConfig) -> None:
         raise ValueError(
             "The Interleave-Pi0 config does not match the UR5e model:\n"
             + "\n".join(mismatches)
+        )
+
+    num_instruction_images = int(
+        cfg.get("num_instruction_images", 1)
+    )
+
+    if num_instruction_images < 1:
+        raise ValueError(
+            "num_instruction_images must be >= 1, "
+            f"got {num_instruction_images}"
+        )
+
+    max_seq_len = int(cfg.max_seq_len)
+
+    if max_seq_len <= 0:
+        raise ValueError(
+            f"max_seq_len must be positive, got {max_seq_len}"
+        )
+
+    num_total_images = 1 + num_instruction_images
+
+    minimum_visual_tokens = (
+        num_total_images * NUM_IMAGE_TOKENS
+    )
+
+    if max_seq_len <= minimum_visual_tokens:
+        raise ValueError(
+            "max_seq_len is too small for the configured images: "
+            f"{num_total_images} images x "
+            f"{NUM_IMAGE_TOKENS} visual tokens = "
+            f"{minimum_visual_tokens}, "
+            f"but max_seq_len={max_seq_len}."
         )
 
 
@@ -358,6 +398,22 @@ class InterleavePi0Policy:
             )
 
         self.cfg = load_interleave_pi0_config(config_path)
+
+        self.num_instruction_images = int(
+            self.cfg.get(
+                "num_instruction_images",
+                1,
+            )
+        )
+
+        # Una observation image è sempre presente.
+        self.num_images = (
+            1 + self.num_instruction_images
+        )
+
+        self.max_seq_len = int(
+            self.cfg.max_seq_len
+        )
         
         self.device = torch.device(self.cfg.device)
 
@@ -423,13 +479,16 @@ class InterleavePi0Policy:
         """
         Applica il processor ufficiale Interleave-VLA.
 
-        Per il nostro setup B=1 `images` deve contenere, nell'ordine:
+        Per B=1 `images` contiene:
 
-            images[0] = observation image corrente
-            images[1] = instruction image
+            images[0]  = observation image corrente
+            images[1:] = instruction images nell'ordine dei placeholder
 
-        shape:
-            (2, 3, 224, 224)
+        Interleave classico:
+            shape = (2, 3, 224, 224)
+
+        Grounding-Bin:
+            shape = (3, 3, 224, 224)
 
         dtype:
             torch.uint8
@@ -449,7 +508,7 @@ class InterleavePi0Policy:
             )
 
         expected_images = (
-            NUM_IMAGES,
+            self.num_images,
             3,
             IMAGE_SIZE,
             IMAGE_SIZE,
@@ -579,8 +638,8 @@ class InterleavePi0Policy:
     # VALIDAZIONE INPUT INFERENCE
     # =========================================================================
 
-    @staticmethod
     def _validate_inputs(
+        self,
         input_ids: torch.Tensor,
         pixel_values: torch.Tensor,
         image_text_proprio_mask: torch.Tensor,
@@ -595,13 +654,14 @@ class InterleavePi0Policy:
 
         Non modifica i tensor.
         """
+
         expected_input_ids = (
             BATCH_SIZE,
-            MAX_SEQ_LEN,
+            self.max_seq_len,
         )
 
         expected_pixel_values = (
-            NUM_IMAGES,
+            self.num_images,
             3,
             IMAGE_SIZE,
             IMAGE_SIZE,
@@ -615,7 +675,7 @@ class InterleavePi0Policy:
 
         expected_vlm_positions = (
             BATCH_SIZE,
-            MAX_SEQ_LEN,
+            self.max_seq_len,
         )
 
         expected_proprio_positions = (
@@ -629,7 +689,7 @@ class InterleavePi0Policy:
         )
 
         total_tokens = (
-            MAX_SEQ_LEN
+            self.max_seq_len
             + COND_STEPS
             + ACTION_HORIZON
         )
@@ -637,8 +697,8 @@ class InterleavePi0Policy:
         expected_image_text_proprio_mask = (
             BATCH_SIZE,
             1,
-            MAX_SEQ_LEN + COND_STEPS,
-            MAX_SEQ_LEN + COND_STEPS,
+            self.max_seq_len + COND_STEPS,
+            self.max_seq_len + COND_STEPS,
         )
 
         expected_action_mask = (

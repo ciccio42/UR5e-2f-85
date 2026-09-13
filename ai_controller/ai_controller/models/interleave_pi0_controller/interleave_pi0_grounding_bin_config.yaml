@@ -1,5 +1,5 @@
 # Runtime
-checkpoint_path: ${oc.env:INTERLEAVE_PI0_CHECKPOINT}
+checkpoint_path: ${oc.env:INTERLEAVE_PI0_GROUNDING_BIN_CHECKPOINT}
 pretrained_model_path: ${oc.env:INTERLEAVE_PI0_PALIGEMMA}
 
 dataset_statistics_path: "dataset_statistics.json"
@@ -24,8 +24,8 @@ trace_action_conversions: false
 
 
 # Multimodal input:
-# 1 observation image + 1 instruction image.
-num_instruction_images: 1
+# 1 observation image + 2 instruction image.
+num_instruction_images: 2
 
 # Convenzione del dataset 0.2.0:
 # action[:6] = delta_pose_fisica / 0.05
@@ -40,7 +40,7 @@ cond_steps: 1
 horizon_steps: 4
 action_dim: 7   # delta xyz + delta RPY + gripper
 proprio_dim: 7  # absolute xyz + RPY + gripper
-max_seq_len: 540  # 256 observation-image tokens + 256 instruction-image tokens + text/special tokens
+max_seq_len: 800  # 256 observation-image tokens + 256 instruction-image tokens + text/special tokens
 tokenizer_padding: max_length # instead of truncating to longest
 max_image_text_tokens: ${max_seq_len}
 
@@ -146,99 +146,114 @@ joint:
 #
 # Task non presenti nel training e usati per test di generalizzazione:
 #   0, 5, 10, 15
-#
-tasks:
+#tasks:
   # ---------------------------------------------------------------------------
   # GREEN
   # ---------------------------------------------------------------------------
   "00":
-    prompt: "Pick the <image> and place it into the first bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/green_box.png"
+      - "instruction_images/first_bin.png"
 
   "01":
-    prompt: "Pick the <image> and place it into the second bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/green_box.png"
+      - "instruction_images/second_bin.png"
 
   "02":
-    prompt: "Pick the <image> and place it into the third bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/green_box.png"
+      - "instruction_images/third_bin.png"
 
   "03":
-    prompt: "Pick the <image> and place it into the fourth bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/green_box.png"
+      - "instruction_images/fourth_bin.png"
 
   # ---------------------------------------------------------------------------
   # YELLOW
   # ---------------------------------------------------------------------------
   "04":
-    prompt: "Pick the <image> and place it into the first bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/yellow_box.png"
+      - "instruction_images/first_bin.png"
 
   "05":
-    prompt: "Pick the <image> and place it into the second bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/yellow_box.png"
+      - "instruction_images/second_bin.png"
 
   "06":
-    prompt: "Pick the <image> and place it into the third bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/yellow_box.png"
+      - "instruction_images/third_bin.png"
 
   "07":
-    prompt: "Pick the <image> and place it into the fourth bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/yellow_box.png"
+      - "instruction_images/fourth_bin.png"
 
   # ---------------------------------------------------------------------------
   # BLUE
   # ---------------------------------------------------------------------------
   "08":
-    prompt: "Pick the <image> and place it into the first bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/blue_box.png"
+      - "instruction_images/first_bin.png"
 
   "09":
-    prompt: "Pick the <image> and place it into the second bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/blue_box.png"
+      - "instruction_images/second_bin.png"
 
   "10":
-    prompt: "Pick the <image> and place it into the third bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/blue_box.png"
+      - "instruction_images/third_bin.png"
 
   "11":
-    prompt: "Pick the <image> and place it into the fourth bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/blue_box.png"
+      - "instruction_images/fourth_bin.png"
 
   # ---------------------------------------------------------------------------
   # RED
   # ---------------------------------------------------------------------------
   "12":
-    prompt: "Pick the <image> and place it into the first bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/red_box.png"
+      - "instruction_images/first_bin.png"
 
   "13":
-    prompt: "Pick the <image> and place it into the second bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/red_box.png"
+      - "instruction_images/second_bin.png"
 
   "14":
-    prompt: "Pick the <image> and place it into the third bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/red_box.png"
+      - "instruction_images/third_bin.png"
 
   "15":
-    prompt: "Pick the <image> and place it into the fourth bin"
+    prompt: "Pick the <image> and place it into the <image>"
     instruction_images:
       - "instruction_images/red_box.png"
+      - "instruction_images/fourth_bin.png"
 
 
 # Test ablation: MoveIt receives this fixed absolute TCP orientation instead of

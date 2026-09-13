@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Literal
 
 import cv2
 import numpy as np
 import torch
 from PIL import Image
 from scipy.spatial.transform import Rotation
+from typing import Literal, Sequence
 
 
 # =============================================================================
@@ -26,11 +26,23 @@ FRONT_CROP_MARGINS = (0, 10, 140, 90) # top, bottom, left, right
 PROPRIO_DIM = 7
 ACTION_DIM = 7
 
-# Nel training Interleave-Pi0:
+# Nel dataset 0.2.0 le prime 6 componenti dell'action sono memorizzate
+# nella rappresentazione RAW:
 #
-#   proprio = [x, y, z, roll, pitch, yaw, gripper]
+#     action_raw[:6] = delta_pose_fisica / ACTION_SCALE_FACTOR
 #
-# Tutte le 7 componenti vengono normalizzate con BOUNDS.
+# Dopo la denormalizzazione del modello bisogna quindi moltiplicarle
+# nuovamente per ACTION_SCALE_FACTOR prima di integrarle.
+ACTION_SCALE_FACTOR = 0.05
+
+# Convenzione RAW dell'action del gripper nel dataset:
+#     0  = open
+#     20 = closed
+GRIPPER_ACTION_CLOSED_VALUE = 20.0
+
+# proprio = [x, y, z, roll, pitch, yaw, gripper]
+#
+# Con NormalizationType.NORMAL tutte le 7 componenti vengono normalizzate.
 PROPRIO_NORMALIZATION_MASK = np.array(
     [True, True, True, True, True, True, True],
     dtype=bool,
@@ -38,10 +50,9 @@ PROPRIO_NORMALIZATION_MASK = np.array(
 
 # action = [dx, dy, dz, droll, dpitch, dyaw, gripper]
 #
-# Solo le prime sei componenti vengono normalizzate.
-# Il comando del gripper resta nel dominio originale 0/1.
+# Anche il gripper viene normalizzato con NORMAL.
 ACTION_NORMALIZATION_MASK = np.array(
-    [True, True, True, True, True, True, False],
+    [True, True, True, True, True, True, True],
     dtype=bool,
 )
 
@@ -307,7 +318,7 @@ def load_instruction_image(
 
 def stack_interleaved_images(
     front_image: torch.Tensor,
-    instruction_image: torch.Tensor,
+    instruction_images: Sequence[torch.Tensor],
 ) -> torch.Tensor:
     """
     Costruisce il tensor delle immagini da passare a
@@ -334,10 +345,23 @@ def stack_interleaved_images(
         IMAGE_SIZE,
     )
 
-    for name, image in (
-        ("front_image", front_image),
-        ("instruction_image", instruction_image),
-    ):
+    if len(instruction_images) < 1:
+        raise ValueError(
+            "At least one instruction image is required."
+        )
+
+    images = [
+        front_image,
+        *instruction_images,
+    ]
+
+    for i, image in enumerate(images):
+        name = (
+            "front_image"
+            if i == 0
+            else f"instruction_image[{i - 1}]"
+        )
+
         if tuple(image.shape) != expected_shape:
             raise ValueError(
                 f"{name} must have shape {expected_shape}, "
@@ -351,16 +375,14 @@ def stack_interleaved_images(
             )
 
     return torch.stack(
-        (
-            front_image,
-            instruction_image,
-        ),
+        images,
         dim=0,
     )
 
 
 def prepare_interleaved_prompt(
     prompt: str,
+    num_instruction_images: int,
 ) -> str:
     """
     Converte il prompt salvato nello YAML nel formato atteso dal processor.
@@ -386,9 +408,15 @@ def prepare_interleaved_prompt(
             f"prompt must be a string, got {type(prompt)}"
         )
 
+    if num_instruction_images < 1:
+        raise ValueError(
+            "num_instruction_images must be >= 1."
+        )
+
+
     num_placeholders = prompt.count("<image>")
 
-    if num_placeholders != 1:
+    if num_placeholders != num_instruction_images:
         raise ValueError(
             "The UR5e prompt must contain exactly one "
             f"'<image>' placeholder, got {num_placeholders}: {prompt!r}"
@@ -481,48 +509,125 @@ def build_proprio(
     )
 
 
-def normalize_bounds(
+# def normalize_bounds(
+#     values: np.ndarray,
+#     p01: np.ndarray,
+#     p99: np.ndarray,
+#     mask: np.ndarray,
+# ) -> np.ndarray:
+#     """
+#     Applica la normalizzazione BOUNDS usata durante il training.
+
+#     QUANDO VIENE ESEGUITA
+#     --------------------
+#     In `pre_process()` viene usata per normalizzare il proprio corrente
+#     prima di fornirlo al modello.
+
+#     Formula per ogni componente selezionata:
+
+#         normalized =
+#             clip(
+#                 2 * (value - p01) / (p99 - p01) - 1,
+#                 -1,
+#                 1
+#             )
+
+#     Le componenti con mask=False rimangono invariate.
+
+#     IMPORTANTE
+#     ----------
+#     `p01` e `p99` devono essere ESATTAMENTE quelli calcolati sul train set
+#     usato per il fine-tuning.
+#     """
+#     values = np.asarray(
+#         values,
+#         dtype=np.float32,
+#     )
+
+#     p01 = np.asarray(
+#         p01,
+#         dtype=np.float32,
+#     )
+
+#     p99 = np.asarray(
+#         p99,
+#         dtype=np.float32,
+#     )
+
+#     mask = np.asarray(
+#         mask,
+#         dtype=bool,
+#     )
+
+#     if (
+#         values.shape != p01.shape
+#         or values.shape != p99.shape
+#         or values.shape != mask.shape
+#     ):
+#         raise ValueError(
+#             "values, p01, p99 and mask must have the same shape: "
+#             f"values={values.shape}, "
+#             f"p01={p01.shape}, "
+#             f"p99={p99.shape}, "
+#             f"mask={mask.shape}"
+#         )
+
+#     denominator = p99 - p01
+
+#     if np.any(
+#         np.abs(denominator[mask]) < 1e-8
+#     ):
+#         raise ValueError(
+#             "At least one normalized dimension has p01 == p99."
+#         )
+
+#     normalized = values.copy()
+
+#     normalized[mask] = (
+#         2.0
+#         * (values[mask] - p01[mask])
+#         / denominator[mask]
+#         - 1.0
+#     )
+
+#     normalized[mask] = np.clip(
+#         normalized[mask],
+#         -1.0,
+#         1.0,
+#     )
+
+#     return normalized.astype(
+#         np.float32,
+#         copy=False,
+#     )
+
+def normalize_normal(
     values: np.ndarray,
-    p01: np.ndarray,
-    p99: np.ndarray,
+    mean: np.ndarray,
+    std: np.ndarray,
     mask: np.ndarray,
 ) -> np.ndarray:
     """
-    Applica la normalizzazione BOUNDS usata durante il training.
+    Applica NormalizationType.NORMAL usata durante il nuovo training.
 
-    QUANDO VIENE ESEGUITA
-    --------------------
-    In `pre_process()` viene usata per normalizzare il proprio corrente
-    prima di fornirlo al modello.
+    Per ogni componente con mask=True:
 
-    Formula per ogni componente selezionata:
-
-        normalized =
-            clip(
-                2 * (value - p01) / (p99 - p01) - 1,
-                -1,
-                1
-            )
+        normalized = (value - mean) / (std + 1e-8)
 
     Le componenti con mask=False rimangono invariate.
-
-    IMPORTANTE
-    ----------
-    `p01` e `p99` devono essere ESATTAMENTE quelli calcolati sul train set
-    usato per il fine-tuning.
     """
     values = np.asarray(
         values,
         dtype=np.float32,
     )
 
-    p01 = np.asarray(
-        p01,
+    mean = np.asarray(
+        mean,
         dtype=np.float32,
     )
 
-    p99 = np.asarray(
-        p99,
+    std = np.asarray(
+        std,
         dtype=np.float32,
     )
 
@@ -532,40 +637,31 @@ def normalize_bounds(
     )
 
     if (
-        values.shape != p01.shape
-        or values.shape != p99.shape
+        values.shape != mean.shape
+        or values.shape != std.shape
         or values.shape != mask.shape
     ):
         raise ValueError(
-            "values, p01, p99 and mask must have the same shape: "
+            "values, mean, std and mask must have the same shape: "
             f"values={values.shape}, "
-            f"p01={p01.shape}, "
-            f"p99={p99.shape}, "
+            f"mean={mean.shape}, "
+            f"std={std.shape}, "
             f"mask={mask.shape}"
         )
 
-    denominator = p99 - p01
-
     if np.any(
-        np.abs(denominator[mask]) < 1e-8
+        np.abs(std[mask]) < 1e-8
     ):
         raise ValueError(
-            "At least one normalized dimension has p01 == p99."
+            "At least one normalized dimension has near-zero std."
         )
 
     normalized = values.copy()
 
     normalized[mask] = (
-        2.0
-        * (values[mask] - p01[mask])
-        / denominator[mask]
-        - 1.0
-    )
-
-    normalized[mask] = np.clip(
-        normalized[mask],
-        -1.0,
-        1.0,
+        values[mask] - mean[mask]
+    ) / (
+        std[mask] + 1e-8
     )
 
     return normalized.astype(
@@ -574,29 +670,64 @@ def normalize_bounds(
     )
 
 
+# def prepare_proprio_tensor(
+#     proprio: np.ndarray,
+#     proprio_p01: np.ndarray,
+#     proprio_p99: np.ndarray,
+# ) -> torch.Tensor:
+#     """
+#     Normalizza il proprio e aggiunge batch e dimensione temporale.
+
+#     QUANDO VIENE ESEGUITA
+#     --------------------
+#     È l'ultimo passaggio sullo stato robot dentro `pre_process()`.
+
+#     Input:
+#         proprio.shape == (7,)
+
+#     Output:
+#         tensor.shape == (1, 1, 7)
+
+#     Le dimensioni rappresentano:
+
+#         batch_size = 1
+#         cond_steps = 1
+#         proprio_dim = 7
+#     """
+#     proprio = _as_float_array(
+#         proprio,
+#         expected_shape=(PROPRIO_DIM,),
+#         name="proprio",
+#     )
+
+#     normalized = normalize_bounds(
+#         values=proprio,
+#         p01=np.asarray(proprio_p01, dtype=np.float32),
+#         p99=np.asarray(proprio_p99, dtype=np.float32),
+#         mask=PROPRIO_NORMALIZATION_MASK,
+#     )
+
+#     return torch.from_numpy(
+#         normalized
+#     ).view(
+#         1,
+#         1,
+#         PROPRIO_DIM,
+#     )
+
 def prepare_proprio_tensor(
     proprio: np.ndarray,
-    proprio_p01: np.ndarray,
-    proprio_p99: np.ndarray,
+    proprio_mean: np.ndarray,
+    proprio_std: np.ndarray,
 ) -> torch.Tensor:
     """
-    Normalizza il proprio e aggiunge batch e dimensione temporale.
-
-    QUANDO VIENE ESEGUITA
-    --------------------
-    È l'ultimo passaggio sullo stato robot dentro `pre_process()`.
+    Normalizza il proprio con NORMAL e aggiunge batch e dimensione temporale.
 
     Input:
         proprio.shape == (7,)
 
     Output:
         tensor.shape == (1, 1, 7)
-
-    Le dimensioni rappresentano:
-
-        batch_size = 1
-        cond_steps = 1
-        proprio_dim = 7
     """
     proprio = _as_float_array(
         proprio,
@@ -604,10 +735,22 @@ def prepare_proprio_tensor(
         name="proprio",
     )
 
-    normalized = normalize_bounds(
+    proprio_mean = _as_float_array(
+        proprio_mean,
+        expected_shape=(PROPRIO_DIM,),
+        name="proprio_mean",
+    )
+
+    proprio_std = _as_float_array(
+        proprio_std,
+        expected_shape=(PROPRIO_DIM,),
+        name="proprio_std",
+    )
+
+    normalized = normalize_normal(
         values=proprio,
-        p01=np.asarray(proprio_p01, dtype=np.float32),
-        p99=np.asarray(proprio_p99, dtype=np.float32),
+        mean=proprio_mean,
+        std=proprio_std,
         mask=PROPRIO_NORMALIZATION_MASK,
     )
 
@@ -642,43 +785,99 @@ def prepare_proprio_tensor(
 # =============================================================================
 
 
-def denormalize_bounds(
+# def denormalize_bounds(
+#     values: np.ndarray,
+#     p01: np.ndarray,
+#     p99: np.ndarray,
+#     mask: np.ndarray,
+# ) -> np.ndarray:
+#     """
+#     Inverte la normalizzazione BOUNDS.
+
+#     QUANDO VIENE ESEGUITA
+#     --------------------
+#     Viene chiamata nel `post_process()` immediatamente dopo la predizione
+#     del modello.
+
+#     Formula inversa:
+
+#         value =
+#             (normalized + 1) / 2 * (p99 - p01) + p01
+
+#     Le componenti mask=False rimangono invariate.
+
+#     Per le action UR5e:
+#         - dx, dy, dz, droll, dpitch, dyaw vengono denormalizzati;
+#         - il gripper non viene modificato.
+#     """
+#     values = np.asarray(
+#         values,
+#         dtype=np.float32,
+#     )
+
+#     p01 = np.asarray(
+#         p01,
+#         dtype=np.float32,
+#     )
+
+#     p99 = np.asarray(
+#         p99,
+#         dtype=np.float32,
+#     )
+
+#     mask = np.asarray(
+#         mask,
+#         dtype=bool,
+#     )
+
+#     if (
+#         values.shape != p01.shape
+#         or values.shape != p99.shape
+#         or values.shape != mask.shape
+#     ):
+#         raise ValueError(
+#             "values, p01, p99 and mask must have the same shape."
+#         )
+
+#     denormalized = values.copy()
+
+#     denormalized[mask] = (
+#         (values[mask] + 1.0)
+#         * 0.5
+#         * (p99[mask] - p01[mask])
+#         + p01[mask]
+#     )
+
+#     return denormalized.astype(
+#         np.float32,
+#         copy=False,
+#     )
+
+def denormalize_normal(
     values: np.ndarray,
-    p01: np.ndarray,
-    p99: np.ndarray,
+    mean: np.ndarray,
+    std: np.ndarray,
     mask: np.ndarray,
 ) -> np.ndarray:
     """
-    Inverte la normalizzazione BOUNDS.
+    Inverte NormalizationType.NORMAL.
 
-    QUANDO VIENE ESEGUITA
-    --------------------
-    Viene chiamata nel `post_process()` immediatamente dopo la predizione
-    del modello.
+    Per ogni componente con mask=True:
 
-    Formula inversa:
-
-        value =
-            (normalized + 1) / 2 * (p99 - p01) + p01
-
-    Le componenti mask=False rimangono invariate.
-
-    Per le action UR5e:
-        - dx, dy, dz, droll, dpitch, dyaw vengono denormalizzati;
-        - il gripper non viene modificato.
+        value = normalized * std + mean
     """
     values = np.asarray(
         values,
         dtype=np.float32,
     )
 
-    p01 = np.asarray(
-        p01,
+    mean = np.asarray(
+        mean,
         dtype=np.float32,
     )
 
-    p99 = np.asarray(
-        p99,
+    std = np.asarray(
+        std,
         dtype=np.float32,
     )
 
@@ -688,21 +887,19 @@ def denormalize_bounds(
     )
 
     if (
-        values.shape != p01.shape
-        or values.shape != p99.shape
+        values.shape != mean.shape
+        or values.shape != std.shape
         or values.shape != mask.shape
     ):
         raise ValueError(
-            "values, p01, p99 and mask must have the same shape."
+            "values, mean, std and mask must have the same shape."
         )
 
     denormalized = values.copy()
 
     denormalized[mask] = (
-        (values[mask] + 1.0)
-        * 0.5
-        * (p99[mask] - p01[mask])
-        + p01[mask]
+        values[mask] * std[mask]
+        + mean[mask]
     )
 
     return denormalized.astype(
@@ -711,31 +908,114 @@ def denormalize_bounds(
     )
 
 
+# def denormalize_action_chunk(
+#     action_chunk: torch.Tensor | np.ndarray,
+#     action_p01: np.ndarray,
+#     action_p99: np.ndarray,
+# ) -> np.ndarray:
+#     """
+#     Riporta l'intero action chunk nello spazio fisico UR5e.
+
+#     QUANDO VIENE ESEGUITA
+#     --------------------
+#     È la prima operazione di `post_process()`.
+
+#     Il modello restituisce:
+#         (1, 4, 7)
+
+#     Questa funzione restituisce:
+#         (4, 7)
+
+#     con:
+#         [dx, dy, dz, droll, dpitch, dyaw, gripper]
+
+#     nelle unità originali del dataset:
+#         - metri;
+#         - radianti;
+#         - gripper 0/1 circa.
+#     """
+#     if isinstance(action_chunk, torch.Tensor):
+#         action_chunk = (
+#             action_chunk
+#             .detach()
+#             .to("cpu")
+#             .float()
+#             .numpy()
+#         )
+#     else:
+#         action_chunk = np.asarray(
+#             action_chunk,
+#             dtype=np.float32,
+#         )
+
+#     if action_chunk.shape == (1, 4, ACTION_DIM):
+#         action_chunk = action_chunk[0]
+
+#     expected_shape = (
+#         4,
+#         ACTION_DIM,
+#     )
+
+#     if action_chunk.shape != expected_shape:
+#         raise ValueError(
+#             f"action_chunk must have shape (1, 4, 7) or {expected_shape}, "
+#             f"got {action_chunk.shape}"
+#         )
+
+#     action_p01 = _as_float_array(
+#         action_p01,
+#         expected_shape=(ACTION_DIM,),
+#         name="action_p01",
+#     )
+
+#     action_p99 = _as_float_array(
+#         action_p99,
+#         expected_shape=(ACTION_DIM,),
+#         name="action_p99",
+#     )
+
+#     result = np.empty_like(
+#         action_chunk,
+#         dtype=np.float32,
+#     )
+
+#     for i, action in enumerate(action_chunk):
+#         result[i] = denormalize_bounds(
+#             values=action,
+#             p01=action_p01,
+#             p99=action_p99,
+#             mask=ACTION_NORMALIZATION_MASK,
+#         )
+
+#     return result
+
 def denormalize_action_chunk(
     action_chunk: torch.Tensor | np.ndarray,
-    action_p01: np.ndarray,
-    action_p99: np.ndarray,
+    action_mean: np.ndarray,
+    action_std: np.ndarray,
+    action_scale_factor: float = ACTION_SCALE_FACTOR,
 ) -> np.ndarray:
     """
-    Riporta l'intero action chunk nello spazio fisico UR5e.
+    Converte l'output normalizzato del modello nelle action utilizzabili
+    dal controller UR5e.
 
-    QUANDO VIENE ESEGUITA
-    --------------------
-    È la prima operazione di `post_process()`.
+    Pipeline:
 
-    Il modello restituisce:
-        (1, 4, 7)
+        output modello NORMAL
+            -> denormalizzazione mean/std
+            -> rappresentazione RAW del dataset
+            -> prime 6 dimensioni * ACTION_SCALE_FACTOR
+            -> delta pose fisiche
 
-    Questa funzione restituisce:
-        (4, 7)
+    Il gripper NON viene moltiplicato per ACTION_SCALE_FACTOR:
+    dopo la denormalizzazione rimane nel dominio RAW 0/20 circa.
 
-    con:
-        [dx, dy, dz, droll, dpitch, dyaw, gripper]
+    Returns:
+        shape (H, 7)
 
-    nelle unità originali del dataset:
-        - metri;
-        - radianti;
-        - gripper 0/1 circa.
+        [:, :3]  = metri
+        [:, 3:6] = radianti
+        [:, 6]   = gripper RAW, circa 0/20
     """
     if isinstance(action_chunk, torch.Tensor):
         action_chunk = (
@@ -751,31 +1031,38 @@ def denormalize_action_chunk(
             dtype=np.float32,
         )
 
-    if action_chunk.shape == (1, 4, ACTION_DIM):
+    # Rimuove solamente la batch dimension.
+    if (
+        action_chunk.ndim == 3
+        and action_chunk.shape[0] == 1
+    ):
         action_chunk = action_chunk[0]
 
-    expected_shape = (
-        4,
-        ACTION_DIM,
-    )
-
-    if action_chunk.shape != expected_shape:
+    if (
+        action_chunk.ndim != 2
+        or action_chunk.shape[1] != ACTION_DIM
+    ):
         raise ValueError(
-            f"action_chunk must have shape (1, 4, 7) or {expected_shape}, "
+            "action_chunk must have shape (1, H, 7) or (H, 7), "
             f"got {action_chunk.shape}"
         )
 
-    action_p01 = _as_float_array(
-        action_p01,
+    action_mean = _as_float_array(
+        action_mean,
         expected_shape=(ACTION_DIM,),
-        name="action_p01",
+        name="action_mean",
     )
 
-    action_p99 = _as_float_array(
-        action_p99,
+    action_std = _as_float_array(
+        action_std,
         expected_shape=(ACTION_DIM,),
-        name="action_p99",
+        name="action_std",
     )
+
+    if not np.isfinite(action_scale_factor) or action_scale_factor <= 0.0:
+        raise ValueError(
+            f"Invalid action_scale_factor: {action_scale_factor}"
+        )
 
     result = np.empty_like(
         action_chunk,
@@ -783,12 +1070,22 @@ def denormalize_action_chunk(
     )
 
     for i, action in enumerate(action_chunk):
-        result[i] = denormalize_bounds(
+        result[i] = denormalize_normal(
             values=action,
-            p01=action_p01,
-            p99=action_p99,
+            mean=action_mean,
+            std=action_std,
             mask=ACTION_NORMALIZATION_MASK,
         )
+
+    # Le prime sei componenti nel TFDS 0.2.0 sono nella
+    # rappresentazione RAW delta / 0.05.
+    #
+    # Torniamo quindi alle unità fisiche:
+    #   xyz -> metri
+    #   rpy -> radianti
+    result[:, :6] *= np.float32(
+        action_scale_factor
+    )
 
     return result
 
@@ -798,12 +1095,19 @@ def convert_gripper(
     currently_closed: bool,
     close_threshold: float = 0.9,
     open_threshold: float = 0.7,
+    raw_closed_value: float = GRIPPER_ACTION_CLOSED_VALUE,
     open_position: float = 0.0,
     closed_position: float = 255.0,
 ) -> tuple[float, bool]:
+    
     if not np.isfinite(model_value):
         raise ValueError(
             f"Invalid gripper prediction: {model_value}"
+        )
+
+    if not np.isfinite(raw_closed_value) or raw_closed_value <= 0.0:
+        raise ValueError(
+            f"Invalid raw_closed_value: {raw_closed_value}"
         )
 
     if not 0.0 <= open_threshold <= close_threshold <= 1.0:
@@ -811,10 +1115,15 @@ def convert_gripper(
             "Expected 0 <= open_threshold <= close_threshold <= 1"
         )
 
+    gripper_unit = (
+        float(model_value)
+        / float(raw_closed_value)
+    )
+
     is_closed = (
-        model_value >= open_threshold
+        gripper_unit >= open_threshold
         if currently_closed
-        else model_value > close_threshold
+        else gripper_unit > close_threshold
     )
 
     command = (
@@ -833,6 +1142,7 @@ def delta_action_chunk_to_absolute_targets(
     gripper_closed: bool,
     close_threshold: float = 0.9,
     open_threshold: float = 0.7,
+    raw_gripper_closed_value: float = GRIPPER_ACTION_CLOSED_VALUE,
     open_position: float = 0.0,
     closed_position: float = 255.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -993,6 +1303,7 @@ def delta_action_chunk_to_absolute_targets(
             currently_closed=current_gripper_closed,
             close_threshold=close_threshold,
             open_threshold=open_threshold,
+            raw_closed_value=raw_gripper_closed_value,
             open_position=open_position,
             closed_position=closed_position,
         )

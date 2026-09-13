@@ -21,6 +21,8 @@ if _THIS_DIR not in sys.path:
 
 from interleave_pi0 import ACTION_HORIZON, InterleavePi0Policy, _resolve_path
 from interleave_pi0_utils import (
+    ACTION_SCALE_FACTOR,
+    GRIPPER_ACTION_CLOSED_VALUE,
     build_proprio,
     delta_action_chunk_to_absolute_targets,
     denormalize_action_chunk,
@@ -55,17 +57,21 @@ class InterleavePi0Controller(AIController):
         self.action_buffer: Optional[np.ndarray] = None
         self.action_idx = 0
         self.command: Optional[str] = None
-        self.instruction_image: Optional[torch.Tensor] = None
+        self.instruction_images: list[torch.Tensor] = []
         self.current_task_id: Optional[str] = None
 
         
         self.gripper_closed = False
         
         self._fixed_orientation_xyzw: Optional[np.ndarray] = None
-        self.proprio_p01: Optional[np.ndarray] = None
-        self.proprio_p99: Optional[np.ndarray] = None
-        self.action_p01: Optional[np.ndarray] = None
-        self.action_p99: Optional[np.ndarray] = None
+        # self.proprio_p01: Optional[np.ndarray] = None
+        # self.proprio_p99: Optional[np.ndarray] = None
+        # self.action_p01: Optional[np.ndarray] = None
+        # self.action_p99: Optional[np.ndarray] = None
+        self.proprio_mean: Optional[np.ndarray] = None
+        self.proprio_std: Optional[np.ndarray] = None
+        self.action_mean: Optional[np.ndarray] = None
+        self.action_std: Optional[np.ndarray] = None
 
         super().__init__(str(self.config_path))
 
@@ -157,6 +163,21 @@ class InterleavePi0Controller(AIController):
                 f"{ACTION_HORIZON}, got {num_execute_actions}"
             )
 
+        num_instruction_images = int(
+            self.cfg.get(
+                "num_instruction_images",
+                1,
+            )
+        )
+
+        if num_instruction_images < 1:
+            raise ValueError(
+                "num_instruction_images must be >= 1, "
+                f"got {num_instruction_images}"
+            )
+
+        self.cfg.num_instruction_images = num_instruction_images
+
         # Rendiamo esplicito il default anche nel DictConfig,
         # così in seguito possiamo usare direttamente
         # self.cfg.num_execute_actions.
@@ -168,7 +189,7 @@ class InterleavePi0Controller(AIController):
     def move_model_to_device(self, device):
         """La policy carica gia entrambe le pipeline su CUDA."""
         if torch.device(device).type != "cuda":
-            raise ValueError("Mimic Video supports only a CUDA device.")
+            raise ValueError("Interleave-Pi0 supports only a CUDA device.")
 
     def load_command(
         self,
@@ -209,7 +230,8 @@ class InterleavePi0Controller(AIController):
         #   - nel pre_process() per normalizzare il proprio;
         #   - nel post_process() per denormalizzare le action.
         #
-        if self.proprio_p01 is None:
+        #if self.proprio_p01 is None:
+        if self.proprio_mean is None:
 
             stats_path = Path(
                 str(self.cfg.dataset_statistics_path)
@@ -230,21 +252,38 @@ class InterleavePi0Controller(AIController):
                 stats = json.load(stats_file)
 
             try:
-                self.proprio_p01 = np.asarray(
-                    stats["proprio"]["p01"],
+                # self.proprio_p01 = np.asarray(
+                #     stats["proprio"]["p01"],
+                #     dtype=np.float32,
+                # )
+                # self.proprio_p99 = np.asarray(
+                #     stats["proprio"]["p99"],
+                #     dtype=np.float32,
+                # )
+
+                # self.action_p01 = np.asarray(
+                #     stats["action"]["p01"],
+                #     dtype=np.float32,
+                # )
+                # self.action_p99 = np.asarray(
+                #     stats["action"]["p99"],
+                #     dtype=np.float32,
+                # )
+                self.proprio_mean = np.asarray(
+                    stats["proprio"]["mean"],
                     dtype=np.float32,
                 )
-                self.proprio_p99 = np.asarray(
-                    stats["proprio"]["p99"],
+                self.proprio_std = np.asarray(
+                    stats["proprio"]["std"],
                     dtype=np.float32,
                 )
 
-                self.action_p01 = np.asarray(
-                    stats["action"]["p01"],
+                self.action_mean = np.asarray(
+                    stats["action"]["mean"],
                     dtype=np.float32,
                 )
-                self.action_p99 = np.asarray(
-                    stats["action"]["p99"],
+                self.action_std = np.asarray(
+                    stats["action"]["std"],
                     dtype=np.float32,
                 )
 
@@ -257,15 +296,28 @@ class InterleavePi0Controller(AIController):
             # Tutti i vettori devono corrispondere alle 7 dimensioni
             # utilizzate dal modello UR5e.
             for name, values in (
-                ("proprio_p01", self.proprio_p01),
-                ("proprio_p99", self.proprio_p99),
-                ("action_p01", self.action_p01),
-                ("action_p99", self.action_p99),
+                # ("proprio_p01", self.proprio_p01),
+                # ("proprio_p99", self.proprio_p99),
+                # ("action_p01", self.action_p01),
+                # ("action_p99", self.action_p99),
+                ("proprio_mean", self.proprio_mean),
+                ("proprio_std", self.proprio_std),
+                ("action_mean", self.action_mean),
+                ("action_std", self.action_std),
             ):
                 if values.shape != (7,):
                     raise ValueError(
                         f"{name} must have shape (7,), got {values.shape}"
                     )
+                if not np.all(np.isfinite(values)):
+                    raise ValueError(
+                        f"{name} contains non-finite values."
+                    )
+            if np.any(self.proprio_std <= 0.0):
+                raise ValueError("proprio_std must contain positive values.")
+
+            if np.any(self.action_std <= 0.0):
+                raise ValueError("action_std must contain positive values.")
 
             print(
                 f"[InterleavePi0Controller] Loaded dataset statistics "
@@ -291,16 +343,37 @@ class InterleavePi0Controller(AIController):
             )
 
         prompt = task_cfg.get("prompt")
-        instruction_image_path = task_cfg.get("instruction_image")
+        instruction_image_paths = task_cfg.get("instruction_images")
 
         if not prompt:
             raise ValueError(
                 f"Task {task_id} does not define a prompt."
             )
 
-        if not instruction_image_path:
+                
+        if instruction_image_paths is None:
             raise ValueError(
-                f"Task {task_id} does not define an instruction image."
+                f"Task {task_id} does not define instruction_images."
+            )
+
+        instruction_image_paths = list(
+            instruction_image_paths
+        )
+
+        if not instruction_image_paths:
+            raise ValueError(
+                f"Task {task_id} has no instruction images."
+            )
+
+        expected_num_images = int(
+            self.cfg.num_instruction_images
+        )
+
+        if len(instruction_image_paths) != expected_num_images:
+            raise ValueError(
+                f"Task {task_id} defines "
+                f"{len(instruction_image_paths)} instruction images, "
+                f"but the config requires {expected_num_images}."
             )
 
         # -------------------------------------------------------------------------
@@ -315,7 +388,12 @@ class InterleavePi0Controller(AIController):
         #
         #   <image_placeholder>
         #
-        self.command = prepare_interleaved_prompt(prompt)
+        self.command = prepare_interleaved_prompt(
+            prompt=prompt,
+            num_instruction_images=len(
+                instruction_image_paths
+            ),
+        )
 
         # -------------------------------------------------------------------------
         # Instruction image
@@ -325,23 +403,37 @@ class InterleavePi0Controller(AIController):
         #
         #   instruction_images/green_box.png
         #
-        image_path = Path(instruction_image_path)
+        self.instruction_images = []
+        resolved_image_paths = []
 
-        if not image_path.is_absolute():
-            image_path = self.config_dir / image_path
+        for instruction_image_path in instruction_image_paths:
 
-        image_path = image_path.resolve()
+            image_path = Path(
+                str(instruction_image_path)
+            )
 
-        # Il PNG è già:
-        #   - RGB
-        #   - crop bbox espansa del 20%
-        #   - 224x224
-        #
-        # load_instruction_image() verifica queste proprietà e produce
-        # un tensor uint8 (3, 224, 224).
-        self.instruction_image = load_instruction_image(
-            image_path
-        )
+            if not image_path.is_absolute():
+                image_path = (
+                    self.config_dir / image_path
+                )
+
+            image_path = image_path.resolve()
+
+            # Il PNG è già:
+            #   - RGB
+            #   - crop bbox espansa del 20%
+            #   - 224x224
+            #
+            # load_instruction_image() verifica queste proprietà e produce
+            # un tensor uint8 (3, 224, 224).
+
+            self.instruction_images.append(
+                load_instruction_image(image_path)
+            )
+
+            resolved_image_paths.append(
+                image_path
+            )
 
         # Un nuovo comando invalida qualsiasi chunk eventualmente rimasto
         # dal task precedente.
@@ -350,7 +442,9 @@ class InterleavePi0Controller(AIController):
 
         print(
             f"[InterleavePi0Controller] Loaded task {task_id}: "
-            f"{prompt!r}, instruction_image={image_path.name}"
+            f"{prompt!r}, "
+            f"instruction_images="
+            f"{[path.name for path in resolved_image_paths]}"
         )
         
 
@@ -379,7 +473,7 @@ class InterleavePi0Controller(AIController):
         # Il nuovo task verrà impostato immediatamente dopo tramite
         # load_command().
         self.command = None
-        self.instruction_image = None
+        self.instruction_images = []        
         self.current_task_id = None
 
         # Verrà aggiornato con lo stato reale ricevuto dal robot
@@ -468,9 +562,9 @@ class InterleavePi0Controller(AIController):
                 "load_command() must be called before inference()."
             )
 
-        if self.instruction_image is None:
+        if not self.instruction_images:
             raise RuntimeError(
-                "No instruction image loaded. "
+                "No instruction images loaded. "
                 "load_command() must be called before inference()."
             )
 
@@ -512,11 +606,11 @@ class InterleavePi0Controller(AIController):
         #
         # Shape finale:
         #   (2, 3, 224, 224)
+        # ora il numero di immagini può arrivare a 3
         interleaved_images = stack_interleaved_images(
             front_image=front_image,
-            instruction_image=self.instruction_image,
+            instruction_images=self.instruction_images,
         )
-
         # -------------------------------------------------------------------------
         # Stato robot
         # -------------------------------------------------------------------------
@@ -558,10 +652,21 @@ class InterleavePi0Controller(AIController):
         #
         # Shape:
         #   (7,) -> (1, 1, 7)
+        # proprio_tensor = prepare_proprio_tensor(
+        #     proprio=proprio,
+        #     proprio_p01=self.proprio_p01,
+        #     proprio_p99=self.proprio_p99,
+        # )
+
+        if self.proprio_mean is None or self.proprio_std is None:
+            raise RuntimeError(
+                "Proprio statistics are not loaded."
+            )
+
         proprio_tensor = prepare_proprio_tensor(
             proprio=proprio,
-            proprio_p01=self.proprio_p01,
-            proprio_p99=self.proprio_p99,
+            proprio_mean=self.proprio_mean,
+            proprio_std=self.proprio_std,
         )
 
         # -------------------------------------------------------------------------
@@ -642,7 +747,8 @@ class InterleavePi0Controller(AIController):
         al loop di AIControllerNode.
         """
 
-        if self.action_p01 is None or self.action_p99 is None:
+        #if self.action_p01 is None or self.action_p99 is None:
+        if self.action_mean is None or self.action_std is None:
             raise RuntimeError(
                 "Action statistics are not loaded. "
                 "load_command() must be called before inference()."
@@ -684,10 +790,31 @@ class InterleavePi0Controller(AIController):
         #
         #   [dx, dy, dz, droll, dpitch, dyaw, gripper]
         #
+        # action_chunk = denormalize_action_chunk(
+        #     action_chunk=output_data["action_chunk"],
+        #     action_p01=self.action_p01,
+        #     action_p99=self.action_p99,
+        # )
+
+
+        # denormalize_action_chunk():
+        #   - inverte NORMAL su tutte le 7 dimensioni;
+        #   - recupera il gripper RAW circa 0/20;
+        #   - moltiplica le prime 6 dimensioni per 0.05;
+        #   - restituisce delta xyz in metri e delta RPY in radianti.
+
+        action_scale_factor = float(
+            self.cfg.get(
+                "action_scale_factor",
+                ACTION_SCALE_FACTOR,
+            )
+        )
+
         action_chunk = denormalize_action_chunk(
             action_chunk=output_data["action_chunk"],
-            action_p01=self.action_p01,
-            action_p99=self.action_p99,
+            action_mean=self.action_mean,
+            action_std=self.action_std,
+            action_scale_factor=action_scale_factor,
         )
 
         if self.cfg.trace_action_conversions:
@@ -715,6 +842,13 @@ class InterleavePi0Controller(AIController):
         #
         #   R_next = R_delta @ R_current
         #
+        raw_gripper_closed_value = float(
+            self.cfg.get(
+                "gripper_action_closed_value",
+                GRIPPER_ACTION_CLOSED_VALUE,
+            )
+        )
+
         positions, quaternions_xyzw, gripper_commands = (
             delta_action_chunk_to_absolute_targets(
                 action_chunk=action_chunk,
@@ -725,6 +859,7 @@ class InterleavePi0Controller(AIController):
                 gripper_closed=output_data[
                     "gripper_closed"
                 ],
+                raw_gripper_closed_value=raw_gripper_closed_value,
             )
         )
 
@@ -829,9 +964,12 @@ class InterleavePi0Controller(AIController):
             f"  gripper_closed={processed['gripper_closed']}\n"
             f"  front_image_shape={tuple(front_image.shape)} "
             f"dtype={front_image.dtype}\n"
-            f"  instruction_image_shape="
-            f"{tuple(self.instruction_image.shape)} "
-            f"dtype={self.instruction_image.dtype}"
+            f"  num_instruction_images="
+            f"{len(self.instruction_images)}\n"
+            f"  instruction_image_shapes="
+            f"{[tuple(image.shape) for image in self.instruction_images]}\n"
+            f"  instruction_image_dtypes="
+            f"{[str(image.dtype) for image in self.instruction_images]}"
         )
 
 
@@ -973,7 +1111,7 @@ class InterleavePi0Controller(AIController):
                 "Interleave-Pi0 controller has not been initialized."
             )
 
-        if self.command is None or self.instruction_image is None:
+        if self.command is None or not self.instruction_images:
             raise RuntimeError(
                 "load_command() must be called before inference()."
             )

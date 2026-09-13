@@ -96,7 +96,7 @@ REPO_ROOT="${UR5e_2f_85_PATH:-$DEFAULT_REPO_ROOT}"
 
 INTERLEAVE_WORKSPACE_HOST="$REPO_ROOT/interleave_pi_zero_workspace"
 
-CHECKPOINT_HOST="$INTERLEAVE_WORKSPACE_HOST/checkpoints/posttraining/step66240.pt"
+CHECKPOINT_HOST="${INTERLEAVE_PI0_CHECKPOINT_HOST:-}"
 
 PALIGEMMA_HOST="$INTERLEAVE_WORKSPACE_HOST/checkpoints/paligemma/paligemma-3b-pt-224"
 
@@ -122,7 +122,10 @@ SHM_SIZE="${SHM_SIZE:-1g}"
 
 RUNTIME_SETUP="/opt/interleave-pizero-ros/setup_runtime.sh"
 
-CONTROLLER_CONFIG_CONTAINER="/home/ros2_ws/src/ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_config.yaml"
+#CONTROLLER_CONFIG_CONTAINER="/home/ros2_ws/src/ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_config.yaml"
+CONFIG_NAME="${INTERLEAVE_PI0_CONFIG_NAME:-interleave_pi0_config.yaml}"
+CONFIG_HOST="$REPO_ROOT/ai_controller/ai_controller/models/interleave_pi0_controller/$CONFIG_NAME"
+CONTROLLER_CONFIG_CONTAINER="/home/ros2_ws/src/ai_controller/ai_controller/models/interleave_pi0_controller/$CONFIG_NAME"
 
 CHECKPOINT_CONTAINER="/models/interleave_pi0/checkpoint.pt"
 PALIGEMMA_CONTAINER="/models/interleave_pi0/paligemma"
@@ -186,7 +189,7 @@ done
     fail "Dockerfile ROS mancante: $DOCKERFILE_HOST"
 
 
-CONFIG_HOST="$REPO_ROOT/ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_config.yaml"
+#CONFIG_HOST="$REPO_ROOT/ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_config.yaml"
 
 [[ -f "$CONFIG_HOST" ]] || \
     fail "Config runtime Interleave-Pi0 mancante: $CONFIG_HOST"
@@ -207,7 +210,8 @@ CONFIG_HOST="$REPO_ROOT/ai_controller/ai_controller/models/interleave_pi0_contro
 # =============================================================================
 
 
-
+[[ -n "$CHECKPOINT_HOST" ]] || \
+    fail "INTERLEAVE_PI0_CHECKPOINT_HOST non impostata."
 
 [[ -f "$CHECKPOINT_HOST" ]] || \
     fail "Checkpoint non trovato: $CHECKPOINT_HOST"
@@ -565,22 +569,74 @@ with stats_path.open('r', encoding='utf-8') as f:
 if stats.get('num_trajectories') != 456:
     raise RuntimeError(
         'Unexpected num_trajectories: '
-        f\"{stats.get('num_trajectories')}\"
+        + str(stats.get('num_trajectories'))
     )
 
 if stats.get('num_transitions') != 23997:
     raise RuntimeError(
         'Unexpected num_transitions: '
-        f\"{stats.get('num_transitions')}\"
+        + str(stats.get('num_transitions'))
     )
 
+
+import numpy as np
+
 for group in ('action', 'proprio'):
-    for key in ('p01', 'p99'):
-        values = stats[group][key]
-        if len(values) != 7:
+
+    for key in ('mean', 'std'):
+
+        if key not in stats[group]:
             raise RuntimeError(
-                f'{group}.{key} must contain 7 values'
+                f'Missing statistics key: {group}.{key}'
             )
+
+        values = np.asarray(
+            stats[group][key],
+            dtype=np.float32,
+        )
+
+        if values.shape != (7,):
+            raise RuntimeError(
+                f'{group}.{key} must contain 7 values, '
+                f'got shape {values.shape}'
+            )
+
+        if not np.all(np.isfinite(values)):
+            raise RuntimeError(
+                f'{group}.{key} contains non-finite values'
+            )
+
+    std = np.asarray(
+        stats[group]['std'],
+        dtype=np.float32,
+    )
+
+    if np.any(std <= 0.0):
+        raise RuntimeError(
+            f'{group}.std must contain positive values'
+        )
+
+
+# -------------------------------------------------------------------------
+# Runtime conventions
+# -------------------------------------------------------------------------
+
+if float(cfg.action_scale_factor) != 0.05:
+    raise RuntimeError(
+        f'Expected action_scale_factor=0.05, '
+        f'got {cfg.action_scale_factor}'
+    )
+
+if float(cfg.gripper_action_closed_value) != 20.0:
+    raise RuntimeError(
+        f'Expected gripper_action_closed_value=20.0, '
+        f'got {cfg.gripper_action_closed_value}'
+    )
+
+if cfg.final_action_clip_value is not None:
+    raise RuntimeError(
+        'final_action_clip_value must be null when using NORMAL'
+    )
 
 
 # -------------------------------------------------------------------------
@@ -608,27 +664,60 @@ if actual_ids != expected_ids:
     )
 
 
+num_instruction_images = int(
+    cfg.get('num_instruction_images', 1)
+)
+
+if num_instruction_images < 1:
+    raise RuntimeError(
+        'num_instruction_images must be >= 1'
+    )
+
+
 for task_id in sorted(expected_ids):
+
     task = cfg.tasks[task_id]
 
     prompt = str(task.prompt)
 
-    if prompt.count('<image>') != 1:
+    num_placeholders = prompt.count('<image>')
+
+    if num_placeholders != num_instruction_images:
         raise RuntimeError(
-            f'Task {task_id}: prompt must contain exactly one <image>'
+            f'Task {task_id}: prompt contains '
+            f'{num_placeholders} <image> placeholders, '
+            f'expected {num_instruction_images}'
         )
 
-    image_path = Path(str(task.instruction_image))
+    instruction_images = list(
+        task.instruction_images
+    )
 
-    if not image_path.is_absolute():
-        image_path = config_dir / image_path
-
-    image_path = image_path.resolve()
-
-    if not image_path.is_file():
-        raise FileNotFoundError(
-            f'Task {task_id}: missing instruction image {image_path}'
+    if len(instruction_images) != num_instruction_images:
+        raise RuntimeError(
+            f'Task {task_id}: found '
+            f'{len(instruction_images)} instruction images, '
+            f'expected {num_instruction_images}'
         )
+
+    for image_index, image_value in enumerate(
+        instruction_images
+    ):
+
+        image_path = Path(
+            str(image_value)
+        )
+
+        if not image_path.is_absolute():
+            image_path = config_dir / image_path
+
+        image_path = image_path.resolve()
+
+        if not image_path.is_file():
+            raise FileNotFoundError(
+                f'Task {task_id}: missing instruction image '
+                f'[{image_index}] {image_path}'
+            )
 
 
 print(f'Config:        {config_path}')
@@ -636,6 +725,7 @@ print(f'Checkpoint:    {checkpoint_path}')
 print(f'PaliGemma:     {paligemma_path}')
 print(f'Statistics:    {stats_path}')
 print('Dataset stats: 456 trajectories / 23997 transitions')
+print(f'Instruction images/task: {num_instruction_images}')
 print('Tasks:         16/16 OK')
 print('Instruction images: OK')
 PY
