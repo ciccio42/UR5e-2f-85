@@ -127,6 +127,11 @@ dataset_action_scale: 0.05
 #   open   -> 0
 #   closed -> 255
 #
+
+
+# Processor LeRobot
+postprocessor_config_filename: policy_postprocessor_ur5e.json
+
 gripper_open_position: 0.0
 gripper_closed_position: 255.0
 

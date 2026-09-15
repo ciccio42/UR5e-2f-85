@@ -303,9 +303,17 @@ class VLAJEPAController(AIController):
             )
         )
 
+        postprocessor_config_filename = str(
+            self.cfg.get(
+                "postprocessor_config_filename",
+                "policy_postprocessor.json",
+            )
+        )
+
         self._runtime = VLAJEPARuntime(
             checkpoint_path=checkpoint_path,
             device=device,
+            postprocessor_config_filename=postprocessor_config_filename,
         )
 
         self._runtime.load()
@@ -721,6 +729,7 @@ class VLAJEPAController(AIController):
             "action",
             "reference_position",
             "reference_quaternion",
+            "current_gripper_closed",
         )
 
         for key in required_keys:
@@ -751,8 +760,18 @@ class VLAJEPAController(AIController):
                 output_data[
                     "reference_quaternion"
                 ],
+            currently_closed=
+                bool(
+                    output_data[
+                        "current_gripper_closed"
+                    ]
+                ),
             scale_factor=
                 self.dataset_action_scale,
+            gripper_min=0.0,
+            gripper_max=20.0,
+            open_threshold=0.7,
+            close_threshold=0.9,
         )
 
         # -----------------------------------------------------------------
@@ -1065,6 +1084,9 @@ class VLAJEPAController(AIController):
                     processed[
                         "reference_quaternion"
                     ],
+
+                "current_gripper_closed":
+                    processed["current_gripper_closed"],
             }
         )
 

@@ -255,6 +255,7 @@ for checkpoint_file in \
     model.safetensors \
     policy_preprocessor.json \
     policy_postprocessor.json \
+    policy_postprocessor_ur5e.json \
     policy_preprocessor_step_3_normalizer_processor.safetensors \
     policy_postprocessor_step_2_unnormalizer_processor.safetensors; do
 
@@ -659,6 +660,7 @@ docker exec "$CONTAINER_NAME" bash -lc "
 import json
 import os
 from pathlib import Path
+from omegaconf import OmegaConf
 
 import numpy as np
 from safetensors import safe_open
@@ -683,6 +685,20 @@ checkpoint_path = Path(
     os.environ['VLA_JEPA_CHECKPOINT']
 ).resolve()
 
+controller_config_path = Path(
+    os.environ['VLA_JEPA_CONTROLLER_CONFIG']
+).resolve()
+
+controller_cfg = OmegaConf.load(
+    controller_config_path
+)
+
+postprocessor_config_filename = str(
+    controller_cfg.get(
+        'postprocessor_config_filename',
+        'policy_postprocessor.json',
+    )
+)
 
 if not checkpoint_path.is_dir():
     raise FileNotFoundError(
@@ -866,8 +882,13 @@ if rename_map != expected_rename_map:
 
 postprocessor_path = (
     checkpoint_path
-    / 'policy_postprocessor.json'
+    / postprocessor_config_filename
 )
+
+if not postprocessor_path.is_file():
+    raise FileNotFoundError(
+        postprocessor_path
+    )
 
 with postprocessor_path.open(
     'r',
@@ -885,9 +906,7 @@ post_names = [
 
 expected_post_names = [
     'vla_jepa_clip_actions',
-    'vla_jepa_pre_snap_gripper',
     'unnormalizer_processor',
-    'vla_jepa_binarize_gripper',
     'device_processor',
 ]
 
@@ -1377,6 +1396,7 @@ open_action = np.array(
     postprocessed_action=open_action,
     reference_position=reference_position,
     reference_quaternion_xyzw=reference_quaternion,
+    currently_closed=False,
 )
 
 

@@ -497,6 +497,40 @@ def decode_gripper_binary(
     )
 
 
+def gripper_hysteresis(
+    gripper_value: float,
+    currently_closed: bool,
+    gripper_min: float = 0.0,
+    gripper_max: float = 20.0,
+    open_threshold: float = 0.7,
+    close_threshold: float = 0.9,
+) -> tuple[int, bool]:
+
+    open_value = (
+        gripper_min
+        + open_threshold
+        * (gripper_max - gripper_min)
+    )
+
+    close_value = (
+        gripper_min
+        + close_threshold
+        * (gripper_max - gripper_min)
+    )
+
+    if currently_closed:
+        is_closed = gripper_value >= open_value
+    else:
+        is_closed = gripper_value > close_value
+
+    state = (
+        GRIPPER_CLOSED
+        if is_closed
+        else GRIPPER_OPEN
+    )
+
+    return int(state), bool(is_closed)
+
 def gripper_binary_to_moveit(
     gripper_state: int | bool,
     open_position: float = 0.0,
@@ -534,7 +568,12 @@ def delta_action_to_absolute_target(
     postprocessed_action: torch.Tensor | np.ndarray,
     reference_position: np.ndarray,
     reference_quaternion_xyzw: np.ndarray,
+    currently_closed: bool,
     scale_factor: float = DATASET_ACTION_SCALE,
+    gripper_min: float = 0.0,
+    gripper_max: float = 20.0,
+    open_threshold: float = 0.7,
+    close_threshold: float = 0.9,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """
     Converte una singola action VLA-JEPA nel target assoluto UR5e.
@@ -667,8 +706,13 @@ def delta_action_to_absolute_target(
     # Gripper
     # ------------------------------------------------------------------
 
-    gripper_state = decode_gripper_binary(
-        action[6]
+    gripper_state, _ = gripper_hysteresis(
+        gripper_value=float(action[6]),
+        currently_closed=currently_closed,
+        gripper_min=gripper_min,
+        gripper_max=gripper_max,
+        open_threshold=open_threshold,
+        close_threshold=close_threshold,
     )
 
     return (

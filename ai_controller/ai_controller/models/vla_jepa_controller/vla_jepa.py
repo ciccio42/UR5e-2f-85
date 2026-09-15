@@ -103,9 +103,14 @@ class VLAJEPARuntime:
         self,
         checkpoint_path: str | Path,
         device: str = "cuda",
+        postprocessor_config_filename: str = "policy_postprocessor.json",
     ) -> None:
         self.checkpoint_path = str(checkpoint_path)  # path in cui ci sono i safetensor del checkpoint
         self.device = torch.device(device)
+
+        self.postprocessor_config_filename = str(
+            postprocessor_config_filename
+        )
 
         self.config: PreTrainedConfig | None = None
         self.policy: torch.nn.Module | None = None
@@ -188,6 +193,7 @@ class VLAJEPARuntime:
         preprocessor, postprocessor = make_pre_post_processors(
             policy_cfg=config,
             pretrained_path=self.checkpoint_path,
+            postprocessor_config_filename=self.postprocessor_config_filename,
             preprocessor_overrides={
                 "device_processor": {
                     "device": str(self.device),
@@ -338,6 +344,7 @@ class VLAJEPARuntime:
         #       -> binarize gripper
         #       -> CPU
         # --------------------------------------------------------------
+        
         action = self.postprocessor(action)
 
         if not isinstance(action, torch.Tensor):
