@@ -168,7 +168,7 @@ CONTROLLER_CONFIG_CONTAINER="/home/ros2_ws/src/ai_controller/ai_controller/model
 # HUGGING FACE CACHE
 # =============================================================================
 
-DEFAULT_HF_CACHE_HOST="$REPO_ROOT/interleave_pi_zero_workspace/checkpoints/huggingface"
+DEFAULT_HF_CACHE_HOST="$REPO_ROOT/ai_controller/ai_controller/models/vla_jepa_controller/huggingface"
 
 VLA_JEPA_HF_CACHE_HOST="${VLA_JEPA_HF_CACHE_HOST:-$DEFAULT_HF_CACHE_HOST}"
 
