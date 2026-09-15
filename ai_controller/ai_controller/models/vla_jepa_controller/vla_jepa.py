@@ -157,6 +157,10 @@ class VLAJEPARuntime:
         # Runtime device may differ from the device saved during training.
         config.device = str(self.device)
 
+        # Inference-only deployment:
+        # V-JEPA2 + latent world model are training-time modules.
+        config.enable_world_model = False
+
         # --------------------------------------------------------------
         # 2. Policy
         # --------------------------------------------------------------

@@ -164,6 +164,14 @@ RUNTIME_PYTHON="/opt/vla-jepa-ros/bin/python"
 CONTROLLER_CONFIG_CONTAINER="/home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller/$CONFIG_NAME"
 
 
+# =============================================================================
+# HUGGING FACE CACHE
+# =============================================================================
+
+DEFAULT_HF_CACHE_HOST="$REPO_ROOT/interleave_pi_zero_workspace/checkpoints/huggingface"
+
+VLA_JEPA_HF_CACHE_HOST="${VLA_JEPA_HF_CACHE_HOST:-$DEFAULT_HF_CACHE_HOST}"
+
 # Il mount deve corrispondere a checkpoint_path nello YAML:
 #
 #   checkpoint_path:
