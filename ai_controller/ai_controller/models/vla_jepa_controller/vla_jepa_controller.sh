@@ -1094,6 +1094,16 @@ docker exec "$CONTAINER_NAME" bash -lc "
 
     source '$RUNTIME_SETUP'
 
+    cd /home/ros2_ws
+
+    echo 'Build dipendenze ROS + ai_controller...'
+
+    colcon build \
+        --symlink-install \
+        --packages-up-to ai_controller
+
+    source /home/ros2_ws/install/setup.bash
+
     python - <<'PY'
 import os
 from pathlib import Path
@@ -1477,38 +1487,6 @@ docker exec "$CONTAINER_NAME" bash -lc "
     source '$RUNTIME_SETUP'
 
     cd /home/ros2_ws
-
-    echo 'Package ROS trovati:'
-    colcon list
-    echo
-
-
-    if ! colcon list \
-        | awk '{print \$1}' \
-        | grep -qx 'moveit_controller_srvs'; then
-
-        echo 'Package moveit_controller_srvs non trovato.' >&2
-        exit 1
-
-    fi
-
-
-    if ! colcon list \
-        | awk '{print \$1}' \
-        | grep -qx 'ai_controller'; then
-
-        echo 'Package ai_controller non trovato.' >&2
-        exit 1
-
-    fi
-
-
-    colcon build \
-        --packages-up-to \
-        ai_controller
-
-
-    source /home/ros2_ws/install/setup.bash
 
 
     # ------------------------------------------------------------------
