@@ -226,6 +226,14 @@ run_training() {
         train)
             ;;
 
+        resume)
+
+            overrides+=(
+                "resume_checkpoint_step=True"
+                "allow_missing_lora_weights=False"
+            )
+            ;;
+
         *)
             die "Modalita interna non valida: $mode"
             ;;
@@ -433,17 +441,17 @@ fi
 
 case "${1:-smoke}" in
 
-    smoke|compile-smoke|train)
+    smoke|compile-smoke|train|resume)
         start_tmux "${1:-smoke}"
         ;;
 
     --container)
         CONTAINER_NAME="${CONTAINER_NAME:?CONTAINER_NAME non impostato}"
-        run_container "${2:?specificare smoke, compile-smoke o train}"
+        run_container "${2:?specificare smoke, compile-smoke, train o resume}"
         ;;
 
     --inside)
-        run_training "${2:?specificare smoke, compile-smoke o train}"
+        run_training "${2:?specificare smoke, compile-smoke, train o resume}"
         ;;
 
     *)
@@ -452,6 +460,7 @@ case "${1:-smoke}" in
         echo "  bash $SCRIPT_PATH smoke"
         echo "  bash $SCRIPT_PATH compile-smoke"
         echo "  bash $SCRIPT_PATH train"
+        echo "  bash $SCRIPT_PATH resume"
         echo
         exit 1
         ;;
