@@ -431,7 +431,7 @@ if [[ -n "${VLA_JEPA_HF_CACHE_HOST:-}" ]]; then
         fail "VLA_JEPA_HF_CACHE_HOST non esiste: $VLA_JEPA_HF_CACHE_HOST"
 
     docker_args+=(
-        -v "$VLA_JEPA_HF_CACHE_HOST:/root/.cache/huggingface"
+        -v "$VLA_JEPA_HF_CACHE_HOST:/workspace/checkpoints/huggingface"
     )
 
     echo "HuggingFace cache:       $VLA_JEPA_HF_CACHE_HOST"

@@ -247,6 +247,8 @@ RUN python -m pip install \
 
 RUN python -m pip install \
         --constraint /opt/vla_jepa_constraints.txt \
+        scipy==1.14.1
+        omegaconf==2.3.0
         numpy==1.26.4 \
         Pillow==12.2.0 \
         einops==0.8.2 \
