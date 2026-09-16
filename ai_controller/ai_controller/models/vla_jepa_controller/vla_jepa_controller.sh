@@ -1447,8 +1447,9 @@ if gripper_binary_to_moveit(
 
 close_action = open_action.copy()
 
-close_action[6] = -1.0
-
+# Gripper attualmente aperto:
+# 19 > 18 -> deve chiudere.
+close_action[6] = 19.0
 
 (
     _,
@@ -1458,7 +1459,9 @@ close_action[6] = -1.0
     postprocessed_action=close_action,
     reference_position=reference_position,
     reference_quaternion_xyzw=reference_quaternion,
+    currently_closed=False,
 )
+
 
 
 if gripper_state != 1:
