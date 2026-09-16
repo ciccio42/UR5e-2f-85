@@ -339,9 +339,7 @@ class VLAJEPARuntime:
         #
         # normalized action
         #       -> clip [-1, 1]
-        #       -> pre-snap gripper
         #       -> MIN_MAX unnormalization
-        #       -> binarize gripper
         #       -> CPU
         # --------------------------------------------------------------
         

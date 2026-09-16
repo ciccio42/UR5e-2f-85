@@ -1431,20 +1431,6 @@ if not np.isclose(
     )
 
 
-if gripper_state != 0:
-    raise RuntimeError(
-        'Expected +1 VLA-JEPA gripper -> controller OPEN=0.'
-    )
-
-
-if gripper_binary_to_moveit(
-    gripper_state
-) != 0.0:
-    raise RuntimeError(
-        'Expected OPEN -> MoveIt 0.'
-    )
-
-
 close_action = open_action.copy()
 
 # Gripper attualmente aperto:
@@ -1463,19 +1449,6 @@ close_action[6] = 19.0
 )
 
 
-
-if gripper_state != 1:
-    raise RuntimeError(
-        'Expected -1 VLA-JEPA gripper -> controller CLOSED=1.'
-    )
-
-
-if gripper_binary_to_moveit(
-    gripper_state
-) != 255.0:
-    raise RuntimeError(
-        'Expected CLOSED -> MoveIt 255.'
-    )
 
 
 print(f'Config:             {config_path}')

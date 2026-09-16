@@ -497,31 +497,55 @@ def decode_gripper_binary(
     )
 
 
+# def gripper_hysteresis(
+#     gripper_value: float,
+#     currently_closed: bool,
+#     gripper_min: float = 0.0,
+#     gripper_max: float = 20.0,
+#     open_threshold: float = 0.7,
+#     close_threshold: float = 0.9,
+# ) -> tuple[int, bool]:
+
+#     open_value = (
+#         gripper_min
+#         + open_threshold
+#         * (gripper_max - gripper_min)
+#     )
+
+#     close_value = (
+#         gripper_min
+#         + close_threshold
+#         * (gripper_max - gripper_min)
+#     )
+
+#     if currently_closed:
+#         is_closed = gripper_value >= open_value
+#     else:
+#         is_closed = gripper_value > close_value
+
+#     state = (
+#         GRIPPER_CLOSED
+#         if is_closed
+#         else GRIPPER_OPEN
+#     )
+
+#     return int(state), bool(is_closed)
+
 def gripper_hysteresis(
     gripper_value: float,
     currently_closed: bool,
-    gripper_min: float = 0.0,
-    gripper_max: float = 20.0,
-    open_threshold: float = 0.7,
-    close_threshold: float = 0.9,
+    open_threshold: float = 0.05,
+    close_threshold: float = 19,
+    target_pos: float = 0.0
 ) -> tuple[int, bool]:
 
-    open_value = (
-        gripper_min
-        + open_threshold
-        * (gripper_max - gripper_min)
-    )
-
-    close_value = (
-        gripper_min
-        + close_threshold
-        * (gripper_max - gripper_min)
-    )
-
     if currently_closed:
-        is_closed = gripper_value >= open_value
+        is_closed = gripper_value >= open_threshold
     else:
-        is_closed = gripper_value > close_value
+        is_closed = gripper_value > close_threshold
+
+    if currently_closed and (gripper_value < open_threshold) and target_pos[1] < 0.75:
+        is_closed = True
 
     state = (
         GRIPPER_CLOSED
@@ -709,10 +733,9 @@ def delta_action_to_absolute_target(
     gripper_state, _ = gripper_hysteresis(
         gripper_value=float(action[6]),
         currently_closed=currently_closed,
-        gripper_min=gripper_min,
-        gripper_max=gripper_max,
-        open_threshold=open_threshold,
-        close_threshold=close_threshold,
+        open_threshold=0.05,
+        close_threshold=19,
+        target_pos = target_position
     )
 
     return (
