@@ -150,6 +150,7 @@ gripper_closed_position: 255.0
 #
 #
 trace_action_conversions: true
+grasp_z_offset_m: -0.02
 
 
 # =============================================================================

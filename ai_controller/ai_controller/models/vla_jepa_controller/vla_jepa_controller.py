@@ -216,6 +216,17 @@ class VLAJEPAController(AIController):
             )
         )
 
+
+
+        self.grasp_z_offset_m = float(
+            self.cfg.get(
+                "grasp_z_offset_m",
+                -0.02,
+            )
+        )
+
+        self._grasp_z_offset_applied = False
+
         seed_everything(
             self.seed
         )
@@ -224,6 +235,8 @@ class VLAJEPAController(AIController):
         super().__init__(
             str(self.config_path)
         )
+
+       
 
 
     # =========================================================================
@@ -506,6 +519,7 @@ class VLAJEPAController(AIController):
 
         self.command = None
         self.current_task_id = None
+        self._grasp_z_offset_applied = False
 
 
     # =========================================================================
@@ -773,6 +787,22 @@ class VLAJEPAController(AIController):
             open_threshold=0.7,
             close_threshold=0.9,
         )
+
+        currently_closed=bool(output_data["current_gripper_closed"])
+
+        # Se il gripper era aperto e questa action richiede la chiusura,
+        # abbassiamo il target di 2 cm lungo Z nel frame base_link.
+        if (
+            not currently_closed
+            and gripper_state == 1
+            and not self._grasp_z_offset_applied
+        ):
+            target_position = target_position.copy()
+            target_position[2] += self.grasp_z_offset_m
+
+            self._grasp_z_offset_applied = True
+
+        
 
         # -----------------------------------------------------------------
         # Gripper:
