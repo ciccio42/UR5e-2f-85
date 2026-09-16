@@ -39,7 +39,9 @@ def run_action_planning_test(
             ),
         )
 
-        planner = ActionPlanner()
+        planner = ActionPlanner(
+            demonstration_bin_order="left_to_right",
+        )
 
         action_result = planner.run(
             annotated_video_path=visual_result.annotated_video_path,

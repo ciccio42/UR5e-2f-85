@@ -10,8 +10,27 @@ class ActionPlanner:
     def __init__(
         self,
         model: str = "gpt-4o-2024-08-06",
+        demonstration_bin_order: str = "left_to_right",
     ) -> None:
         self.model = model
+
+        self.demonstration_bin_order = (
+            str(demonstration_bin_order)
+            .strip()
+            .lower()
+        )
+
+        valid_orders = {
+            "left_to_right",
+            "right_to_left",
+        }
+
+        if self.demonstration_bin_order not in valid_orders:
+            raise ValueError(
+                "Invalid demonstration_bin_order: "
+                f"{self.demonstration_bin_order!r}. "
+                f"Expected one of: {sorted(valid_orders)}"
+            )
 
     def run(
         self,
@@ -83,6 +102,7 @@ class ActionPlanner:
             key_frame_coordinates=key_frame_coordinates,
             artifacts_dir=normalized_artifacts_dir,
             model=self.model,
+            demonstration_bin_order=self.demonstration_bin_order,
         )
 
         if result is None:

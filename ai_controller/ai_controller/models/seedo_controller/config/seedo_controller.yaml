@@ -17,6 +17,9 @@ visual_prompter:
 
 action_planner:
   model: gpt-4o-2024-08-06
+  # Ordering of bins in the demonstration image used to recover
+  # the canonical front-view ordinal.
+  demonstration_bin_order: left_to_right
 
 scene_perceiver:
   camera_calibration_path: /home/ros2_ws/src/UR5e-2f-85/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml

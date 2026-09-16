@@ -350,6 +350,10 @@ class SeeDoController(AIController):
                 "model",
                 "gpt-4o-2024-08-06",
             ),
+            demonstration_bin_order=action_config.get(
+                "demonstration_bin_order",
+                "left_to_right",
+            ),
         )
 
         self.motion_layer = SeeDoMotionLayer(
