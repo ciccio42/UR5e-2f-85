@@ -231,6 +231,24 @@ run_training() {
         train)
             ;;
 
+        resume)
+
+            # Un vero resume deve partire da un checkpoint prodotto
+            # dal training UR5e, non dal Bridge iniziale.
+            if [[ "$INTERLEAVE_CHECKPOINT" == "/workspace/models/interleave-pi0-bridge/step34799.pt" ]]; then
+                die "Modalita resume richiesta, ma INTERLEAVE_CHECKPOINT punta ancora al Bridge."
+            fi
+
+            [[ -f "$INTERLEAVE_CHECKPOINT" ]] || \
+                die "Checkpoint di resume non trovato nel container: $INTERLEAVE_CHECKPOINT"
+
+            overrides+=(
+                "resume_checkpoint_step=True"
+                "allow_missing_lora_weights=False"
+            )
+            ;;
+
+
         *)
             die "Modalita interna non valida: $mode"
             ;;
@@ -402,17 +420,17 @@ fi
 
 case "${1:-smoke}" in
 
-    smoke|compile-smoke|train)
+    smoke|compile-smoke|train|resume)
         start_tmux "${1:-smoke}"
         ;;
 
     --container)
         CONTAINER_NAME="${CONTAINER_NAME:?CONTAINER_NAME non impostato}"
-        run_container "${2:?specificare smoke, compile-smoke o train}"
+        run_container "${2:?specificare smoke, compile-smoke, train o resume}"
         ;;
 
     --inside)
-        run_training "${2:?specificare smoke, compile-smoke o train}"
+        run_training "${2:?specificare smoke, compile-smoke, train o resume}"
         ;;
 
     *)
@@ -421,6 +439,7 @@ case "${1:-smoke}" in
         echo "  bash $SCRIPT_PATH smoke"
         echo "  bash $SCRIPT_PATH compile-smoke"
         echo "  bash $SCRIPT_PATH train"
+        echo "  bash $SCRIPT_PATH resume"
         echo
         exit 1
         ;;
