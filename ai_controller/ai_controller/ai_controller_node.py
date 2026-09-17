@@ -778,7 +778,8 @@ class AIControllerNode(Node):
                             if not self.gripper_closed and gripper_goal.command.position == 255.0:
                                 self.get_logger().info(f'Gripper is closing at step {step}')
                                 self.gripper_closed = True
-                        
+
+                            time.sleep(1)
                     # check if a transiction close->open has been made
                     episode_done = False
                     if self.gripper_closed and gripper_goal.command.position == 0.0:

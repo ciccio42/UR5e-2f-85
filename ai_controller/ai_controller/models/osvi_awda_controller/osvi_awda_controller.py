@@ -157,6 +157,7 @@ class OSVIAWDAController(AIController):
         self.gripper_closed = False
         self.last_gripper_decisions = []
         self._pending_grasp_plan = None
+        self._selected_grasp_waypoint_index = None
         self.last_execution_phase = None
         self.epoch = "unknown"
         self.global_step = "unknown"
@@ -168,7 +169,22 @@ class OSVIAWDAController(AIController):
         self._depth_camera_matrix = None
         self._depth_camera_info_size = None
         self._depth_warning_printed = False
+        self._waypoint_overlay_window_initialized = False
+        self._waypoint_overlay_display_failed = False
+        self._last_waypoint_overlay_bgr = None
+        self._last_gripper_centroid_overlay_bgr = None
+        self._last_gripper_centroid_uv = None
+        self._last_depth_centroid_overlay_bgr = None
+        self._gripper_rgb_warning_printed = False
         self._depth_frame_override_reported = False
+        self._depth_debug_root = Path(
+            "/home/ros2_ws/src/"
+            "ai_controller/ai_controller/models/osvi_awda_controller/"
+            "debug/test_controller"
+        )
+
+        self._depth_debug_capture_index = 0
+        self._current_depth_debug_dir = None
         super().__init__(model_config)
         self._maybe_init_gripper_depth_refinement()
 
@@ -202,6 +218,13 @@ class OSVIAWDAController(AIController):
     def _validate_runtime_config(self) -> None:
         dataset = self.training_config.get("dataset", {})
         policy = self.training_config["policy"]
+
+        # ---------------------------------------------------------
+        # HARD CONSTRAINTS
+        #
+        # These must match the checkpoint/training configuration.
+        # ---------------------------------------------------------
+
         checks = {
             "dataset.T_context": (
                 int(dataset.get("T_context", -1)),
@@ -215,10 +238,6 @@ class OSVIAWDAController(AIController):
                 int(dataset.get("width", -1)),
                 int(self.cfg.image.get("width", 180)),
             ),
-            "dataset.crop": (
-                list(dataset.get("crop", [])),
-                list(self.cfg.image.get("crop", [])),
-            ),
             "policy.waypoints": (
                 int(policy.get("waypoints", -1)),
                 int(self.cfg.waypoints.get("base_count", 5)),
@@ -228,19 +247,64 @@ class OSVIAWDAController(AIController):
                 bool(self.cfg.waypoints.get("sub_waypoints", False)),
             ),
         }
+
         mismatches = [
             f"{name}: checkpoint={actual!r}, runtime={expected!r}"
             for name, (actual, expected) in checks.items()
             if actual != expected
         ]
+
         if mismatches:
             raise ValueError(
                 "OSVI-AWDA runtime config does not match its training config: "
                 + "; ".join(mismatches)
             )
+
+        # ---------------------------------------------------------
+        # RUNTIME CROP
+        #
+        # The runtime crop is allowed to differ from the training crop.
+        # This is intentional because the deployed camera framing may
+        # require a different ROI.
+        #
+        # _preprocess_frame() uses the runtime crop.
+        # _load_projection_matrix() also compensates using the runtime
+        # crop, so image-coordinate projection remains geometrically
+        # consistent with the actual runtime preprocessing.
+        # ---------------------------------------------------------
+
+        training_crop = list(
+            dataset.get(
+                "crop",
+                [],
+            )
+        )
+
+        runtime_crop = list(
+            self.cfg.image.get(
+                "crop",
+                [],
+            )
+        )
+
+        if training_crop != runtime_crop:
+            print(
+                "[OSVIAWDAController] WARNING: "
+                "runtime image crop differs from training crop: "
+                f"training={training_crop}, "
+                f"runtime={runtime_crop}. "
+                "Runtime preprocessing and projection will use the "
+                "runtime crop."
+            )
+
+        # ---------------------------------------------------------
+        # STATE CONFIGURATION
+        # ---------------------------------------------------------
+
         if bool(policy.get("concat_state", True)):
             raise ValueError(
-                "This adapter currently supports AWDA checkpoints with policy.concat_state=false."
+                "This adapter currently supports AWDA checkpoints "
+                "with policy.concat_state=false."
             )
 
     def _import_model_class(self):
@@ -401,6 +465,48 @@ class OSVIAWDAController(AIController):
         if self.context_tensor is not None:
             self.context_tensor = self.context_tensor.to(self.device)
 
+    def _reset_waypoint_visualization(self):
+        """
+        Reset all OpenCV debug state between trajectories.
+
+        The window is explicitly destroyed so that the next trajectory
+        recreates it and displays its new scene/waypoints.
+        """
+        debug_cfg = (
+            self.cfg.debug
+            if self.cfg is not None
+            else {}
+        )
+
+        window_name = str(
+            debug_cfg.get(
+                "waypoint_overlay_window",
+                "OSVI-AWDA waypoint overlay",
+            )
+        )
+
+        if self._waypoint_overlay_window_initialized:
+            try:
+                cv2.destroyWindow(window_name)
+
+                # Let OpenCV process the destroy event.
+                cv2.waitKey(1)
+
+            except cv2.error:
+                pass
+
+        self._waypoint_overlay_window_initialized = False
+        self._waypoint_overlay_display_failed = False
+
+        self._last_waypoint_overlay_bgr = None
+        self._last_gripper_centroid_overlay_bgr = None
+        self._last_depth_centroid_overlay_bgr = None
+        self._last_gripper_centroid_uv = None
+
+        self._gripper_rgb_warning_printed = False
+        self._depth_warning_printed = False
+        self._depth_frame_override_reported = False
+
     def reset(self):
         self.context_tensor = None
         self.context_source = None
@@ -411,6 +517,8 @@ class OSVIAWDAController(AIController):
         self.last_gripper_decisions = []
         self._pending_grasp_plan = None
         self.last_execution_phase = None
+        self._selected_grasp_waypoint_index = None
+        self._reset_waypoint_visualization()
 
     def _gripper_depth_enabled(self):
         refine_cfg = self.cfg.grasp_refinement if self.cfg is not None else {}
@@ -488,6 +596,33 @@ class OSVIAWDAController(AIController):
         camera_node = str(refine_cfg.get("depth_camera_node_name", "zed_node"))
         return f"/{camera_name}/{camera_node}/depth/depth_registered"
 
+    def _gripper_rgb_topic(self):
+        refine_cfg = self.cfg.grasp_refinement
+
+        topic = refine_cfg.get("rgb_topic")
+
+        if topic:
+            return str(topic)
+
+        camera_name = str(
+            refine_cfg.get(
+                "depth_camera_name",
+                "zed_gripper",
+            )
+        )
+
+        camera_node = str(
+            refine_cfg.get(
+                "depth_camera_node_name",
+                "zed_node",
+            )
+        )
+
+        return (
+            f"/{camera_name}/{camera_node}"
+            "/rgb/color/rect/image"
+        )
+
     def _gripper_camera_info_topic(self):
         refine_cfg = self.cfg.grasp_refinement
         topic = refine_cfg.get("camera_info_topic")
@@ -525,6 +660,176 @@ class OSVIAWDAController(AIController):
         if self._depth_ros_node is None:
             self._maybe_init_gripper_depth_refinement()
         return self._depth_ros_node is not None
+
+    def _read_gripper_rgb_image(self):
+        """
+        Read one RGB frame from the wrist/gripper camera.
+
+        Returned image is BGR uint8 because it is used directly
+        by OpenCV for visualization.
+        """
+        if not self._ensure_gripper_depth_ros_ready():
+            return None
+
+        refine_cfg = self.cfg.grasp_refinement
+
+        topic = self._gripper_rgb_topic()
+
+        timeout = float(
+            refine_cfg.get(
+                "rgb_timeout_sec",
+                0.5,
+            )
+        )
+
+        self._spin_depth_ros_once()
+
+        try:
+            ok, msg = (
+                rclpy.wait_for_message.wait_for_message(
+                    topic=topic,
+                    msg_type=RosImage,
+                    node=self._depth_ros_node,
+                    time_to_wait=timeout,
+                )
+            )
+
+        except Exception as exc:
+            if not self._gripper_rgb_warning_printed:
+                print(
+                    "[OSVIAWDAController] "
+                    "Gripper RGB read failed on "
+                    f"{topic}: {exc}"
+                )
+                self._gripper_rgb_warning_printed = True
+
+            return None
+
+        if not ok:
+            if not self._gripper_rgb_warning_printed:
+                print(
+                    "[OSVIAWDAController] "
+                    "No gripper RGB image received on "
+                    f"{topic}."
+                )
+                self._gripper_rgb_warning_printed = True
+
+            return None
+
+        try:
+            image = self._depth_bridge.imgmsg_to_cv2(
+                msg,
+                desired_encoding="bgr8",
+            )
+
+        except Exception as exc:
+            if not self._gripper_rgb_warning_printed:
+                print(
+                    "[OSVIAWDAController] "
+                    "Gripper RGB conversion failed: "
+                    f"{exc}"
+                )
+                self._gripper_rgb_warning_printed = True
+
+            return None
+
+        return np.asarray(
+            image,
+            dtype=np.uint8,
+        )
+
+    def _depth_debug_grayscale(
+        self,
+        depth_m,
+        min_depth=0.01,
+        max_depth=1.00,
+    ):
+        """
+        Convert metric depth to uint8 grayscale using a FIXED range:
+
+            0.01 m -> 0
+            1.00 m -> 255
+
+        Invalid depth values are mapped to min_depth -> black.
+
+        This is ONLY a visualization conversion.
+        The metric depth array itself is not modified.
+        """
+
+        depth_m = np.asarray(
+            depth_m,
+            dtype=np.float64,
+        )
+
+        depth_safe = depth_m.copy()
+
+        invalid = (
+            ~np.isfinite(depth_safe)
+            | (depth_safe <= 0.0)
+        )
+
+        depth_safe[invalid] = min_depth
+
+        depth_clipped = np.clip(
+            depth_safe,
+            min_depth,
+            max_depth,
+        )
+
+        depth_normalized = (
+            (depth_clipped - min_depth)
+            / (max_depth - min_depth)
+        )
+
+        return (
+            depth_normalized * 255.0
+        ).astype(np.uint8)
+
+
+    def _create_depth_debug_capture_dir(self):
+
+        capture_dir = (
+            self._depth_debug_root
+            / f"capture_{self._depth_debug_capture_index:04d}"
+        )
+
+        self._depth_debug_capture_index += 1
+
+        capture_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self._current_depth_debug_dir = capture_dir
+
+        print(
+            "[DEPTH DEBUG] Saving refinement images to "
+            f"{capture_dir}"
+        )
+
+        return capture_dir
+
+
+    @staticmethod
+    def _save_debug_image(
+        directory,
+        filename,
+        image,
+    ):
+        if directory is None or image is None:
+            return
+
+        path = Path(directory) / filename
+
+        ok = cv2.imwrite(
+            str(path),
+            image,
+        )
+
+        if not ok:
+            print(
+                f"[DEPTH DEBUG] Failed to save {path}"
+            )
 
     def should_refine_grasp_action(self, action_index):
         """Return true for the coarse waypoint that starts AWDA's grasp primitive."""
@@ -909,21 +1214,82 @@ class OSVIAWDAController(AIController):
         return refined_xyz
 
     def _estimate_gripper_depth_target_base(self):
-        if not self._ensure_gripper_depth_ros_ready() or not self._load_depth_camera_info():
+
+        if (
+            not self._ensure_gripper_depth_ros_ready()
+            or not self._load_depth_camera_info()
+        ):
             return None
 
+        # ---------------------------------------------------------
+        # CREATE DEBUG CAPTURE
+        # ---------------------------------------------------------
+
+        debug_dir = self._create_depth_debug_capture_dir()
+
+        # ---------------------------------------------------------
+        # DEPTH
+        # ---------------------------------------------------------
+
         depth_m, frame_id = self._read_gripper_depth_image()
+
         if depth_m is None:
             return None
 
-        centroid = self._find_depth_object_centroid(depth_m)
-        if centroid is None:
-            self._print_depth_warning_once(
-                "Eye-in-hand localization skipped: no foreground object found in depth image."
+        # ---------------------------------------------------------
+        # SAVE RAW DEPTH AS FIXED 0.1-1.0 m GRAYSCALE
+        # ---------------------------------------------------------
+
+        depth_raw_gray = self._depth_debug_grayscale(
+            depth_m,
+            min_depth=0.10,
+            max_depth=1.00,
+        )
+
+        self._save_debug_image(
+            debug_dir,
+            "00_depth_raw_gray.png",
+            depth_raw_gray,
+        )
+
+        # ---------------------------------------------------------
+        # READ + SAVE RAW GRIPPER RGB
+        # ---------------------------------------------------------
+
+        gripper_rgb = self._read_gripper_rgb_image()
+
+        if gripper_rgb is not None:
+
+            self._save_debug_image(
+                debug_dir,
+                "01_gripper_rgb_raw.png",
+                gripper_rgb,
             )
+
+        # ---------------------------------------------------------
+        # DEPTH PROCESSING
+        # ---------------------------------------------------------
+
+        centroid = self._find_depth_object_centroid(
+            depth_m,
+            debug_dir=debug_dir,
+        )
+
+        if centroid is None:
+
+            self._print_depth_warning_once(
+                "Eye-in-hand localization skipped: "
+                "no foreground object found in depth image."
+            )
+
             return None
 
         u, v = centroid
+
+        # ---------------------------------------------------------
+        # DEPTH DEBUG AROUND CENTROID
+        # ---------------------------------------------------------
+
         r = 3
 
         patch = depth_m[
@@ -937,19 +1303,70 @@ class OSVIAWDAController(AIController):
             f"center_depth={depth_m[v,u]}\n"
             f"patch=\n{patch}"
         )
-        depth = self._depth_at_centroid(depth_m, u, v)
+
+        # ---------------------------------------------------------
+        # DEPTH USED FOR DEPROJECTION
+        # ---------------------------------------------------------
+
+        depth = self._depth_at_centroid(
+            depth_m,
+            u,
+            v,
+        )
+
         if depth is None:
+
             self._print_depth_warning_once(
-                "Eye-in-hand localization skipped: no valid depth at object centroid."
+                "Eye-in-hand localization skipped: "
+                "no valid depth at object centroid."
             )
+
             return None
+
         print(
             "[DEPTH GEOMETRY DEBUG] "
             f"selected_depth={depth:.6f} m"
         )
-        camera_matrix = self._scaled_depth_camera_matrix(depth_m.shape[:2])
-        point_camera = self._deproject_pixel(u, v, depth, camera_matrix)
-        return self._transform_depth_point_to_target_frame(point_camera, frame_id)
+
+        # ---------------------------------------------------------
+        # RGB CENTROID OVERLAY
+        # ---------------------------------------------------------
+
+        self._last_gripper_centroid_overlay_bgr = (
+            self._build_gripper_centroid_overlay(
+                centroid=(u, v),
+                depth_shape=depth_m.shape[:2],
+                rgb=gripper_rgb,
+            )
+        )
+
+        if self._last_gripper_centroid_overlay_bgr is not None:
+
+            self._save_debug_image(
+                debug_dir,
+                "09_gripper_rgb_centroid.png",
+                self._last_gripper_centroid_overlay_bgr,
+            )
+
+        # ---------------------------------------------------------
+        # DEPROJECTION
+        # ---------------------------------------------------------
+
+        camera_matrix = self._scaled_depth_camera_matrix(
+            depth_m.shape[:2]
+        )
+
+        point_camera = self._deproject_pixel(
+            u,
+            v,
+            depth,
+            camera_matrix,
+        )
+
+        return self._transform_depth_point_to_target_frame(
+            point_camera,
+            frame_id,
+        )
 
     def _load_depth_camera_info(self):
         if self._depth_camera_matrix is not None:
@@ -1041,45 +1458,517 @@ class OSVIAWDAController(AIController):
             scale = 0.001
         return raw.astype(np.float64) * scale
 
-    def _find_depth_object_centroid(self, depth_m):
-        """Mirror AWDA localize_grasp_target's depth connected-components step."""
+    def _find_depth_object_centroid(self, depth_m, debug_dir=None):
+        """Find the centroid of the closest object contour in the depth image.
+
+        Pipeline:
+            metric depth
+            -> horizontal ROI crop
+            -> fixed-range grayscale normalization
+            -> Gaussian blur
+            -> Canny edge detection
+            -> gripper/border exclusion mask
+            -> morphological closing
+            -> contour extraction
+            -> minimum-area filtering
+            -> minimum valid depth inside each contour
+            -> select contour closest to camera
+            -> contour centroid
+            -> conversion back to full-image pixel coordinates
+
+        The returned pixel coordinates (u, v) refer to the ORIGINAL
+        uncropped depth image, so they can be used directly for
+        camera deprojection.
+        """
+
         refine_cfg = self.cfg.grasp_refinement
-        max_depth = float(refine_cfg.get("depth_max_range_m", 1.0))
-        floor_margin = float(refine_cfg.get("floor_margin_m", 0.01))
-        min_area = int(refine_cfg.get("min_component_area_px", 4))
 
-        depth_m = np.asarray(depth_m, dtype=np.float64)
-        valid = np.isfinite(depth_m) & (depth_m > 0.0) & (depth_m < max_depth)
-        if not np.any(valid):
-            return None
-        floor_depth = float(np.median(depth_m[valid]))
-        above_floor = (floor_depth - depth_m) > floor_margin
-        mask = (valid & above_floor).astype(np.uint8)
-        if not np.any(mask):
-            return None
+        # ---------------------------------------------------------
+        # EDGE PARAMETERS
+        # ---------------------------------------------------------
 
-        label_count, labels = cv2.connectedComponents(mask)
-        if label_count <= 1:
-            return None
+        min_depth = float(
+            refine_cfg.get(
+                "depth_edge_min_depth_m",
+                0.01,
+            )
+        )
+
+        max_depth = float(
+            refine_cfg.get(
+                "depth_edge_max_depth_m",
+                1.0,
+            )
+        )
+
+        canny_low = int(
+            refine_cfg.get(
+                "depth_edge_canny_low",
+                5,
+            )
+        )
+
+        canny_high = int(
+            refine_cfg.get(
+                "depth_edge_canny_high",
+                15,
+            )
+        )
+
+        blur_kernel = int(
+            refine_cfg.get(
+                "depth_edge_blur_kernel_px",
+                5,
+            )
+        )
+
+        close_kernel_size = int(
+            refine_cfg.get(
+                "depth_edge_close_kernel_px",
+                7,
+            )
+        )
+
+        close_iterations = int(
+            refine_cfg.get(
+                "depth_edge_close_iterations",
+                1,
+            )
+        )
+
+        min_contour_area = float(
+            refine_cfg.get(
+                "depth_edge_min_contour_area_px",
+                200,
+            )
+        )
+
+        # ---------------------------------------------------------
+        # DEPTH CROP PARAMETERS
+        # ---------------------------------------------------------
+
+        crop_left = int(
+            refine_cfg.get(
+                "depth_crop_left_px",
+                281,
+            )
+        )
+
+        crop_right = int(
+            refine_cfg.get(
+                "depth_crop_right_px",
+                431,
+            )
+        )
+
+        # Gaussian and morphology kernels must be positive and odd.
+        blur_kernel = max(
+            1,
+            blur_kernel,
+        )
+
+        if blur_kernel % 2 == 0:
+            blur_kernel += 1
+
+        close_kernel_size = max(
+            1,
+            close_kernel_size,
+        )
+
+        if close_kernel_size % 2 == 0:
+            close_kernel_size += 1
+
+        # ---------------------------------------------------------
+        # DEPTH IMAGE
+        # ---------------------------------------------------------
+
+        depth_full_m = np.asarray(
+            depth_m,
+            dtype=np.float64,
+        )
+
+        full_height, full_width = depth_full_m.shape[:2]
+
+        # Clamp crop limits to the valid image domain.
+        crop_left = int(
+            np.clip(
+                crop_left,
+                0,
+                full_width - 1,
+            )
+        )
+
+        crop_right = int(
+            np.clip(
+                crop_right,
+                crop_left,
+                full_width - 1,
+            )
+        )
+
+        # crop_right is considered INCLUSIVE.
+        depth_m = depth_full_m[
+            :,
+            crop_left:crop_right + 1,
+        ]
 
         height, width = depth_m.shape[:2]
-        center = np.asarray([height / 2.0, width / 2.0], dtype=np.float64)
-        best_centroid = None
-        best_distance = None
-        for label in range(1, label_count):
-            rows, columns = np.where(labels == label)
-            if len(rows) < min_area:
-                continue
-            centroid = np.asarray([rows.mean(), columns.mean()], dtype=np.float64)
-            distance = float(np.linalg.norm(centroid - center))
-            if best_distance is None or distance < best_distance:
-                best_centroid = centroid
-                best_distance = distance
 
+        # ---------------------------------------------------------
+        # GRIPPER / BORDER EXCLUSION MASK
+        # ---------------------------------------------------------
+
+        margins = refine_cfg.get(
+            "depth_ignore_margins_px",
+            {},
+        )
+
+        top = max(
+            0,
+            int(margins.get("top", 0)),
+        )
+
+        bottom = max(
+            0,
+            int(margins.get("bottom", 0)),
+        )
+
+        left = max(
+            0,
+            int(margins.get("left", 0)),
+        )
+
+        right = max(
+            0,
+            int(margins.get("right", 0)),
+        )
+
+        keep_mask = np.ones(
+            (height, width),
+            dtype=np.uint8,
+        )
+
+        if top > 0:
+            keep_mask[
+                :min(top, height),
+                :
+            ] = 0
+
+        if bottom > 0:
+            keep_mask[
+                max(0, height - bottom):,
+                :
+            ] = 0
+
+        if left > 0:
+            keep_mask[
+                :,
+                :min(left, width)
+            ] = 0
+
+        if right > 0:
+            keep_mask[
+                :,
+                max(0, width - right):
+            ] = 0
+
+        # ---------------------------------------------------------
+        # METRIC DEPTH -> GRAYSCALE [0,255]
+        # ---------------------------------------------------------
+
+        depth_safe = depth_m.copy()
+
+        invalid = (
+            ~np.isfinite(depth_safe)
+            | (depth_safe <= 0.0)
+        )
+
+        depth_safe[invalid] = min_depth
+
+        depth_clipped = np.clip(
+            depth_safe,
+            min_depth,
+            max_depth,
+        )
+
+        depth_normalized = (
+            (depth_clipped - min_depth)
+            / (max_depth - min_depth)
+        )
+
+        depth_gray = (
+            depth_normalized * 255.0
+        ).astype(np.uint8)
+
+        self._save_debug_image(
+            debug_dir,
+            "02_depth_crop_gray.png",
+            depth_gray,
+        )
+
+        # ---------------------------------------------------------
+        # GAUSSIAN BLUR
+        # ---------------------------------------------------------
+
+        depth_blurred = cv2.GaussianBlur(
+            depth_gray,
+            (
+                blur_kernel,
+                blur_kernel,
+            ),
+            0,
+        )
+
+        # ---------------------------------------------------------
+        # CANNY EDGE DETECTION
+        # ---------------------------------------------------------
+
+        edges_raw = cv2.Canny(
+            depth_blurred,
+            canny_low,
+            canny_high,
+        )
+
+        self._save_debug_image(
+            debug_dir,
+            "04_canny_raw.png",
+            edges_raw,
+        )
+
+        edges = (
+            (edges_raw > 0)
+            & (keep_mask > 0)
+        ).astype(np.uint8) * 255
+
+        self._save_debug_image(
+            debug_dir,
+            "05_canny_masked.png",
+            edges,
+        )
+
+        if not np.any(edges):
+            return None
+
+        # ---------------------------------------------------------
+        # CLOSE SMALL GAPS IN EDGE CONTOURS
+        # ---------------------------------------------------------
+
+        close_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (
+                close_kernel_size,
+                close_kernel_size,
+            ),
+        )
+
+        edges_closed = cv2.morphologyEx(
+            edges,
+            cv2.MORPH_CLOSE,
+            close_kernel,
+            iterations=close_iterations,
+        )
+
+        edges_closed = (
+            (edges_closed > 0)
+            & (keep_mask > 0)
+        ).astype(np.uint8) * 255
+
+        self._save_debug_image(
+            debug_dir,
+            "06_edges_closed.png",
+            edges_closed,
+        )
+
+        if not np.any(edges_closed):
+            return None
+
+        # ---------------------------------------------------------
+        # FIND CONTOURS
+        # ---------------------------------------------------------
+
+        contours, _ = cv2.findContours(
+            edges_closed,
+            cv2.RETR_LIST,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+
+        all_contours_vis = cv2.cvtColor(
+            depth_gray,
+            cv2.COLOR_GRAY2BGR,
+        )
+
+        if not contours:
+            return None
+
+        best_centroid = None
+        best_depth = None
+        best_contour = None
+
+        # ---------------------------------------------------------
+        # FILTER CONTOURS + SELECT CLOSEST ONE
+        # ---------------------------------------------------------
+
+        for contour in contours:
+
+            area = float(
+                cv2.contourArea(
+                    contour
+                )
+            )
+
+            if area < min_contour_area:
+                continue
+
+            cv2.drawContours(
+                all_contours_vis,
+                [contour],
+                -1,
+                (0, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+            moments = cv2.moments(
+                contour
+            )
+
+            if moments["m00"] == 0.0:
+                continue
+
+            # -----------------------------------------------------
+            # CONTOUR CENTROID
+            # -----------------------------------------------------
+
+            u = float(
+                moments["m10"]
+                / moments["m00"]
+            )
+
+            v = float(
+                moments["m01"]
+                / moments["m00"]
+            )
+
+            centroid = np.asarray(
+                [
+                    u,
+                    v,
+                ],
+                dtype=np.float64,
+            )
+
+            # -----------------------------------------------------
+            # DEPTH VALUES INSIDE THE CONTOUR
+            # -----------------------------------------------------
+
+            contour_mask = np.zeros(
+                (height, width),
+                dtype=np.uint8,
+            )
+
+            cv2.drawContours(
+                contour_mask,
+                [contour],
+                contourIdx=-1,
+                color=255,
+                thickness=cv2.FILLED,
+            )
+
+            valid_pixels = (
+                (contour_mask > 0)
+                & (keep_mask > 0)
+                & np.isfinite(depth_m)
+                & (depth_m > 0.0)
+                & (depth_m >= min_depth)
+                & (depth_m <= max_depth)
+            )
+
+            contour_depth_values = depth_m[
+                valid_pixels
+            ]
+
+            if contour_depth_values.size == 0:
+                continue
+
+            # Smallest metric depth = point closest to camera.
+            contour_min_depth = float(
+                np.min(
+                    contour_depth_values
+                )
+            )
+
+            # -----------------------------------------------------
+            # SELECT CONTOUR CLOSEST TO CAMERA
+            # -----------------------------------------------------
+
+            if (
+                best_depth is None
+                or contour_min_depth < best_depth
+            ):
+                best_depth = contour_min_depth
+                best_centroid = centroid
+                best_contour = contour.copy()
+
+        self._save_debug_image(
+            debug_dir,
+            "07_all_contours.png",
+            all_contours_vis,
+        )
+
+    
         if best_centroid is None:
             return None
-        v = int(np.clip(round(best_centroid[0]), 0, height - 1))
-        u = int(np.clip(round(best_centroid[1]), 0, width - 1))
+
+        # ---------------------------------------------------------
+        # CROPPED CENTROID -> ORIGINAL IMAGE PIXEL COORDINATES
+        # ---------------------------------------------------------
+
+        u_crop = int(
+            np.clip(
+                round(best_centroid[0]),
+                0,
+                width - 1,
+            )
+        )
+
+        v = int(
+            np.clip(
+                round(best_centroid[1]),
+                0,
+                height - 1,
+            )
+        )
+
+        # Reintroduce horizontal crop offset.
+        u = crop_left + u_crop
+
+        u = int(
+            np.clip(
+                u,
+                0,
+                full_width - 1,
+            )
+        )
+
+        self._last_depth_centroid_overlay_bgr = (
+            self._build_depth_centroid_overlay(
+                depth_full_m=depth_full_m,
+                crop_left=crop_left,
+                crop_right=crop_right,
+                depth_gray_crop=depth_gray,
+                edges_closed=edges_closed,
+                best_contour=best_contour,
+                best_centroid=best_centroid,
+                best_depth=best_depth,
+            )
+        )
+
+        self._save_debug_image(
+            debug_dir,
+            "08_selected_contour.png",
+            self._last_depth_centroid_overlay_bgr,
+        )
+
         return u, v
 
     def _depth_at_centroid(self, depth_m, u, v):
@@ -1279,11 +2168,116 @@ class OSVIAWDAController(AIController):
         image_waypoints = image_waypoints[:action_limit]
         raw_attributes = image_waypoints[:, 3]
         threshold_flags = raw_attributes > threshold
-        command_flags = self._repository_grasp_flags(threshold_flags)
+
+        if bool(control.get("fixed_gripper_schedule", False)):
+
+            # ---------------------------------------------------------
+            # Dynamically select the grasp waypoint.
+            #
+            # The LAST waypoint is always reserved for DROP and is
+            # therefore excluded from grasp selection.
+            #
+            # Among all previous waypoints, choose the one with the
+            # minimum projected Z coordinate in base_link.
+            # ---------------------------------------------------------
+
+            if len(base_waypoints) < 2:
+                raise ValueError(
+                    "At least 2 waypoints are required: "
+                    "one grasp candidate and one final drop waypoint."
+                )
+
+            # Last waypoint is always the drop.
+            drop_idx = len(base_waypoints) - 1
+
+            # Grasp candidates:
+            #
+            # WP1 ... WP(N-1)
+            #
+            # Explicitly exclude WP(N), i.e. the final drop waypoint.
+            candidate_z = np.asarray(
+                base_waypoints[:drop_idx, 2],
+                dtype=np.float64,
+            )
+
+            if candidate_z.size == 0:
+                raise ValueError(
+                    "No waypoint available for grasp selection."
+                )
+
+            if not np.isfinite(candidate_z).all():
+                raise ValueError(
+                    "Cannot select grasp waypoint because candidate "
+                    f"Z values are invalid: {candidate_z.tolist()}"
+                )
+
+            # np.argmin returns the first minimum in case of ties.
+            grasp_idx = int(
+                np.argmin(candidate_z)
+            )
+
+            # Save it for debugging / visualization.
+            self._selected_grasp_waypoint_index = grasp_idx
+
+            # Human-readable 1-based waypoint numbers.
+            grasp_number = grasp_idx + 1
+            drop_number = drop_idx + 1
+
+            # ---------------------------------------------------------
+            # Build gripper schedule.
+            #
+            # Before grasp:
+            #     OPEN
+            #
+            # At grasp waypoint:
+            #     grasp transition
+            #
+            # Between grasp and drop:
+            #     CLOSED / carry
+            #
+            # Final waypoint:
+            #     DROP / OPEN
+            # ---------------------------------------------------------
+
+            command_flags = np.zeros(
+                len(image_waypoints),
+                dtype=bool,
+            )
+
+            command_flags[
+                grasp_idx:drop_idx
+            ] = True
+
+            print(
+                "[OSVIAWDAController] Dynamic grasp selection: "
+                f"candidate_z={candidate_z.tolist()}, "
+                f"grasp_waypoint={grasp_number}, "
+                f"grasp_z={float(candidate_z[grasp_idx]):.6f}, "
+                f"drop_waypoint={drop_number}, "
+                f"command_flags={command_flags.tolist()}"
+            )
+
+            print(
+                "[OSVIAWDAController] Model grasp attributes "
+                f"(diagnostic only)={raw_attributes.tolist()}, "
+                f"threshold_flags={threshold_flags.tolist()}"
+            )
+
+        else:
+            self._selected_grasp_waypoint_index = None
+
+            command_flags = self._repository_grasp_flags(
+                threshold_flags
+            )
 
         actions = []
         self.last_gripper_decisions = []
-        holding = bool(self.gripper_closed)
+
+        if bool(control.get("fixed_gripper_schedule", False)):
+            # The fixed schedule assumes the trajectory starts with the gripper open.
+            holding = False
+        else:
+            holding = bool(self.gripper_closed)
         for index, (base_waypoint, raw_attribute, threshold_flag, command_flag) in enumerate(
             zip(base_waypoints, raw_attributes, threshold_flags, command_flags),
             start=1,
@@ -1424,6 +2418,960 @@ class OSVIAWDAController(AIController):
         actions.append(action)
         return True
 
+    @staticmethod
+    def _image_waypoint_to_pixel(waypoint, width, height):
+        """
+        Convert AWDA normalized image coordinates [-1, 1]
+        to OpenCV pixel coordinates.
+
+        Coordinate conventions:
+
+            AWDA:
+                u = -1 -> left
+                u = +1 -> right
+
+                v = +1 -> top
+                v = -1 -> bottom
+
+            OpenCV:
+                x = 0        -> left
+                x = width-1  -> right
+
+                y = 0        -> top
+                y = height-1 -> bottom
+
+        Therefore the vertical axis must be flipped.
+        """
+        waypoint = np.asarray(
+            waypoint,
+            dtype=np.float64,
+        )
+
+        u_norm = float(waypoint[0])
+        v_norm = float(waypoint[1])
+
+        # Horizontal axis: same direction.
+        x = (
+            (u_norm + 1.0)
+            * 0.5
+            * (width - 1)
+        )
+
+        # Vertical axis: AWDA and OpenCV have opposite directions.
+        y = (
+            (1.0 - v_norm)
+            * 0.5
+            * (height - 1)
+        )
+
+        x = int(
+            np.clip(
+                round(x),
+                0,
+                width - 1,
+            )
+        )
+
+        y = int(
+            np.clip(
+                round(y),
+                0,
+                height - 1,
+            )
+        )
+
+        return x, y
+    
+    def _build_waypoint_overlay(self, model_frame, image_waypoints):
+        """
+        Draw the five selected AWDA waypoints on the exact image
+        seen by the model.
+
+        This visualization is PRE grasp-refinement.
+        """
+        image_waypoints = np.asarray(
+            image_waypoints,
+            dtype=np.float64,
+        )
+
+        # model_frame is normalized CHW float.
+        # Convert it back to RGB uint8.
+        overlay_rgb = self._chw_to_uint8(model_frame)
+
+        # OpenCV visualization uses BGR.
+        overlay = cv2.cvtColor(
+            overlay_rgb,
+            cv2.COLOR_RGB2BGR,
+        )
+
+        height, width = overlay.shape[:2]
+
+        points = [
+            self._image_waypoint_to_pixel(
+                waypoint,
+                width,
+                height,
+            )
+            for waypoint in image_waypoints
+        ]
+
+        # Retrieve the primitive actually assigned by post_process().
+        primitive_by_waypoint = {
+            int(decision["waypoint_index"]):
+                str(decision.get("primitive", "?"))
+            for decision in self.last_gripper_decisions
+        }
+
+        primitive_colors = {
+            "free_space": (255, 255, 0),  # cyan
+            "grasp":      (0, 0, 255),    # red
+            "carry":      (0, 165, 255),  # orange
+            "drop":       (0, 255, 0),    # green
+        }
+
+        # Connect the five predicted waypoints.
+        for index in range(len(points) - 1):
+            cv2.line(
+                overlay,
+                points[index],
+                points[index + 1],
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        for index, (point, waypoint) in enumerate(
+            zip(points, image_waypoints),
+            start=1,
+        ):
+            primitive = primitive_by_waypoint.get(
+                index,
+                "?",
+            )
+
+            color = primitive_colors.get(
+                primitive,
+                (255, 255, 255),
+            )
+
+            radius = 5 if primitive == "grasp" else 3
+
+            cv2.circle(
+                overlay,
+                point,
+                radius,
+                color,
+                -1,
+                cv2.LINE_AA,
+            )
+
+            # Keep text compact because model image is only 180x100.
+            label = f"{index}:{primitive}"
+
+            text_position = (
+                min(point[0] + 4, width - 1),
+                max(point[1] - 4, 10),
+            )
+
+            cv2.putText(
+                overlay,
+                label,
+                text_position,
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.30,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+        return overlay
+
+    def _handle_waypoint_overlay(
+        self,
+        model_frame,
+        image_waypoints,
+        t,
+        save_path=None,
+    ):
+        debug_cfg = self.cfg.debug
+
+        show_overlay = bool(
+            debug_cfg.get(
+                "show_waypoint_overlay",
+                False,
+            )
+        )
+
+        save_overlay = bool(
+            debug_cfg.get(
+                "save_waypoint_overlay",
+                False,
+            )
+        )
+
+        if not show_overlay and not save_overlay:
+            return
+
+        overlay = self._build_waypoint_overlay(
+            model_frame,
+            image_waypoints,
+        )
+
+        self._last_waypoint_overlay_bgr = (
+            overlay.copy()
+        )
+
+        # At t=0 the right panel will contain the
+        # "waiting for refinement" placeholder.
+        self._refresh_debug_visualization(
+            t=t,
+            save_path=save_path,
+        )
+
+    def _build_gripper_centroid_overlay(
+        self,
+        centroid,
+        depth_shape,
+        rgb=None,
+    ):
+        """
+        Read the current gripper RGB image and draw an X at the
+        centroid selected by the depth connected-component stage.
+
+        centroid is expressed in depth-image coordinates (u, v).
+        Registered depth and RGB normally share the same geometry,
+        but scaling is handled if their resolutions differ.
+        """
+        if rgb is None:
+            rgb = self._read_gripper_rgb_image()
+
+        if rgb is None:
+            return None
+
+        rgb = np.asarray(
+            rgb,
+            dtype=np.uint8,
+        )
+
+        u_depth, v_depth = centroid
+
+        depth_height = int(depth_shape[0])
+        depth_width = int(depth_shape[1])
+
+        rgb_height, rgb_width = rgb.shape[:2]
+
+        # Depth is registered to RGB, so normally these sizes match.
+        # Still handle a possible resolution difference robustly.
+        if depth_width > 1:
+            u_rgb = int(
+                round(
+                    float(u_depth)
+                    * (rgb_width - 1)
+                    / (depth_width - 1)
+                )
+            )
+        else:
+            u_rgb = 0
+
+        if depth_height > 1:
+            v_rgb = int(
+                round(
+                    float(v_depth)
+                    * (rgb_height - 1)
+                    / (depth_height - 1)
+                )
+            )
+        else:
+            v_rgb = 0
+
+        u_rgb = int(
+            np.clip(
+                u_rgb,
+                0,
+                rgb_width - 1,
+            )
+        )
+
+        v_rgb = int(
+            np.clip(
+                v_rgb,
+                0,
+                rgb_height - 1,
+            )
+        )
+
+        overlay = rgb.copy()
+
+        cross_size = max(
+            10,
+            int(
+                min(
+                    rgb_width,
+                    rgb_height,
+                )
+                * 0.03
+            ),
+        )
+
+        thickness = max(
+            2,
+            int(cross_size / 5),
+        )
+
+        color = (0, 0, 255)  # red BGR
+
+        # Draw an actual X, not a +.
+        cv2.line(
+            overlay,
+            (
+                u_rgb - cross_size,
+                v_rgb - cross_size,
+            ),
+            (
+                u_rgb + cross_size,
+                v_rgb + cross_size,
+            ),
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+
+        cv2.line(
+            overlay,
+            (
+                u_rgb - cross_size,
+                v_rgb + cross_size,
+            ),
+            (
+                u_rgb + cross_size,
+                v_rgb - cross_size,
+            ),
+            color,
+            thickness,
+            cv2.LINE_AA,
+        )
+
+        cv2.circle(
+            overlay,
+            (u_rgb, v_rgb),
+            4,
+            color,
+            -1,
+            cv2.LINE_AA,
+        )
+
+        cv2.putText(
+            overlay,
+            f"centroid ({u_depth}, {v_depth})",
+            (
+                max(5, u_rgb + cross_size + 5),
+                max(20, v_rgb),
+            ),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+        self._last_gripper_centroid_uv = (
+            int(u_depth),
+            int(v_depth),
+        )
+
+        return overlay
+
+    def _build_depth_centroid_overlay(
+        self,
+        depth_full_m,
+        crop_left,
+        crop_right,
+        depth_gray_crop,
+        edges_closed=None,
+        best_contour=None,
+        best_centroid=None,
+        best_depth=None,
+    ):
+        """
+        Build a live visualization of the depth-processing pipeline.
+
+        Visualization:
+            - full normalized depth image;
+            - area outside horizontal ROI darkened;
+            - crop boundaries;
+            - final Canny/closing edges inside ROI;
+            - selected contour;
+            - selected contour centroid;
+            - contour minimum depth and centroid depth.
+
+        best_contour and best_centroid are expressed in CROPPED-image
+        coordinates. The overlay itself uses ORIGINAL full-image coordinates.
+        """
+
+        refine_cfg = self.cfg.grasp_refinement
+
+        min_depth = float(
+            refine_cfg.get(
+                "depth_edge_min_depth_m",
+                0.01,
+            )
+        )
+
+        max_depth = float(
+            refine_cfg.get(
+                "depth_edge_max_depth_m",
+                1.0,
+            )
+        )
+
+        depth_full_m = np.asarray(
+            depth_full_m,
+            dtype=np.float64,
+        )
+
+        height, width = depth_full_m.shape[:2]
+
+        # ---------------------------------------------------------
+        # FULL DEPTH -> GRAYSCALE
+        # ---------------------------------------------------------
+
+        depth_safe = depth_full_m.copy()
+
+        invalid = (
+            ~np.isfinite(depth_safe)
+            | (depth_safe <= 0.0)
+        )
+
+        depth_safe[invalid] = min_depth
+
+        depth_clipped = np.clip(
+            depth_safe,
+            min_depth,
+            max_depth,
+        )
+
+        depth_normalized = (
+            (depth_clipped - min_depth)
+            / (max_depth - min_depth)
+        )
+
+        depth_gray_full = (
+            depth_normalized * 255.0
+        ).astype(np.uint8)
+
+        overlay = cv2.cvtColor(
+            depth_gray_full,
+            cv2.COLOR_GRAY2BGR,
+        )
+
+        # ---------------------------------------------------------
+        # DARKEN EVERYTHING OUTSIDE THE ACTIVE CROP
+        # ---------------------------------------------------------
+
+        if crop_left > 0:
+            overlay[
+                :,
+                :crop_left,
+            ] = (
+                overlay[
+                    :,
+                    :crop_left,
+                ].astype(np.float32)
+                * 0.20
+            ).astype(np.uint8)
+
+        if crop_right + 1 < width:
+            overlay[
+                :,
+                crop_right + 1:,
+            ] = (
+                overlay[
+                    :,
+                    crop_right + 1:,
+                ].astype(np.float32)
+                * 0.20
+            ).astype(np.uint8)
+
+        # ---------------------------------------------------------
+        # CROP BOUNDARIES
+        # ---------------------------------------------------------
+
+        cv2.line(
+            overlay,
+            (crop_left, 0),
+            (crop_left, height - 1),
+            (255, 255, 255),
+            2,
+        )
+
+        cv2.line(
+            overlay,
+            (crop_right, 0),
+            (crop_right, height - 1),
+            (255, 255, 255),
+            2,
+        )
+
+        # ---------------------------------------------------------
+        # FINAL EDGES AFTER CLOSING
+        # ---------------------------------------------------------
+
+        if edges_closed is not None:
+
+            roi = overlay[
+                :,
+                crop_left:crop_right + 1,
+            ]
+
+            edge_mask = edges_closed > 0
+
+            # Yellow edges.
+            roi[
+                edge_mask
+            ] = (
+                0,
+                255,
+                255,
+            )
+
+        # ---------------------------------------------------------
+        # SELECTED CONTOUR + CENTROID
+        # ---------------------------------------------------------
+
+        if (
+            best_contour is not None
+            and best_centroid is not None
+        ):
+
+            # Convert contour coordinates from crop -> full image.
+            contour_full = best_contour.copy()
+
+            contour_full[
+                :,
+                :,
+                0,
+            ] += crop_left
+
+            # Selected contour = red.
+            cv2.drawContours(
+                overlay,
+                [contour_full],
+                -1,
+                (0, 0, 255),
+                3,
+                cv2.LINE_AA,
+            )
+
+            u_crop = int(
+                np.clip(
+                    round(best_centroid[0]),
+                    0,
+                    depth_gray_crop.shape[1] - 1,
+                )
+            )
+
+            v = int(
+                np.clip(
+                    round(best_centroid[1]),
+                    0,
+                    height - 1,
+                )
+            )
+
+            u_full = int(
+                np.clip(
+                    crop_left + u_crop,
+                    0,
+                    width - 1,
+                )
+            )
+
+            # Actual depth at centroid.
+            centroid_depth = depth_full_m[
+                v,
+                u_full,
+            ]
+
+            # -----------------------------------------------------
+            # CENTROID MARKER
+            # -----------------------------------------------------
+
+            marker_size = 15
+
+            cv2.drawMarker(
+                overlay,
+                (
+                    u_full,
+                    v,
+                ),
+                (0, 255, 0),
+                markerType=cv2.MARKER_CROSS,
+                markerSize=marker_size,
+                thickness=3,
+                line_type=cv2.LINE_AA,
+            )
+
+            cv2.circle(
+                overlay,
+                (
+                    u_full,
+                    v,
+                ),
+                5,
+                (0, 255, 0),
+                -1,
+                cv2.LINE_AA,
+            )
+
+            # -----------------------------------------------------
+            # TEXT
+            # -----------------------------------------------------
+
+            text_x = min(
+                u_full + 15,
+                max(5, width - 260),
+            )
+
+            text_y = max(
+                30,
+                v - 25,
+            )
+
+            cv2.putText(
+                overlay,
+                f"centroid=({u_full},{v})",
+                (
+                    text_x,
+                    text_y,
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+
+            if np.isfinite(centroid_depth):
+
+                cv2.putText(
+                    overlay,
+                    f"centroid depth={centroid_depth:.4f} m",
+                    (
+                        text_x,
+                        text_y + 25,
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.50,
+                    (0, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+            if best_depth is not None:
+
+                cv2.putText(
+                    overlay,
+                    f"contour min={best_depth:.4f} m",
+                    (
+                        text_x,
+                        text_y + 50,
+                    ),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.50,
+                    (0, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+        else:
+
+            cv2.putText(
+                overlay,
+                "NO VALID CONTOUR",
+                (
+                    20,
+                    40,
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 0, 255),
+                2,
+                cv2.LINE_AA,
+            )
+
+        return overlay
+
+    def _build_combined_debug_view(self):
+        """
+        Build the live two-panel debug view:
+
+            LEFT:
+                AWDA front-camera model input + predicted waypoints
+
+            RIGHT:
+                gripper-camera RGB + X on selected depth centroid
+        """
+        if self._last_waypoint_overlay_bgr is None:
+            return None
+
+        front = self._last_waypoint_overlay_bgr.copy()
+
+        if self._last_gripper_centroid_overlay_bgr is None:
+            gripper = np.zeros_like(front)
+
+            cv2.putText(
+                gripper,
+                "GRIPPER: waiting for refinement",
+                (5, max(15, gripper.shape[0] // 2)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        else:
+            gripper = (
+                self._last_gripper_centroid_overlay_bgr
+                .copy()
+            )
+
+        if self._last_depth_centroid_overlay_bgr is None:
+
+            depth_debug = np.zeros_like(front)
+
+            cv2.putText(
+                depth_debug,
+                "DEPTH: waiting for refinement",
+                (
+                    5,
+                    max(
+                        15,
+                        depth_debug.shape[0] // 2,
+                    ),
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
+
+        else:
+
+            depth_debug = (
+                self._last_depth_centroid_overlay_bgr
+                .copy()
+            )
+
+        debug_cfg = self.cfg.debug
+
+        panel_height = int(
+            debug_cfg.get(
+                "waypoint_overlay_panel_height",
+                400,
+            )
+        )
+
+        def resize_to_height(image, target_height):
+            height, width = image.shape[:2]
+
+            scale = (
+                float(target_height)
+                / float(height)
+            )
+
+            target_width = max(
+                1,
+                int(round(width * scale)),
+            )
+
+            return cv2.resize(
+                image,
+                (
+                    target_width,
+                    target_height,
+                ),
+                interpolation=cv2.INTER_NEAREST,
+            )
+
+        front = resize_to_height(
+            front,
+            panel_height,
+        )
+
+        gripper = resize_to_height(
+            gripper,
+            panel_height,
+        )
+
+        depth_debug = resize_to_height(
+            depth_debug,
+            panel_height,
+        )
+
+        cv2.putText(
+            front,
+            "FRONT - AWDA waypoints",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+        cv2.putText(
+            gripper,
+            "GRIPPER - depth centroid",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+        cv2.putText(
+            depth_debug,
+            "DEPTH - processed + selected centroid",
+            (10, 25),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+
+        separator = np.zeros(
+            (
+                panel_height,
+                4,
+                3,
+            ),
+            dtype=np.uint8,
+        )
+
+        return np.hstack(
+            [
+                front,
+                separator,
+                gripper,
+                separator.copy(),
+                depth_debug,
+            ]
+        )
+    def _refresh_debug_visualization(
+        self,
+        t,
+        save_path=None,
+    ):
+        debug_cfg = self.cfg.debug
+
+        show_overlay = bool(
+            debug_cfg.get(
+                "show_waypoint_overlay",
+                False,
+            )
+        )
+
+        save_overlay = bool(
+            debug_cfg.get(
+                "save_waypoint_overlay",
+                False,
+            )
+        )
+
+        if not show_overlay and not save_overlay:
+            return
+
+        combined = self._build_combined_debug_view()
+
+        if combined is None:
+            return
+
+        if save_overlay and save_path is not None:
+            os.makedirs(
+                save_path,
+                exist_ok=True,
+            )
+
+            output_path = os.path.join(
+                save_path,
+                f"osvi_awda_debug_overlay_t{t:03d}.png",
+            )
+
+            cv2.imwrite(
+                output_path,
+                combined,
+            )
+
+        if (
+            show_overlay
+            and not self._waypoint_overlay_display_failed
+        ):
+            window_name = str(
+                debug_cfg.get(
+                    "waypoint_overlay_window",
+                    "OSVI-AWDA waypoint overlay",
+                )
+            )
+
+            wait_ms = max(
+                1,
+                int(
+                    debug_cfg.get(
+                        "waypoint_overlay_wait_ms",
+                        1,
+                    )
+                ),
+            )
+
+            try:
+                # Also handle a window manually closed by the user.
+                if self._waypoint_overlay_window_initialized:
+                    try:
+                        visible = cv2.getWindowProperty(
+                            window_name,
+                            cv2.WND_PROP_VISIBLE,
+                        )
+
+                        if visible < 1:
+                            self._waypoint_overlay_window_initialized = False
+
+                    except cv2.error:
+                        self._waypoint_overlay_window_initialized = False
+
+                if not self._waypoint_overlay_window_initialized:
+                    cv2.namedWindow(
+                        window_name,
+                        cv2.WINDOW_NORMAL,
+                    )
+
+                    cv2.resizeWindow(
+                        window_name,
+                        combined.shape[1],
+                        combined.shape[0],
+                    )
+
+                    self._waypoint_overlay_window_initialized = True
+
+                cv2.imshow(
+                    window_name,
+                    combined,
+                )
+
+                cv2.waitKey(wait_ms)
+
+            except cv2.error as exc:
+                print(
+                    "[OSVIAWDAController] "
+                    "Debug overlay display disabled: "
+                    f"{exc}"
+                )
+
+                self._waypoint_overlay_display_failed = True
+
     def inference(self, input_data, t: int = 0, save_path=None):
         """Return an execution-ready AWDA plan using one or two control-loop calls.
 
@@ -1436,6 +3384,13 @@ class OSVIAWDAController(AIController):
             # now executed that action, so depth localization happens at the same
             # point as grasp_primitive() in the OSVI-AWDA repository.
             actions = self._resume_pending_grasp()
+            # _resume_pending_grasp() has just run the wrist-depth
+            # localization. Therefore the gripper RGB panel now contains
+            # the X on the centroid actually selected for grasping.
+            self._refresh_debug_visualization(
+                t=t,
+                save_path=save_path,
+            )
             if save_path is not None:
                 os.makedirs(save_path, exist_ok=True)
                 with open(
@@ -1483,10 +3438,20 @@ class OSVIAWDAController(AIController):
             )
 
         all_waypoints = self._validate_waypoint_output(output)
-        selected_waypoints = all_waypoints[0].detach().cpu().numpy()[-5:]
-        base_waypoints = self._project_waypoints_to_base(selected_waypoints)
+        selected_waypoints = (
+            all_waypoints[0]
+            .detach()
+            .cpu()
+            .numpy()[-5:]
+        )
+
+        base_waypoints = self._project_waypoints_to_base(
+            selected_waypoints
+        )
+
         self.last_image_waypoints = selected_waypoints.copy()
         self.last_base_waypoints = base_waypoints.copy()
+
         coarse_actions = self.post_process(
             {
                 "image_waypoints": selected_waypoints,
@@ -1494,6 +3459,24 @@ class OSVIAWDAController(AIController):
                 "robot_state": processed["robot_state"],
             }
         )
+
+        # ---------------------------------------------------------
+        # ONLINE WAYPOINT VISUALIZATION
+        #
+        # Must happen AFTER post_process(), because only now
+        # last_gripper_decisions contains:
+        # free_space / grasp / carry / drop.
+        #
+        # The displayed waypoints are the ORIGINAL AWDA prediction,
+        # before eye-in-hand grasp refinement.
+        # ---------------------------------------------------------
+        self._handle_waypoint_overlay(
+            model_frame=processed["model_frame"],
+            image_waypoints=selected_waypoints,
+            t=t,
+            save_path=save_path,
+        )
+
         actions = self._execution_actions_from_coarse(
             coarse_actions,
             processed["robot_state"],
