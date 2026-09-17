@@ -28,3 +28,6 @@ interleave_pi_zero_workspace/tmp/
 mimic_video_workspace/test/cosmos/initial_frames/
 mimic_video_workspace/test/cosmos/language_embeddings/
 mimic_video_workspace/test/cosmos/outputs/
+ai_controller/ai_controller/models/vla_jepa_controller/huggingface/
+ai_controller/ai_controller/models/vla_jepa_controller/test/render
+ai_controller/ai_controller/models/vla_jepa_controller/test/*.csv

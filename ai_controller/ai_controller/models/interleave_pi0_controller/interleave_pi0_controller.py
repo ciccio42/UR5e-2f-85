@@ -73,6 +73,12 @@ class InterleavePi0Controller(AIController):
         self.action_mean: Optional[np.ndarray] = None
         self.action_std: Optional[np.ndarray] = None
 
+        # Debug dell'ultimo chunk generato.
+        # Rimangono validi finché il relativo action_buffer non viene consumato.
+        self._debug_normalized_chunk: Optional[np.ndarray] = None
+        self._debug_physical_chunk: Optional[np.ndarray] = None
+        self._debug_gripper_trace: Optional[list[dict]] = None
+
         super().__init__(str(self.config_path))
 
         seed_everything(42)
@@ -440,6 +446,8 @@ class InterleavePi0Controller(AIController):
         self.action_buffer = None
         self.action_idx = 0
 
+        seed_everything(42)
+
         print(
             f"[InterleavePi0Controller] Loaded task {task_id}: "
             f"{prompt!r}, "
@@ -479,6 +487,10 @@ class InterleavePi0Controller(AIController):
         # Verrà aggiornato con lo stato reale ricevuto dal robot
         # durante il successivo pre_process().
         self.gripper_closed = False
+
+        self._debug_normalized_chunk = None
+        self._debug_physical_chunk = None
+        self._debug_gripper_trace = None
 
 
     
@@ -810,12 +822,35 @@ class InterleavePi0Controller(AIController):
             )
         )
 
+        normalized_chunk = output_data["action_chunk"]
+
+        if isinstance(normalized_chunk, torch.Tensor):
+            normalized_chunk = (
+                normalized_chunk
+                .detach()
+                .float()
+                .cpu()
+                .numpy()
+            )
+
+        normalized_chunk = np.asarray(
+            normalized_chunk,
+            dtype=np.float32,
+        )
+
+        if normalized_chunk.shape == (1, ACTION_HORIZON, 7):
+            normalized_chunk = normalized_chunk[0]
+
+        self._debug_normalized_chunk = normalized_chunk.copy()
+
         action_chunk = denormalize_action_chunk(
             action_chunk=output_data["action_chunk"],
             action_mean=self.action_mean,
             action_std=self.action_std,
             action_scale_factor=action_scale_factor,
         )
+
+        self._debug_physical_chunk = action_chunk.copy()
 
         if self.cfg.trace_action_conversions:
             self._trace_action_chunk(
@@ -859,9 +894,45 @@ class InterleavePi0Controller(AIController):
                 gripper_closed=output_data[
                     "gripper_closed"
                 ],
+                close_threshold=0.9,
+                open_threshold=0.7,
                 raw_gripper_closed_value=raw_gripper_closed_value,
+                open_position=0.0,
+                closed_position=255.0,
             )
+
         )
+
+        self._debug_gripper_trace = []
+
+        current_closed = bool(
+            output_data["gripper_closed"]
+        )
+
+        for i, physical_action in enumerate(action_chunk):
+
+            gripper_raw = float(
+                physical_action[6]
+            )
+
+            gripper_unit = (
+                gripper_raw
+                / raw_gripper_closed_value
+            )
+
+            gripper_command = float(
+                gripper_commands[i]
+            )
+
+
+            self._debug_gripper_trace.append(
+                {
+                    "state_before": current_closed,
+                    "gripper_raw": gripper_raw,
+                    "gripper_unit": gripper_unit,
+                    "command": gripper_command,
+                }
+            )
 
         # -------------------------------------------------------------------------
         # 3. Costruzione del formato richiesto da AIControllerNode
@@ -1056,29 +1127,106 @@ class InterleavePi0Controller(AIController):
             )
 
 
-    def _trace_buffer_action(
+    def _trace_executed_action(
         self,
         step: int,
         buffer_index: int,
-        action: np.ndarray,
+        commanded_action: np.ndarray,
     ) -> None:
-        """
-        Stampa la singola action che inference() sta restituendo al loop ROS.
 
-        Questa funzione è utile per distinguere:
-        - quando viene effettuata una nuova query;
-        - quali action appartengono allo stesso chunk;
-        - quale target viene realmente inviato al robot a ogni ciclo.
-        """
+        if (
+            self._debug_normalized_chunk is None
+            or self._debug_physical_chunk is None
+            or self._debug_gripper_trace is None
+        ):
+            print(
+                "[InterleavePi0Trace] "
+                "Debug chunk unavailable."
+            )
+            return
+
+        normalized = self._debug_normalized_chunk[
+            buffer_index
+        ]
+
+        physical = self._debug_physical_chunk[
+            buffer_index
+        ]
+
+        gripper = self._debug_gripper_trace[
+            buffer_index
+        ]
+
+        separator = "=" * 78
+        subsection = "-" * 78
+
         print(
-            f"[InterleavePi0Trace][step={step}]"
-            f"[buffer_action={buffer_index}]\n"
-            f"  position={self._format_array(action[:3])}\n"
-            f"  quaternion_xyzw={self._format_array(action[3:7])}\n"
-            f"  quaternion_norm={np.linalg.norm(action[3:7]):.9f}\n"
-            f"  gripper={action[7]:.1f}"
-        )
+            "\n"
+            f"{separator}\n"
+            f"[INTERLEAVE-Pi0 DEBUG] "
+            f"ROS STEP {step} | "
+            f"CHUNK ACTION {buffer_index}\n"
+            f"{separator}\n"
 
+            # =============================================================
+            # MODEL OUTPUT
+            # =============================================================
+
+            f"[1] MODEL OUTPUT - NORMALIZED\n"
+            f"{subsection}\n"
+            f"  delta_position_xyz_norm : "
+            f"{self._format_array(normalized[:3])}\n"
+            f"  delta_rpy_norm          : "
+            f"{self._format_array(normalized[3:6])}\n"
+            f"  gripper_norm            : "
+            f"{normalized[6]:.7f}\n"
+
+            # =============================================================
+            # DENORMALIZED OUTPUT
+            # =============================================================
+
+            f"\n[2] DENORMALIZED / PHYSICAL ACTION\n"
+            f"{subsection}\n"
+            f"  delta_position_xyz_m    : "
+            f"{self._format_array(physical[:3])}\n"
+            f"  delta_rpy_rad           : "
+            f"{self._format_array(physical[3:6])}\n"
+            f"  delta_rpy_deg           : "
+            f"{self._format_array(np.degrees(physical[3:6]))}\n"
+            f"  gripper_raw             : "
+            f"{physical[6]:.7f}\n"
+
+            # =============================================================
+            # GRIPPER
+            # =============================================================
+
+            f"\n[3] GRIPPER HYSTERESIS\n"
+            f"{subsection}\n"
+            f"  gripper_raw             : "
+            f"{gripper['gripper_raw']:.7f}\n"
+            f"  gripper_unit            : "
+            f"{gripper['gripper_unit']:.7f}\n"
+            f"  gripper_command         : "
+            f"{gripper['command']:.1f}\n"
+
+            # =============================================================
+            # ACTUAL TARGET RETURNED TO ROS
+            # =============================================================
+
+            f"\n[4] TARGET RETURNED TO AI_CONTROLLER\n"
+            f"{subsection}\n"
+            f"  absolute_position_xyz_m : "
+            f"{self._format_array(commanded_action[:3])}\n"
+            f"  quaternion_xyzw         : "
+            f"{self._format_array(commanded_action[3:7])}\n"
+            f"  quaternion_norm         : "
+            f"{np.linalg.norm(commanded_action[3:7]):.9f}\n"
+            f"  gripper_command         : "
+            f"{commanded_action[7]:.1f}\n"
+
+            f"{separator}\n"
+        )
+    
     def inference(
         self,
         input_data,
@@ -1279,10 +1427,10 @@ class InterleavePi0Controller(AIController):
 
         # Log della action che verrà effettivamente restituita al nodo.
         if self.cfg.trace_action_conversions:
-            self._trace_buffer_action(
+            self._trace_executed_action(
                 step=t,
                 buffer_index=buffer_action_idx,
-                action=action,
+                commanded_action=action,
             )
 
         # =========================================================================

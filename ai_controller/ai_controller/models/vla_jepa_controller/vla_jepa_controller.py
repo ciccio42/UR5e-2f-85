@@ -225,6 +225,8 @@ class VLAJEPAController(AIController):
             )
         )
 
+        self.predicted_closure = False
+
         self._grasp_z_offset_applied = False
 
         seed_everything(
@@ -426,8 +428,7 @@ class VLAJEPAController(AIController):
         """
         Seleziona il comando linguistico associato al task.
 
-        A differenza di Interleave-Pi0 non viene caricata alcuna
-        instruction image: VLA-JEPA riceve direttamente:
+        VLA-JEPA riceve direttamente:
             - front image;
             - gripper image;
             - istruzione linguistica.
@@ -494,6 +495,13 @@ class VLAJEPAController(AIController):
         # queue interna della policy precedente.
         self._runtime.reset()
 
+        seed_everything(
+            self.seed
+        )
+
+        self.predicted_closure = False
+        self._grasp_z_offset_applied = False
+
         print(
             f"[VLAJEPAController] Loaded task "
             f"{task_id}: {self.command!r}"
@@ -520,6 +528,7 @@ class VLAJEPAController(AIController):
         self.command = None
         self.current_task_id = None
         self._grasp_z_offset_applied = False
+        self.predicted_closure = False
 
 
     # =========================================================================
@@ -790,6 +799,10 @@ class VLAJEPAController(AIController):
 
         currently_closed=bool(output_data["current_gripper_closed"])
 
+        # if self.predicted_closure:
+        #     gripper_state = 1
+        #     self.predicted_closure = False
+
         # Se il gripper era aperto e questa action richiede la chiusura,
         # abbassiamo il target di 2 cm lungo Z nel frame base_link.
         if (
@@ -798,9 +811,12 @@ class VLAJEPAController(AIController):
             and not self._grasp_z_offset_applied
         ):
             target_position = target_position.copy()
-            target_position[2] += self.grasp_z_offset_m
+            target_position[2] += self.grasp_z_offset_m #scendo
+            target_position[1] += -0.01 #retrocedo
 
             self._grasp_z_offset_applied = True
+            # self.predicted_closure = True
+            # gripper_state = 0
 
         
 

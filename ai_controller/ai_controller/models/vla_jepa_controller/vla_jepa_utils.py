@@ -542,7 +542,7 @@ def gripper_hysteresis(
     if currently_closed:
         is_closed = gripper_value >= open_threshold
     else:
-        is_closed = gripper_value > close_threshold
+        is_closed = gripper_value >= close_threshold
 
     if currently_closed and (gripper_value < open_threshold) and target_pos[1] < 0.75:
         is_closed = True
@@ -733,7 +733,7 @@ def delta_action_to_absolute_target(
     gripper_state, _ = gripper_hysteresis(
         gripper_value=float(action[6]),
         currently_closed=currently_closed,
-        open_threshold=0.05,
+        open_threshold=5,
         close_threshold=19,
         target_pos = target_position
     )

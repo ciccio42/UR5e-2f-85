@@ -2,7 +2,7 @@
 checkpoint_path: ${oc.env:INTERLEAVE_PI0_CHECKPOINT}
 pretrained_model_path: ${oc.env:INTERLEAVE_PI0_PALIGEMMA}
 
-dataset_statistics_path: "dataset_statistics.json"
+dataset_statistics_path: "dataset_statistics_box_only.json"
 
 
 use_torch_compile: true
