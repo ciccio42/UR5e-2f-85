@@ -19,6 +19,7 @@ import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
+import time
 
 import cv2
 import numpy as np
@@ -1227,6 +1228,8 @@ class OSVIAWDAController(AIController):
 
         debug_dir = self._create_depth_debug_capture_dir()
 
+        time.sleep(1)
+
         # ---------------------------------------------------------
         # DEPTH
         # ---------------------------------------------------------
@@ -1242,7 +1245,7 @@ class OSVIAWDAController(AIController):
 
         depth_raw_gray = self._depth_debug_grayscale(
             depth_m,
-            min_depth=0.10,
+            min_depth=0.01,
             max_depth=1.00,
         )
 
@@ -1539,7 +1542,7 @@ class OSVIAWDAController(AIController):
         min_contour_area = float(
             refine_cfg.get(
                 "depth_edge_min_contour_area_px",
-                200,
+                50,
             )
         )
 
@@ -1803,6 +1806,7 @@ class OSVIAWDAController(AIController):
         best_centroid = None
         best_depth = None
         best_contour = None
+        best_rect = None
 
         # ---------------------------------------------------------
         # FILTER CONTOURS + SELECT CLOSEST ONE
@@ -1828,33 +1832,52 @@ class OSVIAWDAController(AIController):
                 cv2.LINE_AA,
             )
 
-            moments = cv2.moments(
+            # -----------------------------------------------------
+            # MINIMUM-AREA ROTATED RECTANGLE
+            #
+            # Instead of using the area centroid of the irregular
+            # depth contour, approximate the object's top surface
+            # with the minimum-area oriented rectangle.
+            #
+            # The rectangle center is used as the grasp pixel.
+            # -----------------------------------------------------
+
+            rect = cv2.minAreaRect(
                 contour
             )
 
-            if moments["m00"] == 0.0:
+            (u, v), (rect_width, rect_height), rect_angle = rect
+
+            # Reject degenerate rectangles.
+            if (
+                rect_width <= 1e-6
+                or rect_height <= 1e-6
+            ):
                 continue
-
-            # -----------------------------------------------------
-            # CONTOUR CENTROID
-            # -----------------------------------------------------
-
-            u = float(
-                moments["m10"]
-                / moments["m00"]
-            )
-
-            v = float(
-                moments["m01"]
-                / moments["m00"]
-            )
 
             centroid = np.asarray(
                 [
-                    u,
-                    v,
+                    float(u),
+                    float(v),
                 ],
                 dtype=np.float64,
+            )
+
+            # Diagnostic only:
+            # since the real object is a cube, the top surface is
+            # expected to be approximately square, although perspective
+            # projection can make it rectangular in the image.
+            aspect_ratio = (
+                max(rect_width, rect_height)
+                / min(rect_width, rect_height)
+            )
+
+            print(
+                "[DEPTH RECT DEBUG] "
+                f"center=({u:.2f}, {v:.2f}), "
+                f"size=({rect_width:.2f}, {rect_height:.2f}), "
+                f"aspect_ratio={aspect_ratio:.3f}, "
+                f"angle={rect_angle:.2f}"
             )
 
             # -----------------------------------------------------
@@ -1908,6 +1931,7 @@ class OSVIAWDAController(AIController):
                 best_depth = contour_min_depth
                 best_centroid = centroid
                 best_contour = contour.copy()
+                best_rect = rect
 
         self._save_debug_image(
             debug_dir,
@@ -1960,6 +1984,7 @@ class OSVIAWDAController(AIController):
                 best_contour=best_contour,
                 best_centroid=best_centroid,
                 best_depth=best_depth,
+                best_rect=best_rect,
             )
         )
 
@@ -2791,6 +2816,7 @@ class OSVIAWDAController(AIController):
         best_contour=None,
         best_centroid=None,
         best_depth=None,
+        best_rect=None,
     ):
         """
         Build a live visualization of the depth-processing pipeline.
@@ -2962,6 +2988,40 @@ class OSVIAWDAController(AIController):
                 cv2.LINE_AA,
             )
 
+            # -----------------------------------------------------
+            # MIN-AREA RECTANGLE
+            # -----------------------------------------------------
+
+            if best_rect is not None:
+
+                # boxPoints returns the four corners in CROPPED
+                # depth-image coordinates.
+                box = cv2.boxPoints(
+                    best_rect
+                ).astype(np.float64)
+
+                # Convert crop coordinates back to the ORIGINAL
+                # full depth-image coordinates.
+                box[:, 0] += crop_left
+
+                box = np.round(
+                    box
+                ).astype(np.int32)
+
+                box = box.reshape(
+                    (-1, 1, 2)
+                )
+
+                # Magenta = minimum-area rotated rectangle.
+                cv2.drawContours(
+                    overlay,
+                    [box],
+                    0,
+                    (255, 0, 255),
+                    2,
+                    cv2.LINE_AA,
+                )
+
             u_crop = int(
                 np.clip(
                     round(best_centroid[0]),
@@ -3039,7 +3099,7 @@ class OSVIAWDAController(AIController):
 
             cv2.putText(
                 overlay,
-                f"centroid=({u_full},{v})",
+                f"rect center=({u_full},{v})",
                 (
                     text_x,
                     text_y,
@@ -3055,7 +3115,7 @@ class OSVIAWDAController(AIController):
 
                 cv2.putText(
                     overlay,
-                    f"centroid depth={centroid_depth:.4f} m",
+                    f"center depth={centroid_depth:.4f} m",
                     (
                         text_x,
                         text_y + 25,
