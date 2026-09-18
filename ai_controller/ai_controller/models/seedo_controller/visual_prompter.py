@@ -30,6 +30,7 @@ class VisualPrompter:
             "/opt/checkpoints/seedo/sam2/sam2_hiera_large.pt"
         ),
         objects: str | None = None,
+        perception_mode: str = "generalized",
     ) -> None:
         self.grounding_config = Path(grounding_config)
         self.grounding_checkpoint = Path(grounding_checkpoint)
@@ -37,6 +38,7 @@ class VisualPrompter:
         self.sam_checkpoint = Path(sam_checkpoint)
         self.sam2_checkpoint = Path(sam2_checkpoint)
         self.objects = objects
+        self.perception_mode = perception_mode
 
     def run(
         self,
@@ -82,6 +84,7 @@ class VisualPrompter:
             bert_model=str(self.bert_model),
             sam_checkpoint=str(self.sam_checkpoint),
             sam2_checkpoint=str(self.sam2_checkpoint),
+            perception_mode=self.perception_mode,
         )
 
         if core_result is None:

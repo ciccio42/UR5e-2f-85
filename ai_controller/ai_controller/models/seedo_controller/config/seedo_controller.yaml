@@ -1,3 +1,8 @@
+# Perception strategy:
+# - generalized: discover object categories from the scene
+# - prior_guided: use prior knowledge about expected objects
+perception_mode: generalized
+
 keyframe_selector:
   gaussian_sigma: 5.0
   prominence: 0.8

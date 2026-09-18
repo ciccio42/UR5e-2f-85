@@ -11,8 +11,16 @@ class ActionPlanner:
         self,
         model: str = "gpt-4o-2024-08-06",
         demonstration_bin_order: str = "left_to_right",
+        perception_mode: str = "generalized",
     ) -> None:
         self.model = model
+
+        self.perception_mode = str(perception_mode).strip().lower()
+        if self.perception_mode not in {"generalized", "prior_guided"}:
+            raise ValueError(
+                "Invalid perception_mode: "
+                f"{self.perception_mode!r}"
+            )
 
         self.demonstration_bin_order = (
             str(demonstration_bin_order)
@@ -103,6 +111,7 @@ class ActionPlanner:
             artifacts_dir=normalized_artifacts_dir,
             model=self.model,
             demonstration_bin_order=self.demonstration_bin_order,
+            perception_mode=self.perception_mode,
         )
 
         if result is None:

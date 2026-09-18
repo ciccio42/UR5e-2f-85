@@ -65,6 +65,7 @@ class ScenePerceiver:
         camera_pose_noise_level: str = "baseline",
         translation_noise_std_mm: float = 0.0,
         rotation_noise_std_deg: float = 0.0,
+        perception_mode: str = "generalized",
     ) -> None:
         self.camera_calibration_path = (
             Path(camera_calibration_path)
@@ -80,6 +81,19 @@ class ScenePerceiver:
 
         self.camera_name = str(camera_name)
 
+        self.perception_mode = str(
+            perception_mode
+        ).strip().lower()
+
+        if self.perception_mode not in {
+            "prior_guided",
+            "generalized",
+        }:
+            raise ValueError(
+                "Invalid perception_mode: "
+                f"{self.perception_mode!r}"
+            )
+        
         self.camera_calibration = load_camera_calibration(
             str(self.camera_calibration_path)
         )
@@ -483,7 +497,11 @@ class ScenePerceiver:
             encoded_image.tobytes()
         ).decode("ascii")
 
-        messages = [
+        # ---------------------------------------------------------
+        # Generalized object-discovery prompt
+        # ---------------------------------------------------------
+
+        generalized_messages = [
             {
                 "role": "system",
                 "content": (
@@ -518,10 +536,10 @@ class ScenePerceiver:
                             "6. Repeat the same detector label once for every visible physical instance.\n"
                             "7. Do not include the robot, gripper, table, "
                             "or background objects.\n"
-                            "9. Never use spatial descriptions such as "
+                            "8. Never use spatial descriptions such as "
                             "'first bin from the left', 'left cube', or 'right ring'.\n"
-                            "10. Do not add objects that are not visible.\n"
-                            "11. Do not include material, size, orientation, or other attributes.\n\n"
+                            "9. Do not add objects that are not visible.\n"
+                            "10. Do not include material, size, orientation, or other attributes.\n\n"
                             "Return exactly two lines and no additional explanation:\n"
                             "Number: <total number of instances>\n"
                             "Objects: <comma-separated detector labels, "
@@ -544,6 +562,80 @@ class ScenePerceiver:
                 ],
             },
         ]
+
+        # ---------------------------------------------------------
+        # Prior-guided object-discovery prompt
+        # ---------------------------------------------------------
+
+        prior_guided_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a visual object detector whose output will be used "
+                    "directly as text queries for GroundingDINO. "
+                    "The scene contains colored cubes and storage bins. "
+                    "For every cube, include its visible color in the detector "
+                    "label using the exact form '<color> cube'. "
+                    "For every storage bin, always use the exact detector label "
+                    "'storage bin' without adding color, position, material, "
+                    "or other attributes."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Inspect the physical objects visible on the table "
+                            "and classify them using these rules:\n"
+                            "1. For every visible cube or graspable colored block, "
+                            "identify its visible color and return '<color> cube'.\n"
+                            "The only valid cube colors in this benchmark are: "
+                            "red, green, blue, and yellow. "
+                            "For every cube, the detector label MUST therefore be exactly one of: "
+                            "'red cube', 'green cube', 'blue cube', or 'yellow cube'. "
+                            "Do not use any other cube color.\n"
+                            "2. Examples are 'red cube', 'green cube', "
+                            "'blue cube', and 'yellow cube'.\n"
+                            "3. For every bin, box, tray, container, or receptacle, "
+                            "return exactly 'storage bin'.\n"
+                            "4. Count every physical instance separately.\n"
+                            "5. Repeat 'storage bin' once for every visible bin.\n"
+                            "6. Do not include the robot, gripper, table, "
+                            "or background objects.\n"
+                            "7. Never use spatial descriptions such as "
+                            "'first bin from the left'.\n"
+                            "8. Do not add objects that are not visible.\n\n"
+                            "Return exactly two lines and no additional explanation:\n"
+                            "Number: <total number of instances>\n"
+                            "Objects: <comma-separated detector labels, "
+                            "repeated once per instance>"
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": (
+                                "data:image/jpeg;base64,"
+                                + image_base64
+                            ),
+                            "detail": "high",
+                        },
+                    },
+                ],
+            },
+        ]
+
+        if self.perception_mode == "generalized":
+            messages = generalized_messages
+        else:
+            messages = prior_guided_messages
+
+        print(
+            "[ScenePerceiver] Perception mode: "
+            f"{self.perception_mode}"
+        )
 
         response = OpenAI().chat.completions.create(
             model="gpt-4o-2024-08-06",

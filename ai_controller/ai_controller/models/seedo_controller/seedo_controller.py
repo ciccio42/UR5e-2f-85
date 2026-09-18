@@ -168,6 +168,29 @@ class SeeDoController(AIController):
         with config_path.open("r", encoding="utf-8") as stream:
             config = yaml.safe_load(stream) or {}
 
+        # ---------------------------------------------------------
+        # Perception mode
+        # ---------------------------------------------------------
+
+        self.perception_mode = str(
+            config.get(
+                "perception_mode",
+                "generalized",
+            )
+        ).strip().lower()
+
+        allowed_perception_modes = {
+            "prior_guided",
+            "generalized",
+        }
+
+        if self.perception_mode not in allowed_perception_modes:
+            raise ValueError(
+                "Invalid perception_mode: "
+                f"{self.perception_mode!r}. "
+                "Expected 'prior_guided' or 'generalized'."
+            )
+
         keyframe_config = config.get(
             "keyframe_selector",
             {},
@@ -205,6 +228,7 @@ class SeeDoController(AIController):
                 "model",
                 "gpt-4o-2024-08-06",
             ),
+            perception_mode=self.perception_mode,
         )
 
         camera_pose_noise_config = perception_config.get(
@@ -272,6 +296,7 @@ class SeeDoController(AIController):
                     0.0,
                 )
             ),
+            perception_mode=self.perception_mode,
         )
 
         self.lmp_generator = LMPGenerator(
@@ -343,6 +368,7 @@ class SeeDoController(AIController):
             objects=visual_config.get(
                 "objects"
             ),
+            perception_mode=self.perception_mode,
         )
 
         self.action_planner = ActionPlanner(
@@ -354,6 +380,7 @@ class SeeDoController(AIController):
                 "demonstration_bin_order",
                 "left_to_right",
             ),
+            perception_mode=self.perception_mode,
         )
 
         self.motion_layer = SeeDoMotionLayer(

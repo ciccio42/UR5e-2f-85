@@ -16,7 +16,8 @@ from results import (
     SceneState,
 )
 from ai_controller.models.seedo_controller.scene_interpreter_prompts import (
-    SCENE_INTERPRETER_SYSTEM_PROMPT,
+    GENERALIZED_SCENE_INTERPRETER_SYSTEM_PROMPT,
+    PRIOR_GUIDED_SCENE_INTERPRETER_SYSTEM_PROMPT,
 )
 
 SCENE_INTERPRETATION_SCHEMA: dict[str, Any] = {
@@ -58,8 +59,22 @@ class SceneInterpreter:
     def __init__(
         self,
         model: str = "gpt-4o-2024-08-06",
+        perception_mode: str = "generalized",
     ) -> None:
         self.model = model
+
+        self.perception_mode = str(
+            perception_mode
+        ).strip().lower()
+
+        if self.perception_mode not in {
+            "generalized",
+            "prior_guided",
+        }:
+            raise ValueError(
+                "Invalid perception_mode: "
+                f"{self.perception_mode!r}"
+            )
 
     def run(
         self,
@@ -242,10 +257,28 @@ class SceneInterpreter:
             "perceived_objects": raw_objects,
         }
 
+        # ---------------------------------------------------------
+        # Select scene-interpreter prompt
+        # ---------------------------------------------------------
+
+        if self.perception_mode == "generalized":
+            system_prompt = (
+                GENERALIZED_SCENE_INTERPRETER_SYSTEM_PROMPT
+            )
+        else:
+            system_prompt = (
+                PRIOR_GUIDED_SCENE_INTERPRETER_SYSTEM_PROMPT
+            )
+
+        print(
+            "[SceneInterpreter] Perception mode: "
+            f"{self.perception_mode}"
+        )
+
         messages = [
             {
                 "role": "system",
-                "content": SCENE_INTERPRETER_SYSTEM_PROMPT,
+                "content": system_prompt,
             },
             {
                 "role": "user",
@@ -329,33 +362,52 @@ class SceneInterpreter:
             for item in result["objects"]
         }
 
+        expected_ids = {
+            obj.object_id
+            for obj in raw_scene.objects
+        }
+
+        returned_ids = set(
+            semantic_names.keys()
+        )
+
+        if returned_ids != expected_ids:
+            missing = expected_ids - returned_ids
+            unexpected = returned_ids - expected_ids
+
+            raise RuntimeError(
+                "Scene interpretation returned an invalid object mapping. "
+                f"Missing={sorted(missing)}, "
+                f"unexpected={sorted(unexpected)}."
+            )
+
+        # Detector labels are authoritative for non-bin objects.
         for raw_object in raw_scene.objects:
+
             detector_label = (
                 raw_object.label
                 .strip()
                 .lower()
             )
 
-            for raw_object in raw_scene.objects:
-                detector_label = raw_object.label.strip().lower()
+            if detector_label != "storage bin":
 
-                if detector_label != "storage bin":
-                    returned_name = (
-                        semantic_names[
-                            raw_object.object_id
-                        ]
-                        .strip()
-                        .lower()
+                returned_name = (
+                    semantic_names[
+                        raw_object.object_id
+                    ]
+                    .strip()
+                    .lower()
+                )
+
+                if returned_name != detector_label:
+                    raise RuntimeError(
+                        "Scene interpretation changed an authoritative "
+                        "semantic detector label: "
+                        f"raw_object_id={raw_object.object_id!r}, "
+                        f"detector_label={detector_label!r}, "
+                        f"semantic_name={returned_name!r}"
                     )
-
-                    if returned_name != detector_label:
-                        raise RuntimeError(
-                            "Scene interpretation changed an authoritative "
-                            "semantic detector label: "
-                            f"raw_object_id={raw_object.object_id!r}, "
-                            f"detector_label={detector_label!r}, "
-                            f"semantic_name={returned_name!r}"
-                        )
 
         expected_ids = {
             obj.object_id
