@@ -163,6 +163,7 @@ ros2 run moveit_controller moveit_controller_node \
 ```bash
 docker exec -it seedo_ros2_container bash
 
+export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/run_seedo_isaac_test.sh
 ```
 
