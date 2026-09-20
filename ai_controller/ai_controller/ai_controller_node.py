@@ -24,7 +24,7 @@ import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
 from control_msgs.action import GripperCommand
 from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _normalize_angle, EEF_POS_NAME, EEF_QUAT_NAME, JOINT_POS_NAME, JOINT_VEL_NAME, GRIPPER_QPOS_NAME, GRIPPER_QVEL_NAME
-from ai_controller.models.seedo_controller.utils import *
+from ai_controller.models.seedo_controller.ai_controller_node_utils import *
 from ai_controller.models.seedo_controller.timing_utils import TIMING
 _trajectory_cls = None
 

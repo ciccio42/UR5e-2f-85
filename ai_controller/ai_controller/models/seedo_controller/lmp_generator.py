@@ -11,13 +11,12 @@ from typing import Any
 from openai import OpenAI
 from shapely.geometry import *
 from shapely.affinity import *
+
 from results import (
-    PrimitiveStep,
-    SceneState,
-)
-from results import (
+    ActionStep,
     ActionPlanningResult,
     PrimitivePlan,
+    PrimitiveStep,
     SceneState,
 )
 from VLM_CaP.src.LMP import (
@@ -305,6 +304,120 @@ class LMPSceneWrapper:
 
         return self._objects_by_id[obj_name]
 
+    def resolve_action_step(
+        self,
+        step: ActionStep,
+    ) -> tuple[str, str]:
+        """
+        Resolve an ActionStep against the runtime SceneState.
+
+        Returns:
+            (picked_object_id, destination_object_id)
+        """
+
+        def normalize(value) -> str:
+            return str(
+                value if value is not None else ""
+            ).strip().casefold()
+
+        picked_category = normalize(
+            step.picked_category
+        )
+
+        picked_color = normalize(
+            step.picked_color
+        )
+
+        destination_category = normalize(
+            step.destination_category
+        )
+
+        if not all((
+            picked_category,
+            picked_color,
+            destination_category,
+        )):
+            raise ValueError(
+                "ActionStep contains incomplete semantic information."
+            )
+
+        # --------------------------------------------------
+        # Resolve the object to pick
+        # --------------------------------------------------
+
+        pick_candidates = [
+            obj
+            for obj in self.scene_state.objects
+            if (
+                normalize(obj.category) == picked_category
+                and normalize(
+                    obj.attributes.get("color")
+                ) == picked_color
+            )
+        ]
+
+        if len(pick_candidates) != 1:
+            raise ValueError(
+                "Cannot uniquely resolve picked object: "
+                f"category={picked_category!r}, "
+                f"color={picked_color!r}, "
+                f"matches={[obj.object_id for obj in pick_candidates]}"
+            )
+
+        picked_object = pick_candidates[0]
+
+        # --------------------------------------------------
+        # Resolve the destination
+        # --------------------------------------------------
+
+        destination_candidates = [
+            obj
+            for obj in self.scene_state.objects
+            if normalize(obj.category) == destination_category
+        ]
+
+        ordinal = step.destination_ordinal_from_left
+
+        if not 1 <= ordinal <= len(destination_candidates):
+            raise ValueError(
+                "Invalid destination ordinal: "
+                f"category={destination_category!r}, "
+                f"ordinal={ordinal}, "
+                f"available={len(destination_candidates)}"
+            )
+
+        # Canonical front-view ordering: image X, not base_link X.
+        ordered_destinations = sorted(
+            destination_candidates,
+            key=lambda obj: obj.pixel_coordinates[0],
+        )
+
+        x_coordinates = [
+            obj.pixel_coordinates[0]
+            for obj in ordered_destinations
+        ]
+
+        if len(x_coordinates) != len(set(x_coordinates)):
+            raise ValueError(
+                "Ambiguous destination ordering: "
+                "multiple objects share the same image X coordinate."
+            )
+
+        destination_object = ordered_destinations[
+            ordinal - 1
+        ]
+
+        if picked_object.object_id == destination_object.object_id:
+            raise ValueError(
+                "Picked object and destination resolve "
+                "to the same SceneObject."
+            )
+
+        return (
+            picked_object.object_id,
+            destination_object.object_id,
+        )
+
     def _record_primitive(
         self,
         name: str,
@@ -382,9 +495,23 @@ class LMPGenerator:
     def __init__(
         self,
         model: str = "gpt-3.5-turbo",
+        perception_mode: str = "generalized",
     ) -> None:
         self.model = model
         self.client = OpenAI()
+
+        self.perception_mode = str(
+            perception_mode
+        ).strip().lower()
+
+        if self.perception_mode not in {
+            "generalized",
+            "prior_guided",
+        }:
+            raise ValueError(
+                "Invalid perception_mode: "
+                f"{self.perception_mode!r}"
+            )
 
     def run(
         self,
@@ -419,8 +546,34 @@ class LMPGenerator:
             f"objects = {wrapper.get_obj_names()}"
         )
 
+        if self.perception_mode == "generalized":
+
+            resolved_actions = []
+
+            for step in action_plan.steps:
+
+                picked_id, destination_id = (
+                    wrapper.resolve_action_step(step)
+                )
+
+                resolved_actions.append(
+                    f"Pick {picked_id!r} and place it "
+                    f"{step.relation} {destination_id!r}."
+                )
+
+            lmp_instruction = " and then ".join(
+                resolved_actions
+            )
+
+        else:
+
+            # Preserve the original prior-guided behavior.
+            lmp_instruction = (
+                action_plan.natural_language_plan
+            )
+
         lmp(
-            action_plan.natural_language_plan,
+            lmp_instruction,
             context=context,
         )
 

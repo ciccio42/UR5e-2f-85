@@ -179,6 +179,10 @@ def run_lmp_generator_test(
             "model",
             "gpt-4o-2024-08-06",
         ),
+        perception_mode=config.get(
+            "perception_mode",
+            "generalized",
+        ),
     )
 
     primitive_plan = generator.run(

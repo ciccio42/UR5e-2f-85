@@ -304,6 +304,7 @@ class SeeDoController(AIController):
                 "model",
                 "gpt-4o-2024-08-06",
             ),
+            perception_mode=self.perception_mode,
         )
 
         self.workspace_bottom_left = tuple(

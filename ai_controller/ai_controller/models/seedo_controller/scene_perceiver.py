@@ -14,7 +14,7 @@ from openai import OpenAI
 from pathlib import Path
 from typing import Any
 from GroundingDINO.groundingdino.util import box_ops
-from ai_controller.script_controller.vision import (
+from ai_controller.models.seedo_controller.utils import (
     load_camera_calibration,
     robust_depth_at,
     deproject_pixel,
@@ -36,6 +36,10 @@ from segment_anything import (
     build_sam,
 )
 from track_objects import (
+    GENERALIZED_DISCOVERY_SYSTEM_PROMPT,
+    GENERALIZED_DISCOVERY_USER_PROMPT,
+    parse_structured_object_list,
+    detect_generalized_objects,
     filter_oversized_storage_bin_detections,
     load_groundingdino_model,
 )
@@ -460,7 +464,7 @@ class ScenePerceiver:
     def _discover_detector_labels(
         self,
         rgb_image: np.ndarray,
-    ) -> list[str]:
+    ) -> tuple[list[str], dict[str, dict]]:
         """Discover semantic detector labels from the runtime RGB scene."""
 
         if not isinstance(rgb_image, np.ndarray):
@@ -504,50 +508,14 @@ class ScenePerceiver:
         generalized_messages = [
             {
                 "role": "system",
-                "content": (
-                    "You are a visual object detector whose output will be used "
-                    "directly as text queries for GroundingDINO. "
-                    "The scene contains colored manipulable objects and storage bins. "
-                    "For every visible manipulable object that is NOT a storage bin, "
-                    "include its visible color and object type in the detector label "
-                    "using the exact form '<color> <object type>'. "
-                    "For every storage bin, always use the exact detector label "
-                    "'storage bin' without adding color, position, material, "
-                    "or other attributes."
-                ),
+                "content": GENERALIZED_DISCOVERY_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": (
-                            "Inspect the physical objects visible on the table "
-                            "and classify them using these rules:\n"
-                            "1. For every visible manipulable object that is not a storage bin, "
-                            "identify its visible color and its object type, and return the detector label "
-                            "in the exact form '<color> <object type>'.\n"
-                            "2. Use a simple singular English noun for the object type.\n"
-                            "3. Examples of valid non-bin detector labels are "
-                            "'red cube', 'green cube', 'blue ring', and 'yellow cylinder'.\n"
-                            "4. For every bin, box, tray, container, or receptacle, "
-                            "return exactly 'storage bin'.\n"
-                            "5. Count every physical instance separately.\n"
-                            "6. Repeat the same detector label once for every visible physical instance.\n"
-                            "7. Do not include the robot, gripper, table, "
-                            "or background objects.\n"
-                            "8. Never use spatial descriptions such as "
-                            "'first bin from the left', 'left cube', or 'right ring'.\n"
-                            "9. Do not add objects that are not visible.\n"
-                            "10. Do not include material, size, orientation, or other attributes.\n\n"
-                            "Return exactly two lines and no additional explanation:\n"
-                            "Number: <total number of instances>\n"
-                            "Objects: <comma-separated detector labels, "
-                            "repeated once per instance>\n\n"
-                            "Example:\n"
-                            "Number: 6\n"
-                            "Objects: red cube, blue ring, green cube, storage bin, storage bin, storage bin"
-                        ),
+                        "text": GENERALIZED_DISCOVERY_USER_PROMPT,
                     },
                     {
                         "type": "image_url",
@@ -637,11 +605,26 @@ class ScenePerceiver:
             f"{self.perception_mode}"
         )
 
+        params = {
+            "model": "gpt-4o-2024-08-06",
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": 300,
+        }
+
+        if self.perception_mode == "generalized":
+            params.update(
+                {
+                    "model": "gpt-4o",
+                    "max_tokens": 800,
+                    "response_format": {
+                        "type": "json_object",
+                    },
+                }
+            )
+
         response = OpenAI().chat.completions.create(
-            model="gpt-4o-2024-08-06",
-            messages=messages,
-            temperature=0,
-            max_tokens=300,
+            **params
         )
 
         raw_output = (
@@ -660,6 +643,28 @@ class ScenePerceiver:
             raise RuntimeError(
                 "Runtime object discovery returned no output."
             )
+
+        if self.perception_mode == "generalized":
+
+            (
+                num,
+                detector_labels,
+                metadata_by_label,
+            ) = parse_structured_object_list(
+                raw_output
+            )
+
+            print(
+                "[ScenePerceiver] Structured object discovery: "
+                f"{json.dumps(metadata_by_label, sort_keys=True)}"
+            )
+
+            print(
+                "[ScenePerceiver] Discovered objects: "
+                f"{num}"
+            )
+
+            return detector_labels, metadata_by_label
 
         number_match = re.search(
             r"Number:\s*(\d+)",
@@ -709,7 +714,7 @@ class ScenePerceiver:
                 f"returned {len(detector_labels)} labels."
             )
 
-        return detector_labels
+        return detector_labels, {}
 
     def _detect_objects(
         self,
@@ -723,7 +728,10 @@ class ScenePerceiver:
             rgb_image
         )
 
-        detector_labels = self._discover_detector_labels(
+        (
+            detector_labels,
+            metadata_by_label,
+        ) = self._discover_detector_labels(
             rgb_image
         )
 
@@ -741,92 +749,426 @@ class ScenePerceiver:
 
         semantic_candidates: list[dict[str, Any]] = []
 
-        for detector_label, requested_count in object_counts.items():
+        if self.perception_mode == "generalized":
 
-            timing_label = detector_label.replace(" ", "_")
-            with TIMING.measure(
-                f"scene.grounding_dino.{timing_label}",
-                cuda=True,
-            ):
+            (
+                selected_boxes,
+                selected_logits,
+                _,
+                selected_labels,
+                grounding_counts,
+                width_diagnostics,
+            ) = detect_generalized_objects(
+                image=image,
+                groundingdino_model=self.grounding_model,
+                device=self.device,
+                object_counts=object_counts,
+                metadata_by_label=metadata_by_label,
+                box_threshold=semantic_object_box_threshold,
+                text_threshold=text_threshold,
+            )
 
-                is_storage_bin = (
-                    detector_label.strip().lower() == "storage bin"
-                )
+            detected_boxes = selected_boxes
+            detected_labels = selected_labels
 
-                current_box_threshold = (
-                    default_box_threshold
-                    if detector_label.strip().lower() == "storage bin"
-                    else semantic_object_box_threshold
-                )
+            detected_confidences = [
+                float(logit.detach().cpu().item())
+                for logit in selected_logits
+            ]
 
-                boxes, logits, phrases = predict(
-                    model=self.grounding_model,
-                    image=image,
-                    caption=detector_label,
-                    box_threshold=current_box_threshold,
-                    text_threshold=text_threshold,
-                    device=self.device,
-                )
+            print(
+                "[ScenePerceiver] Grounding counts: "
+                f"{json.dumps(grounding_counts, sort_keys=True)}"
+            )
 
-                print(
-                    f"\n[DINO] {detector_label!r}: "
-                    f"{len(boxes)} candidates"
-                )
+            print(
+                "[ScenePerceiver] Width filter: "
+                f"{json.dumps(width_diagnostics, sort_keys=True)}"
+            )
 
-                for i, (box, logit) in enumerate(
-                    zip(boxes, logits)
+        else:
+            for detector_label, requested_count in object_counts.items():
+
+                timing_label = detector_label.replace(" ", "_")
+                with TIMING.measure(
+                    f"scene.grounding_dino.{timing_label}",
+                    cuda=True,
                 ):
-                    print(
-                        f"  [{i}] "
-                        f"box={box.detach().cpu().tolist()} "
-                        f"score={float(logit.detach().cpu().item()):.4f}"
+
+                    is_storage_bin = (
+                        detector_label.strip().lower() == "storage bin"
                     )
 
+                    current_box_threshold = (
+                        default_box_threshold
+                        if detector_label.strip().lower() == "storage bin"
+                        else semantic_object_box_threshold
+                    )
 
-            if detector_label.strip().lower() != "storage bin":
-                box_areas = boxes[:, 2] * boxes[:, 3]
-                keep_mask = box_areas < 0.1
+                    boxes, logits, phrases = predict(
+                        model=self.grounding_model,
+                        image=image,
+                        caption=detector_label,
+                        box_threshold=current_box_threshold,
+                        text_threshold=text_threshold,
+                        device=self.device,
+                    )
 
-                boxes = boxes[keep_mask]
-                logits = logits[keep_mask]
+                    print(
+                        f"\n[DINO] {detector_label!r}: "
+                        f"{len(boxes)} candidates"
+                    )
 
-                keep_values = keep_mask.detach().cpu().tolist()
-                phrases = [
-                    phrase
-                    for phrase, keep in zip(phrases, keep_values)
-                    if keep
-                ]
+                    for i, (box, logit) in enumerate(
+                        zip(boxes, logits)
+                    ):
+                        print(
+                            f"  [{i}] "
+                            f"box={box.detach().cpu().tolist()} "
+                            f"score={float(logit.detach().cpu().item()):.4f}"
+                        )
 
-            # Task-specific correction already implemented in SeeDo.
-            # For every other label this function is effectively a no-op.
-            boxes, logits, phrases, diagnostics = (
-                filter_oversized_storage_bin_detections(
-                    boxes=boxes,
-                    logits=logits,
-                    phrases=phrases,
-                    detector_label=detector_label,
+
+                if detector_label.strip().lower() != "storage bin":
+                    box_areas = boxes[:, 2] * boxes[:, 3]
+                    keep_mask = box_areas < 0.1
+
+                    boxes = boxes[keep_mask]
+                    logits = logits[keep_mask]
+
+                    keep_values = keep_mask.detach().cpu().tolist()
+                    phrases = [
+                        phrase
+                        for phrase, keep in zip(phrases, keep_values)
+                        if keep
+                    ]
+
+                # Task-specific correction already implemented in SeeDo.
+                # For every other label this function is effectively a no-op.
+                boxes, logits, phrases, diagnostics = (
+                    filter_oversized_storage_bin_detections(
+                        boxes=boxes,
+                        logits=logits,
+                        phrases=phrases,
+                        detector_label=detector_label,
+                    )
                 )
-            )
 
-            if diagnostics["removed_count"]:
-                print(
-                    "[ScenePerceiver] Oversized detections removed: "
-                    f"{diagnostics}"
+                if diagnostics["removed_count"]:
+                    print(
+                        "[ScenePerceiver] Oversized detections removed: "
+                        f"{diagnostics}"
+                    )
+                
+                is_storage_bin = (
+                    detector_label.strip().lower()
+                    == "storage bin"
                 )
-            
-            is_storage_bin = (
-                detector_label.strip().lower()
-                == "storage bin"
-            )
 
-            if not is_storage_bin:
+                if not is_storage_bin:
+                    for box, logit in zip(
+                        boxes,
+                        logits,
+                    ):
+                        semantic_candidates.append(
+                            {
+                                "label": detector_label,
+                                "box": box,
+                                "confidence": float(
+                                    logit
+                                    .detach()
+                                    .cpu()
+                                    .item()
+                                ),
+                            }
+                        )
+
+                    continue
+
+
+                # Storage bins keep the existing behaviour.
+                selected_count = min(
+                    requested_count,
+                    int(boxes.shape[0]),
+                )
+
+                boxes = boxes[:selected_count]
+                logits = logits[:selected_count]
+                phrases = phrases[:selected_count]
+
                 for box, logit in zip(
                     boxes,
                     logits,
                 ):
-                    semantic_candidates.append(
+                    detected_boxes.append(
+                        box.unsqueeze(0)
+                    )
+
+                    detected_labels.append(
+                        detector_label
+                    )
+
+                    detected_confidences.append(
+                        float(
+                            logit
+                            .detach()
+                            .cpu()
+                            .item()
+                        )
+                    )
+
+            # Resolve competing semantic detections.
+            #
+            # Different semantic queries may ground the same physical object.
+            # Process candidates globally by confidence and allow each physical
+            # region to be assigned only once.
+            semantic_candidates.sort(
+                key=lambda candidate: candidate[
+                    "confidence"
+                ],
+                reverse=True,
+            )
+
+            accepted_semantic: list[
+                dict[str, Any]
+            ] = []
+
+            accepted_counts: dict[str, int] = {
+                label: 0
+                for label in object_counts
+                if label.strip().lower()
+                != "storage bin"
+            }
+
+            semantic_iou_threshold = 0.7
+
+            for candidate in semantic_candidates:
+                label = candidate["label"]
+
+                requested_count = object_counts[
+                    label
+                ]
+
+                # The VLM determines how many physical instances
+                # of this semantic label are expected.
+                if (
+                    accepted_counts[label]
+                    >= requested_count
+                ):
+                    continue
+
+                candidate_box_xyxy = (
+                    box_ops.box_cxcywh_to_xyxy(
+                        candidate["box"].unsqueeze(0)
+                    )
+                )
+
+                conflicting_detection = None
+                conflicting_iou = 0.0
+
+                for accepted in accepted_semantic:
+                    accepted_box_xyxy = (
+                        box_ops.box_cxcywh_to_xyxy(
+                            accepted["box"].unsqueeze(0)
+                        )
+                    )
+
+                    iou_matrix, _ = box_ops.box_iou(
+                        candidate_box_xyxy,
+                        accepted_box_xyxy,
+                    )
+
+                    iou = float(
+                        iou_matrix[0, 0]
+                        .detach()
+                        .cpu()
+                        .item()
+                    )
+
+                    if iou >= semantic_iou_threshold:
+                        conflicting_detection = (
+                            accepted
+                        )
+                        conflicting_iou = iou
+                        break
+
+                if conflicting_detection is not None:
+                    print(
+                        "[ScenePerceiver] Semantic IoU conflict: "
+                        f"{label!r} "
+                        f"score={candidate['confidence']:.4f} "
+                        "rejected because it overlaps "
+                        f"{conflicting_detection['label']!r} "
+                        "with "
+                        f"score="
+                        f"{conflicting_detection['confidence']:.4f}, "
+                        f"IoU={conflicting_iou:.4f}"
+                    )
+
+                    continue
+
+                accepted_semantic.append(
+                    candidate
+                )
+
+                accepted_counts[label] += 1
+
+
+            # Try progressively less restrictive GroundingDINO fallbacks
+            # for semantic labels that could not be assigned uniquely.
+            #
+            # Example:
+            #
+            #   "blue cube"
+            #       -> "dark blue cube"
+            #       -> "light blue cube"
+            #       -> "cube"
+            #
+            # The original semantic label is always preserved.
+            for label, requested_count in object_counts.items():
+                if (
+                    label.strip().lower()
+                    == "storage bin"
+                ):
+                    continue
+
+                resolved_count = accepted_counts[
+                    label
+                ]
+
+                missing_count = (
+                    requested_count
+                    - resolved_count
+                )
+
+                if missing_count <= 0:
+                    continue
+
+                print(
+                    "[ScenePerceiver] Unresolved semantic label: "
+                    f"{label!r}, "
+                    f"requested={requested_count}, "
+                    f"resolved={resolved_count}"
+                )
+
+                label_parts = (
+                    label
+                    .strip()
+                    .lower()
+                    .split()
+                )
+
+                if len(label_parts) < 2:
+                    raise RuntimeError(
+                        "Semantic detector label does not follow "
+                        "the expected '<color> <object type>' format: "
+                        f"{label!r}"
+                    )
+
+                color = label_parts[0]
+                object_type = label_parts[-1]
+
+                fallback_queries = [
+                    f"dark {color} {object_type}",
+                    f"light {color} {object_type}",
+                    object_type,
+                ]
+
+                for fallback_query in fallback_queries:
+                    if missing_count <= 0:
+                        break
+
+                    print(
+                        "[ScenePerceiver] Trying fallback: "
+                        f"{label!r} -> {fallback_query!r}"
+                    )
+
+                    timing_query = (
+                        fallback_query
+                        .replace(" ", "_")
+                    )
+
+                    with TIMING.measure(
+                        f"scene.grounding_dino.fallback_{timing_query}",
+                        cuda=True,
+                    ):
+                        (
+                            fallback_boxes,
+                            fallback_logits,
+                            fallback_phrases,
+                        ) = predict(
+                            model=self.grounding_model,
+                            image=image,
+                            caption=fallback_query,
+                            box_threshold=semantic_object_box_threshold,
+                            text_threshold=text_threshold,
+                            device=self.device,
+                        )
+
+                    print(
+                        f"[DINO FALLBACK] {label!r} "
+                        f"using {fallback_query!r}: "
+                        f"{len(fallback_boxes)} candidates"
+                    )
+
+                    for i, (box, logit) in enumerate(
+                        zip(
+                            fallback_boxes,
+                            fallback_logits,
+                        )
+                    ):
+                        print(
+                            f"  [{i}] "
+                            f"box={box.detach().cpu().tolist()} "
+                            f"score="
+                            f"{float(logit.detach().cpu().item()):.4f}"
+                        )
+
+                    # Same small-object sanity filter used
+                    # for semantic non-bin objects.
+                    if len(fallback_boxes) > 0:
+                        box_areas = (
+                            fallback_boxes[:, 2]
+                            * fallback_boxes[:, 3]
+                        )
+
+                        keep_mask = (
+                            box_areas < 0.1
+                        )
+
+                        fallback_boxes = (
+                            fallback_boxes[
+                                keep_mask
+                            ]
+                        )
+
+                        fallback_logits = (
+                            fallback_logits[
+                                keep_mask
+                            ]
+                        )
+
+                        keep_values = (
+                            keep_mask
+                            .detach()
+                            .cpu()
+                            .tolist()
+                        )
+
+                        fallback_phrases = [
+                            phrase
+                            for phrase, keep in zip(
+                                fallback_phrases,
+                                keep_values,
+                            )
+                            if keep
+                        ]
+
+                    fallback_candidates = [
                         {
-                            "label": detector_label,
+                            # IMPORTANT:
+                            # preserve the original semantic label.
+                            "label": label,
                             "box": box,
                             "confidence": float(
                                 logit
@@ -835,449 +1177,153 @@ class ScenePerceiver:
                                 .item()
                             ),
                         }
+                        for box, logit in zip(
+                            fallback_boxes,
+                            fallback_logits,
+                        )
+                    ]
+
+                    fallback_candidates.sort(
+                        key=lambda candidate: candidate[
+                            "confidence"
+                        ],
+                        reverse=True,
                     )
 
-                continue
+                    for candidate in fallback_candidates:
+                        if missing_count <= 0:
+                            break
 
+                        candidate_box_xyxy = (
+                            box_ops.box_cxcywh_to_xyxy(
+                                candidate["box"].unsqueeze(0)
+                            )
+                        )
 
-            # Storage bins keep the existing behaviour.
-            selected_count = min(
-                requested_count,
-                int(boxes.shape[0]),
-            )
+                        conflict = False
 
-            boxes = boxes[:selected_count]
-            logits = logits[:selected_count]
-            phrases = phrases[:selected_count]
+                        # Protect semantic objects that have
+                        # already been assigned.
+                        for accepted in accepted_semantic:
+                            accepted_box_xyxy = (
+                                box_ops.box_cxcywh_to_xyxy(
+                                    accepted[
+                                        "box"
+                                    ].unsqueeze(0)
+                                )
+                            )
 
-            for box, logit in zip(
-                boxes,
-                logits,
-            ):
+                            iou_matrix, _ = box_ops.box_iou(
+                                candidate_box_xyxy,
+                                accepted_box_xyxy,
+                            )
+
+                            iou = float(
+                                iou_matrix[0, 0]
+                                .detach()
+                                .cpu()
+                                .item()
+                            )
+
+                            if (
+                                iou
+                                >= semantic_iou_threshold
+                            ):
+                                print(
+                                    "[ScenePerceiver] Fallback candidate rejected: "
+                                    f"{label!r} "
+                                    f"query={fallback_query!r} "
+                                    f"score={candidate['confidence']:.4f} "
+                                    f"overlaps semantic object "
+                                    f"{accepted['label']!r}, "
+                                    f"IoU={iou:.4f}"
+                                )
+
+                                conflict = True
+                                break
+
+                        if conflict:
+                            continue
+
+                        # Protect storage-bin regions as well.
+                        for existing_box, existing_label in zip(
+                            detected_boxes,
+                            detected_labels,
+                        ):
+                            if (
+                                existing_label
+                                .strip()
+                                .lower()
+                                != "storage bin"
+                            ):
+                                continue
+
+                            existing_box_xyxy = (
+                                box_ops.box_cxcywh_to_xyxy(
+                                    existing_box
+                                )
+                            )
+
+                            iou_matrix, _ = box_ops.box_iou(
+                                candidate_box_xyxy,
+                                existing_box_xyxy,
+                            )
+
+                            iou = float(
+                                iou_matrix[0, 0]
+                                .detach()
+                                .cpu()
+                                .item()
+                            )
+
+                            if (
+                                iou
+                                >= semantic_iou_threshold
+                            ):
+                                print(
+                                    "[ScenePerceiver] Fallback candidate rejected: "
+                                    f"{label!r} "
+                                    f"query={fallback_query!r} "
+                                    f"score={candidate['confidence']:.4f} "
+                                    "overlaps storage bin, "
+                                    f"IoU={iou:.4f}"
+                                )
+
+                                conflict = True
+                                break
+
+                        if conflict:
+                            continue
+
+                        print(
+                            "[ScenePerceiver] Fallback candidate accepted: "
+                            f"{label!r} "
+                            f"localized using {fallback_query!r}, "
+                            f"score={candidate['confidence']:.4f}"
+                        )
+
+                        accepted_semantic.append(
+                            candidate
+                        )
+
+                        accepted_counts[
+                            label
+                        ] += 1
+
+                        missing_count -= 1
+
+            for candidate in accepted_semantic:
                 detected_boxes.append(
-                    box.unsqueeze(0)
+                    candidate["box"].unsqueeze(0)
                 )
 
                 detected_labels.append(
-                    detector_label
+                    candidate["label"]
                 )
 
                 detected_confidences.append(
-                    float(
-                        logit
-                        .detach()
-                        .cpu()
-                        .item()
-                    )
+                    candidate["confidence"]
                 )
-
-        # Resolve competing semantic detections.
-        #
-        # Different semantic queries may ground the same physical object.
-        # Process candidates globally by confidence and allow each physical
-        # region to be assigned only once.
-        semantic_candidates.sort(
-            key=lambda candidate: candidate[
-                "confidence"
-            ],
-            reverse=True,
-        )
-
-        accepted_semantic: list[
-            dict[str, Any]
-        ] = []
-
-        accepted_counts: dict[str, int] = {
-            label: 0
-            for label in object_counts
-            if label.strip().lower()
-            != "storage bin"
-        }
-
-        semantic_iou_threshold = 0.7
-
-        for candidate in semantic_candidates:
-            label = candidate["label"]
-
-            requested_count = object_counts[
-                label
-            ]
-
-            # The VLM determines how many physical instances
-            # of this semantic label are expected.
-            if (
-                accepted_counts[label]
-                >= requested_count
-            ):
-                continue
-
-            candidate_box_xyxy = (
-                box_ops.box_cxcywh_to_xyxy(
-                    candidate["box"].unsqueeze(0)
-                )
-            )
-
-            conflicting_detection = None
-            conflicting_iou = 0.0
-
-            for accepted in accepted_semantic:
-                accepted_box_xyxy = (
-                    box_ops.box_cxcywh_to_xyxy(
-                        accepted["box"].unsqueeze(0)
-                    )
-                )
-
-                iou_matrix, _ = box_ops.box_iou(
-                    candidate_box_xyxy,
-                    accepted_box_xyxy,
-                )
-
-                iou = float(
-                    iou_matrix[0, 0]
-                    .detach()
-                    .cpu()
-                    .item()
-                )
-
-                if iou >= semantic_iou_threshold:
-                    conflicting_detection = (
-                        accepted
-                    )
-                    conflicting_iou = iou
-                    break
-
-            if conflicting_detection is not None:
-                print(
-                    "[ScenePerceiver] Semantic IoU conflict: "
-                    f"{label!r} "
-                    f"score={candidate['confidence']:.4f} "
-                    "rejected because it overlaps "
-                    f"{conflicting_detection['label']!r} "
-                    "with "
-                    f"score="
-                    f"{conflicting_detection['confidence']:.4f}, "
-                    f"IoU={conflicting_iou:.4f}"
-                )
-
-                continue
-
-            accepted_semantic.append(
-                candidate
-            )
-
-            accepted_counts[label] += 1
-
-
-        # Try progressively less restrictive GroundingDINO fallbacks
-        # for semantic labels that could not be assigned uniquely.
-        #
-        # Example:
-        #
-        #   "blue cube"
-        #       -> "dark blue cube"
-        #       -> "light blue cube"
-        #       -> "cube"
-        #
-        # The original semantic label is always preserved.
-        for label, requested_count in object_counts.items():
-            if (
-                label.strip().lower()
-                == "storage bin"
-            ):
-                continue
-
-            resolved_count = accepted_counts[
-                label
-            ]
-
-            missing_count = (
-                requested_count
-                - resolved_count
-            )
-
-            if missing_count <= 0:
-                continue
-
-            print(
-                "[ScenePerceiver] Unresolved semantic label: "
-                f"{label!r}, "
-                f"requested={requested_count}, "
-                f"resolved={resolved_count}"
-            )
-
-            label_parts = (
-                label
-                .strip()
-                .lower()
-                .split()
-            )
-
-            if len(label_parts) < 2:
-                raise RuntimeError(
-                    "Semantic detector label does not follow "
-                    "the expected '<color> <object type>' format: "
-                    f"{label!r}"
-                )
-
-            color = label_parts[0]
-            object_type = label_parts[-1]
-
-            fallback_queries = [
-                f"dark {color} {object_type}",
-                f"light {color} {object_type}",
-                object_type,
-            ]
-
-            for fallback_query in fallback_queries:
-                if missing_count <= 0:
-                    break
-
-                print(
-                    "[ScenePerceiver] Trying fallback: "
-                    f"{label!r} -> {fallback_query!r}"
-                )
-
-                timing_query = (
-                    fallback_query
-                    .replace(" ", "_")
-                )
-
-                with TIMING.measure(
-                    f"scene.grounding_dino.fallback_{timing_query}",
-                    cuda=True,
-                ):
-                    (
-                        fallback_boxes,
-                        fallback_logits,
-                        fallback_phrases,
-                    ) = predict(
-                        model=self.grounding_model,
-                        image=image,
-                        caption=fallback_query,
-                        box_threshold=semantic_object_box_threshold,
-                        text_threshold=text_threshold,
-                        device=self.device,
-                    )
-
-                print(
-                    f"[DINO FALLBACK] {label!r} "
-                    f"using {fallback_query!r}: "
-                    f"{len(fallback_boxes)} candidates"
-                )
-
-                for i, (box, logit) in enumerate(
-                    zip(
-                        fallback_boxes,
-                        fallback_logits,
-                    )
-                ):
-                    print(
-                        f"  [{i}] "
-                        f"box={box.detach().cpu().tolist()} "
-                        f"score="
-                        f"{float(logit.detach().cpu().item()):.4f}"
-                    )
-
-                # Same small-object sanity filter used
-                # for semantic non-bin objects.
-                if len(fallback_boxes) > 0:
-                    box_areas = (
-                        fallback_boxes[:, 2]
-                        * fallback_boxes[:, 3]
-                    )
-
-                    keep_mask = (
-                        box_areas < 0.1
-                    )
-
-                    fallback_boxes = (
-                        fallback_boxes[
-                            keep_mask
-                        ]
-                    )
-
-                    fallback_logits = (
-                        fallback_logits[
-                            keep_mask
-                        ]
-                    )
-
-                    keep_values = (
-                        keep_mask
-                        .detach()
-                        .cpu()
-                        .tolist()
-                    )
-
-                    fallback_phrases = [
-                        phrase
-                        for phrase, keep in zip(
-                            fallback_phrases,
-                            keep_values,
-                        )
-                        if keep
-                    ]
-
-                fallback_candidates = [
-                    {
-                        # IMPORTANT:
-                        # preserve the original semantic label.
-                        "label": label,
-                        "box": box,
-                        "confidence": float(
-                            logit
-                            .detach()
-                            .cpu()
-                            .item()
-                        ),
-                    }
-                    for box, logit in zip(
-                        fallback_boxes,
-                        fallback_logits,
-                    )
-                ]
-
-                fallback_candidates.sort(
-                    key=lambda candidate: candidate[
-                        "confidence"
-                    ],
-                    reverse=True,
-                )
-
-                for candidate in fallback_candidates:
-                    if missing_count <= 0:
-                        break
-
-                    candidate_box_xyxy = (
-                        box_ops.box_cxcywh_to_xyxy(
-                            candidate["box"].unsqueeze(0)
-                        )
-                    )
-
-                    conflict = False
-
-                    # Protect semantic objects that have
-                    # already been assigned.
-                    for accepted in accepted_semantic:
-                        accepted_box_xyxy = (
-                            box_ops.box_cxcywh_to_xyxy(
-                                accepted[
-                                    "box"
-                                ].unsqueeze(0)
-                            )
-                        )
-
-                        iou_matrix, _ = box_ops.box_iou(
-                            candidate_box_xyxy,
-                            accepted_box_xyxy,
-                        )
-
-                        iou = float(
-                            iou_matrix[0, 0]
-                            .detach()
-                            .cpu()
-                            .item()
-                        )
-
-                        if (
-                            iou
-                            >= semantic_iou_threshold
-                        ):
-                            print(
-                                "[ScenePerceiver] Fallback candidate rejected: "
-                                f"{label!r} "
-                                f"query={fallback_query!r} "
-                                f"score={candidate['confidence']:.4f} "
-                                f"overlaps semantic object "
-                                f"{accepted['label']!r}, "
-                                f"IoU={iou:.4f}"
-                            )
-
-                            conflict = True
-                            break
-
-                    if conflict:
-                        continue
-
-                    # Protect storage-bin regions as well.
-                    for existing_box, existing_label in zip(
-                        detected_boxes,
-                        detected_labels,
-                    ):
-                        if (
-                            existing_label
-                            .strip()
-                            .lower()
-                            != "storage bin"
-                        ):
-                            continue
-
-                        existing_box_xyxy = (
-                            box_ops.box_cxcywh_to_xyxy(
-                                existing_box
-                            )
-                        )
-
-                        iou_matrix, _ = box_ops.box_iou(
-                            candidate_box_xyxy,
-                            existing_box_xyxy,
-                        )
-
-                        iou = float(
-                            iou_matrix[0, 0]
-                            .detach()
-                            .cpu()
-                            .item()
-                        )
-
-                        if (
-                            iou
-                            >= semantic_iou_threshold
-                        ):
-                            print(
-                                "[ScenePerceiver] Fallback candidate rejected: "
-                                f"{label!r} "
-                                f"query={fallback_query!r} "
-                                f"score={candidate['confidence']:.4f} "
-                                "overlaps storage bin, "
-                                f"IoU={iou:.4f}"
-                            )
-
-                            conflict = True
-                            break
-
-                    if conflict:
-                        continue
-
-                    print(
-                        "[ScenePerceiver] Fallback candidate accepted: "
-                        f"{label!r} "
-                        f"localized using {fallback_query!r}, "
-                        f"score={candidate['confidence']:.4f}"
-                    )
-
-                    accepted_semantic.append(
-                        candidate
-                    )
-
-                    accepted_counts[
-                        label
-                    ] += 1
-
-                    missing_count -= 1
-
-        for candidate in accepted_semantic:
-            detected_boxes.append(
-                candidate["box"].unsqueeze(0)
-            )
-
-            detected_labels.append(
-                candidate["label"]
-            )
-
-            detected_confidences.append(
-                candidate["confidence"]
-            )
 
         if not detected_boxes:
             return []
@@ -1397,6 +1443,21 @@ class ScenePerceiver:
                 f"{normalized_label}_{object_index}"
             )
 
+            metadata = (
+                metadata_by_label.get(detector_label)
+                if self.perception_mode == "generalized"
+                else None
+            )
+
+            if (
+                self.perception_mode == "generalized"
+                and metadata is None
+            ):
+                raise RuntimeError(
+                    "Missing discovery metadata for detected label: "
+                    f"{detector_label!r}"
+                )
+
             detections.append(
                 DetectedObject(
                     object_id=object_id,
@@ -1404,6 +1465,16 @@ class ScenePerceiver:
                     pixel_coordinates=pixel,
                     mask=object_mask,
                     confidence=confidence,
+                    category=(
+                        metadata["category"]
+                        if metadata is not None
+                        else None
+                    ),
+                    attributes=(
+                        dict(metadata["attributes"])
+                        if metadata is not None
+                        else {}
+                    ),
                 )
             )
 
@@ -1654,16 +1725,18 @@ class ScenePerceiver:
                 )
 
                 raw_objects.append(
-                RawSceneObject(
-                    object_id=object_id,
-                    label=label,
-                    pixel_coordinates=pixel,
-                    position_camera=position_camera,
-                    position_base=position_base,
-                    mask=detection.mask,
-                    confidence=detection.confidence,
+                    RawSceneObject(
+                        object_id=object_id,
+                        label=label,
+                        pixel_coordinates=pixel,
+                        position_camera=position_camera,
+                        position_base=position_base,
+                        mask=detection.mask,
+                        confidence=detection.confidence,
+                        category=detection.category,
+                        attributes=dict(detection.attributes),
+                    )
                 )
-            )
 
         raw_scene = RawSceneState(
             objects=tuple(raw_objects)
@@ -1822,6 +1895,15 @@ class ScenePerceiver:
                                     ),
                                     "position_base": list(
                                         obj.position_base
+                                    ),
+                                    "label": obj.label,
+                                    **(
+                                        {
+                                            "category": obj.category,
+                                            "attributes": obj.attributes,
+                                        }
+                                        if self.perception_mode == "generalized"
+                                        else {}
                                     ),
                                 }
                                 for obj in raw_scene.objects

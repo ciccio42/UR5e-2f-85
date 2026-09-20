@@ -42,6 +42,15 @@ python -m ai_controller.models.seedo_controller.tests \
   --artifacts-dir /seedo_tests/visual_prompting
 ```
 
+NAT version:
+```bash
+python -m ai_controller.models.seedo_controller.tests \
+  --stage visual_prompting \
+  --video /dataset_nat/traj_000_camera_front_modified.mp4 \
+  --expected-keyframes 25 59 \
+  --artifacts-dir /seedo_tests/nat_discovery_test
+```
+
 Outputs:
 
 - annotated tracking video
@@ -61,6 +70,15 @@ python -m ai_controller.models.seedo_controller.tests \
   --stage action_planning \
   --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
   --expected-keyframes 25 51 \
+  --artifacts-dir /seedo_tests/action_planning
+```
+
+NAT version:
+```bash
+python -m ai_controller.models.seedo_controller.tests \
+  --stage action_planning \
+  --video /dataset_nat/traj_000_camera_front_modified.mp4 \
+  --expected-keyframes 25 59 \
   --artifacts-dir /seedo_tests/action_planning
 ```
 
@@ -125,6 +143,18 @@ python -m ai_controller.models.seedo_controller.tests \
   --stage lmp_generator \
   --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
   --expected-keyframes 25 51 \
+  --scene-dir /scene_capture \
+  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --artifacts-dir /seedo_tests/lmp_generator
+```
+
+NAT version:
+```bash
+python -m ai_controller.models.seedo_controller.tests \
+  --stage lmp_generator \
+  --video /dataset_nat/traj_000_camera_front_modified.mp4 \
+  --expected-keyframes 25 59 \
   --scene-dir /scene_capture \
   --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
