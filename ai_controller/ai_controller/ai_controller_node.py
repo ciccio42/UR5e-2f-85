@@ -1,3 +1,4 @@
+import functools
 import importlib
 import json
 import math
@@ -68,7 +69,17 @@ class AIControllerNode(Node):
                                             '/zed_left/zed_node/rgb/color/rect/image',
                                             '/zed_right/zed_node/rgb/color/rect/image',
                                             '/zed_gripper/zed_node/rgb/color/rect/image'])
-        self.declare_parameter('task_name', 
+        # Extra cameras (RGB already flows through camera_topic above; these
+        # are the matching depth topics) saved into the rollout alongside
+        # camera_front_image, purely for logging/video purposes - NOT fed to
+        # the controller's inference.
+        self.declare_parameter('camera_lateral_left_depth_topic',
+                                                    '/zed_left/zed_node/depth/depth_registered')
+        self.declare_parameter('camera_lateral_right_depth_topic',
+                                                    '/zed_right/zed_node/depth/depth_registered')
+        self.declare_parameter('camera_gripper_depth_topic',
+                                                    '/zed_gripper/zed_node/depth/depth_registered')
+        self.declare_parameter('task_name',
                                             "pick_place")
         self.declare_parameter('demo_path', 
                                             "/dataset/pick_place/human_rgb_pick_place")
@@ -101,6 +112,12 @@ class AIControllerNode(Node):
         self.set_pose_service = self.get_parameter('set_pose_service').get_parameter_value().string_value
         self.gripper_action_topic = self.get_parameter('gripper_action_topic').get_parameter_value().string_value
         self.camera_topic = self.get_parameter('camera_topic').get_parameter_value().string_array_value
+        self.extra_depth_topics = {
+            'camera_lateral_left_depth': self.get_parameter('camera_lateral_left_depth_topic').get_parameter_value().string_value,
+            'camera_lateral_right_depth': self.get_parameter('camera_lateral_right_depth_topic').get_parameter_value().string_value,
+            'camera_gripper_depth': self.get_parameter('camera_gripper_depth_topic').get_parameter_value().string_value,
+        }
+        self.latest_depth_images = {}
         self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
         self.demo_path = self.get_parameter('demo_path').get_parameter_value().string_value
         self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
@@ -221,6 +238,20 @@ class AIControllerNode(Node):
             )
             self.camera_sync.registerCallback(self.synced_images_callback)
 
+            # Extra depth subscribers (lateral_left/lateral_right/gripper), for
+            # logging/video only: kept independent of camera_sync above since
+            # depth frames need 'passthrough' decoding (32FC1 meters), not the
+            # 'rgb8' used for the RGB cameras, and don't need to be in lockstep
+            # with the control loop - the most recently received frame per
+            # camera is used when a rollout step is recorded.
+            self.depth_subs = [
+                self.create_subscription(
+                    RosImage, topic,
+                    functools.partial(self._depth_image_callback, key),
+                    qos_profile_sensor_data)
+                for key, topic in self.extra_depth_topics.items()
+            ]
+
         self.traj_cnt = 0
         self.max_step = 200
 
@@ -252,6 +283,10 @@ class AIControllerNode(Node):
             self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8') for msg in image_msgs
         ]
         self.synced_images_event.set()
+
+    def _depth_image_callback(self, key, msg):
+        """Stores the most recent depth frame (meters, passthrough) for one of the extra cameras."""
+        self.latest_depth_images[key] = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
 
     def get_synced_images(self, timeout_sec=5.0):
         """Block (while spinning callbacks) until a fresh synchronized set of camera images arrives."""
@@ -791,6 +826,17 @@ class AIControllerNode(Node):
                     # bounding boxes, computed action and robot state) into the rollout Trajectory
                     step_obs = dict(robot_state)
                     step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+
+                    # extra RGB cameras (logging only): rely on the same order as
+                    # the default camera_topic param (front, left, right, gripper)
+                    extra_rgb_keys = ['camera_lateral_left_image', 'camera_lateral_right_image', 'camera_gripper_image']
+                    for i, key in enumerate(extra_rgb_keys, start=1):
+                        if i < len(images):
+                            step_obs[key] = cv2.cvtColor(images[i], cv2.COLOR_RGB2BGR)
+
+                    # extra depth cameras (logging only): most recently received
+                    # frame per camera, independent of the RGB sync above
+                    step_obs.update(self.latest_depth_images)
 
                     cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
                     if os.path.isfile(cropped_image_path):

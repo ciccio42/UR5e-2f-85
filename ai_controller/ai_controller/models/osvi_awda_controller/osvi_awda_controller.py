@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 import time
+import copy
 
 import cv2
 import numpy as np
@@ -509,6 +510,10 @@ class OSVIAWDAController(AIController):
         self._depth_frame_override_reported = False
 
     def reset(self):
+        """
+        reset the controller's internal state between trajectories.
+        This is called by the AIController before each new trajectory.
+        """
         self.context_tensor = None
         self.context_source = None
         self.last_image_waypoints = None
@@ -522,6 +527,9 @@ class OSVIAWDAController(AIController):
         self._reset_waypoint_visualization()
 
     def _gripper_depth_enabled(self):
+        """
+        Return true if the runtime config enables eye-in-hand depth refinement.
+        """
         refine_cfg = self.cfg.grasp_refinement if self.cfg is not None else {}
         return bool(refine_cfg.get("enabled", False)) and bool(
             refine_cfg.get("use_gripper_depth", True)
@@ -743,13 +751,13 @@ class OSVIAWDAController(AIController):
         self,
         depth_m,
         min_depth=0.01,
-        max_depth=1.00,
+        max_depth=0.10,
     ):
         """
         Convert metric depth to uint8 grayscale using a FIXED range:
 
             0.01 m -> 0
-            1.00 m -> 255
+            0.10 m -> 255
 
         Invalid depth values are mapped to min_depth -> black.
 
@@ -758,11 +766,11 @@ class OSVIAWDAController(AIController):
         """
 
         depth_m = np.asarray(
-            depth_m,
+            copy.deepcopy(depth_m),
             dtype=np.float64,
         )
 
-        depth_safe = depth_m.copy()
+        depth_safe = copy.deepcopy(depth_m)
 
         invalid = (
             ~np.isfinite(depth_safe)
@@ -861,6 +869,7 @@ class OSVIAWDAController(AIController):
     def build_drop_actions(self, coarse_action):
         """Reach the predicted drop target while holding, then open there."""
         release = self._validated_robot_action(coarse_action).copy()
+        release[2]+=0.02
         release[:3] = self._apply_workspace_safety(release[:3])
         release[-1] = float(self.cfg.control.get("gripper_open_position", 0.0))
         carry_to_target = release.copy()
@@ -873,6 +882,7 @@ class OSVIAWDAController(AIController):
         """Build AWDA grasp_primitive's first move (hint + 10 cm, gripper open)."""
         action = self._validated_robot_action(coarse_action).copy()
         hover_height = float(self.cfg.grasp_refinement.get("hover_height_m", 0.05))
+        action[1]-=0.04
         action[:3] = self._apply_workspace_safety(
             action[:3] + np.asarray([0.0, 0.0, hover_height], dtype=np.float64)
         )
@@ -1055,41 +1065,6 @@ class OSVIAWDAController(AIController):
             ]
         )
 
-    # def _depth_refined_grasp_target(self, predicted_xyz):
-    #     predicted_xyz = self._apply_workspace_safety(predicted_xyz)
-    #     if not self._gripper_depth_enabled():
-    #         return predicted_xyz
-
-    #     depth_target = self._estimate_gripper_depth_target_base()
-    #     if depth_target is None:
-    #         print(
-    #             "[OSVIAWDAController] Eye-in-hand localization failed; "
-    #             "using the predicted grasp hint."
-    #         )
-    #         return predicted_xyz
-
-    #     refine_cfg = self.cfg.grasp_refinement
-    #     refined_xyz = np.asarray(depth_target, dtype=np.float64)
-    #     refined_xyz[2] += float(refine_cfg.get("depth_grasp_z_offset_m", 0.0))
-
-    #     max_xy_correction = refine_cfg.get("max_depth_xy_correction_m")
-    #     if max_xy_correction is not None:
-    #         xy_delta = float(np.linalg.norm(refined_xyz[:2] - predicted_xyz[:2]))
-    #         if xy_delta > float(max_xy_correction):
-    #             print(
-    #                 "[OSVIAWDAController] Eye-in-hand target rejected: "
-    #                 f"XY correction {xy_delta:.3f} m exceeds "
-    #                 f"{float(max_xy_correction):.3f} m. Using the predicted hint."
-    #             )
-    #             return predicted_xyz
-
-    #     refined_xyz = self._apply_workspace_safety(refined_xyz)
-    #     print(
-    #         "[OSVIAWDAController] Eye-in-hand grasp target: "
-    #         f"predicted={predicted_xyz.tolist()} refined={refined_xyz.tolist()}"
-    #     )
-    #     return refined_xyz
-
     def _depth_refined_grasp_target(self, predicted_xyz):
         predicted_xyz = np.asarray(predicted_xyz, dtype=np.float64)
 
@@ -1244,7 +1219,7 @@ class OSVIAWDAController(AIController):
         # ---------------------------------------------------------
 
         depth_raw_gray = self._depth_debug_grayscale(
-            depth_m,
+            copy.deepcopy(depth_m),
             min_depth=0.01,
             max_depth=1.00,
         )
@@ -1274,7 +1249,7 @@ class OSVIAWDAController(AIController):
         # ---------------------------------------------------------
 
         centroid = self._find_depth_object_centroid(
-            depth_m,
+            copy.deepcopy(depth_m),
             debug_dir=debug_dir,
         )
 
@@ -1312,7 +1287,7 @@ class OSVIAWDAController(AIController):
         # ---------------------------------------------------------
 
         depth = self._depth_at_centroid(
-            depth_m,
+            copy.deepcopy(depth_m),
             u,
             v,
         )
@@ -1356,7 +1331,7 @@ class OSVIAWDAController(AIController):
         # ---------------------------------------------------------
 
         camera_matrix = self._scaled_depth_camera_matrix(
-            depth_m.shape[:2]
+            copy.deepcopy(depth_m).shape[:2]
         )
 
         point_camera = self._deproject_pixel(
@@ -1450,16 +1425,7 @@ class OSVIAWDAController(AIController):
         except Exception as exc:
             self._print_depth_warning_once(f"Eye-in-hand depth conversion failed ({exc}).")
             return None, None
-        return self._depth_to_meters(raw_depth), frame_id
-
-    def _depth_to_meters(self, depth_image):
-        raw = np.asarray(depth_image)
-        if raw.ndim == 3:
-            raw = raw[:, :, 0]
-        scale = float(self.cfg.grasp_refinement.get("depth_scale", 1.0))
-        if np.issubdtype(raw.dtype, np.integer) and scale == 1.0:
-            scale = 0.001
-        return raw.astype(np.float64) * scale
+        return raw_depth, frame_id
 
     def _find_depth_object_centroid(self, depth_m, debug_dir=None):
         """Find the centroid of the closest object contour in the depth image.
@@ -1500,7 +1466,7 @@ class OSVIAWDAController(AIController):
         max_depth = float(
             refine_cfg.get(
                 "depth_edge_max_depth_m",
-                1.0,
+                0.5,
             )
         )
 
@@ -1521,14 +1487,15 @@ class OSVIAWDAController(AIController):
         blur_kernel = int(
             refine_cfg.get(
                 "depth_edge_blur_kernel_px",
-                5,
+                #5,
+                3,  # --- IGNORE ---
             )
         )
 
         close_kernel_size = int(
             refine_cfg.get(
                 "depth_edge_close_kernel_px",
-                7,
+                11,
             )
         )
 
@@ -1542,7 +1509,7 @@ class OSVIAWDAController(AIController):
         min_contour_area = float(
             refine_cfg.get(
                 "depth_edge_min_contour_area_px",
-                50,
+                100,
             )
         )
 
@@ -1586,7 +1553,7 @@ class OSVIAWDAController(AIController):
         # ---------------------------------------------------------
 
         depth_full_m = np.asarray(
-            depth_m,
+            copy.deepcopy(depth_m),
             dtype=np.float64,
         )
 
@@ -1997,8 +1964,6 @@ class OSVIAWDAController(AIController):
         return u, v
 
     def _depth_at_centroid(self, depth_m, u, v):
-        # window=1 exactly matches AWDA's real_depth[row, col]. A larger value
-        # can be configured on noisy hardware without changing the segmentation.
         window = max(1, int(self.cfg.grasp_refinement.get("depth_window_px", 1)))
         height, width = depth_m.shape[:2]
         half = window // 2

@@ -63,6 +63,8 @@ docker run -it --rm \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev:/dev \
   -v ${UR5e_2f_85_PATH}/zed_camera:/home/ros2_ws/src/zed_camera \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed_docker_cache/resources:/usr/local/zed/resources \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed_docker_cache/settings:/usr/local/zed/settings \
   --name zed_camera_container \
   5.3-ros2-devel-l4t-r38.4
 ```

@@ -10,3 +10,8 @@ cameras:
 
   - camera_name: zed_gripper
     serial_number: 16702584
+    # camera moves with the arm, so it has no fixed relationship to gravity:
+    # gravity-aligned pose tracking (which assumes a static camera) doesn't
+    # apply here. Overrides the global gravity_alignment launch argument for
+    # this camera only.
+    gravity_alignment: false

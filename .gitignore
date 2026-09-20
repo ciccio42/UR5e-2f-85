@@ -11,3 +11,6 @@ checkpoint_folder/
 *png
 saved_images/
 saved_rollouts/
+zed_camera/zed_docker_cache/
+*npy
+*json

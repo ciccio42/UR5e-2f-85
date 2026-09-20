@@ -116,7 +116,7 @@ Visualization Manager:
       Median window: 5
       Min Value: 0
       Name: Image
-      Normalize Range: true
+      Normalize Range: false
       Topic:
         Depth: 5
         Durability Policy: Volatile
