@@ -64,14 +64,14 @@ class InterleavePi0Controller(AIController):
         self.gripper_closed = False
         
         self._fixed_orientation_xyzw: Optional[np.ndarray] = None
-        # self.proprio_p01: Optional[np.ndarray] = None
-        # self.proprio_p99: Optional[np.ndarray] = None
-        # self.action_p01: Optional[np.ndarray] = None
-        # self.action_p99: Optional[np.ndarray] = None
-        self.proprio_mean: Optional[np.ndarray] = None
-        self.proprio_std: Optional[np.ndarray] = None
-        self.action_mean: Optional[np.ndarray] = None
-        self.action_std: Optional[np.ndarray] = None
+        self.proprio_p01: Optional[np.ndarray] = None
+        self.proprio_p99: Optional[np.ndarray] = None
+        self.action_p01: Optional[np.ndarray] = None
+        self.action_p99: Optional[np.ndarray] = None
+        # self.proprio_mean: Optional[np.ndarray] = None
+        # self.proprio_std: Optional[np.ndarray] = None
+        # self.action_mean: Optional[np.ndarray] = None
+        # self.action_std: Optional[np.ndarray] = None
 
         # Debug dell'ultimo chunk generato.
         # Rimangono validi finché il relativo action_buffer non viene consumato.
@@ -236,8 +236,8 @@ class InterleavePi0Controller(AIController):
         #   - nel pre_process() per normalizzare il proprio;
         #   - nel post_process() per denormalizzare le action.
         #
-        #if self.proprio_p01 is None:
-        if self.proprio_mean is None:
+        if self.proprio_p01 is None:
+        #if self.proprio_mean is None:
 
             stats_path = Path(
                 str(self.cfg.dataset_statistics_path)
@@ -258,40 +258,40 @@ class InterleavePi0Controller(AIController):
                 stats = json.load(stats_file)
 
             try:
-                # self.proprio_p01 = np.asarray(
-                #     stats["proprio"]["p01"],
-                #     dtype=np.float32,
-                # )
-                # self.proprio_p99 = np.asarray(
-                #     stats["proprio"]["p99"],
-                #     dtype=np.float32,
-                # )
-
-                # self.action_p01 = np.asarray(
-                #     stats["action"]["p01"],
-                #     dtype=np.float32,
-                # )
-                # self.action_p99 = np.asarray(
-                #     stats["action"]["p99"],
-                #     dtype=np.float32,
-                # )
-                self.proprio_mean = np.asarray(
-                    stats["proprio"]["mean"],
+                self.proprio_p01 = np.asarray(
+                    stats["proprio"]["p01"],
                     dtype=np.float32,
                 )
-                self.proprio_std = np.asarray(
-                    stats["proprio"]["std"],
+                self.proprio_p99 = np.asarray(
+                    stats["proprio"]["p99"],
                     dtype=np.float32,
                 )
 
-                self.action_mean = np.asarray(
-                    stats["action"]["mean"],
+                self.action_p01 = np.asarray(
+                    stats["action"]["p01"],
                     dtype=np.float32,
                 )
-                self.action_std = np.asarray(
-                    stats["action"]["std"],
+                self.action_p99 = np.asarray(
+                    stats["action"]["p99"],
                     dtype=np.float32,
                 )
+                # self.proprio_mean = np.asarray(
+                #     stats["proprio"]["mean"],
+                #     dtype=np.float32,
+                # )
+                # self.proprio_std = np.asarray(
+                #     stats["proprio"]["std"],
+                #     dtype=np.float32,
+                # )
+
+                # self.action_mean = np.asarray(
+                #     stats["action"]["mean"],
+                #     dtype=np.float32,
+                # )
+                # self.action_std = np.asarray(
+                #     stats["action"]["std"],
+                #     dtype=np.float32,
+                # )
 
             except KeyError as exc:
                 raise KeyError(
@@ -302,14 +302,14 @@ class InterleavePi0Controller(AIController):
             # Tutti i vettori devono corrispondere alle 7 dimensioni
             # utilizzate dal modello UR5e.
             for name, values in (
-                # ("proprio_p01", self.proprio_p01),
-                # ("proprio_p99", self.proprio_p99),
-                # ("action_p01", self.action_p01),
-                # ("action_p99", self.action_p99),
-                ("proprio_mean", self.proprio_mean),
-                ("proprio_std", self.proprio_std),
-                ("action_mean", self.action_mean),
-                ("action_std", self.action_std),
+                ("proprio_p01", self.proprio_p01),
+                ("proprio_p99", self.proprio_p99),
+                ("action_p01", self.action_p01),
+                ("action_p99", self.action_p99),
+                # ("proprio_mean", self.proprio_mean),
+                # ("proprio_std", self.proprio_std),
+                # ("action_mean", self.action_mean),
+                # ("action_std", self.action_std),
             ):
                 if values.shape != (7,):
                     raise ValueError(
@@ -319,11 +319,21 @@ class InterleavePi0Controller(AIController):
                     raise ValueError(
                         f"{name} contains non-finite values."
                     )
-            if np.any(self.proprio_std <= 0.0):
-                raise ValueError("proprio_std must contain positive values.")
+            # if np.any(self.proprio_std <= 0.0):
+            #     raise ValueError("proprio_std must contain positive values.")
 
-            if np.any(self.action_std <= 0.0):
-                raise ValueError("action_std must contain positive values.")
+            # if np.any(self.action_std <= 0.0):
+            #     raise ValueError("action_std must contain positive values.")
+
+            if np.any(self.proprio_p99 <= self.proprio_p01):
+                raise ValueError(
+                    "Every proprio p99 must be greater than p01."
+                )
+
+            if np.any(self.action_p99 <= self.action_p01):
+                raise ValueError(
+                    "Every action p99 must be greater than p01."
+                )
 
             print(
                 f"[InterleavePi0Controller] Loaded dataset statistics "
@@ -664,22 +674,22 @@ class InterleavePi0Controller(AIController):
         #
         # Shape:
         #   (7,) -> (1, 1, 7)
-        # proprio_tensor = prepare_proprio_tensor(
-        #     proprio=proprio,
-        #     proprio_p01=self.proprio_p01,
-        #     proprio_p99=self.proprio_p99,
-        # )
-
-        if self.proprio_mean is None or self.proprio_std is None:
-            raise RuntimeError(
-                "Proprio statistics are not loaded."
-            )
-
         proprio_tensor = prepare_proprio_tensor(
             proprio=proprio,
-            proprio_mean=self.proprio_mean,
-            proprio_std=self.proprio_std,
+            proprio_p01=self.proprio_p01,
+            proprio_p99=self.proprio_p99,
         )
+
+        # if self.proprio_mean is None or self.proprio_std is None:
+        #     raise RuntimeError(
+        #         "Proprio statistics are not loaded."
+        #     )
+
+        # proprio_tensor = prepare_proprio_tensor(
+        #     proprio=proprio,
+        #     proprio_mean=self.proprio_mean,
+        #     proprio_std=self.proprio_std,
+        # )
 
         # -------------------------------------------------------------------------
         # Processor multimodale Interleave
@@ -759,8 +769,8 @@ class InterleavePi0Controller(AIController):
         al loop di AIControllerNode.
         """
 
-        #if self.action_p01 is None or self.action_p99 is None:
-        if self.action_mean is None or self.action_std is None:
+        if self.action_p01 is None or self.action_p99 is None:
+        #if self.action_mean is None or self.action_std is None:
             raise RuntimeError(
                 "Action statistics are not loaded. "
                 "load_command() must be called before inference()."
@@ -802,12 +812,7 @@ class InterleavePi0Controller(AIController):
         #
         #   [dx, dy, dz, droll, dpitch, dyaw, gripper]
         #
-        # action_chunk = denormalize_action_chunk(
-        #     action_chunk=output_data["action_chunk"],
-        #     action_p01=self.action_p01,
-        #     action_p99=self.action_p99,
-        # )
-
+        
 
         # denormalize_action_chunk():
         #   - inverte NORMAL su tutte le 7 dimensioni;
@@ -845,10 +850,18 @@ class InterleavePi0Controller(AIController):
 
         action_chunk = denormalize_action_chunk(
             action_chunk=output_data["action_chunk"],
-            action_mean=self.action_mean,
-            action_std=self.action_std,
+            action_p01=self.action_p01,
+            action_p99=self.action_p99,
             action_scale_factor=action_scale_factor,
         )
+        
+
+        # action_chunk = denormalize_action_chunk(
+        #     action_chunk=output_data["action_chunk"],
+        #     action_mean=self.action_mean,
+        #     action_std=self.action_std,
+        #     action_scale_factor=action_scale_factor,
+        # )
 
         self._debug_physical_chunk = action_chunk.copy()
 
@@ -924,10 +937,17 @@ class InterleavePi0Controller(AIController):
                 gripper_commands[i]
             )
 
+            state_before = current_closed
+
+            current_closed = (
+                gripper_command == 255.0
+            )
+
+
 
             self._debug_gripper_trace.append(
                 {
-                    "state_before": current_closed,
+                    "state_before": state_before,
                     "gripper_raw": gripper_raw,
                     "gripper_unit": gripper_unit,
                     "command": gripper_command,
