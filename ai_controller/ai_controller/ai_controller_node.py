@@ -169,6 +169,18 @@ class AIControllerNode(Node):
             epoch = getattr(self.controller, 'epoch', 'unknown')
             wrist_dir = 'wrist' if getattr(self.controller, 'use_wrist_img', False) else 'no_wrist'
             self.save_rollout_path = os.path.join(self.save_rollout_path, f'epoch_{epoch}', wrist_dir)
+        if self.ai_controller_target == 'interleave_pi0_controller':
+            config_name = Path(self.model_config_path).name.lower()
+
+            if 'grounding_bin' in config_name:
+                interleave_variant = 'grounding_bin'
+            else:
+                interleave_variant = 'box_only'
+
+            self.save_rollout_path = os.path.join(
+                self.save_rollout_path,
+                interleave_variant,
+            )
         os.makedirs(self.save_rollout_path, exist_ok=True)
         
         # 2. Set up ROS2 interfaces (publishers, subscribers, services)
@@ -682,8 +694,6 @@ class AIControllerNode(Node):
 
         Trajectory = _get_trajectory_cls(self)
         
-        traj_cnt = int(input("Write the current trajectory count to the console: "))
-        self.traj_cnt = traj_cnt
         
         while rclpy.ok():
         
@@ -693,6 +703,12 @@ class AIControllerNode(Node):
             self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
+
+            traj_number = int(
+                input("Enter trajectory number: ")
+            )
+
+            self.traj_cnt = traj_number
             
             # create a new trajectory
             traj = Trajectory()
@@ -971,10 +987,25 @@ class AIControllerNode(Node):
                     traj_number=self.traj_cnt,
                 )
 
-                self.traj_cnt += 1
-
                 # Dopo un urto/protective stop non provo automaticamente
                 # a continuare a muovere il robot.
+                raise
+            except KeyboardInterrupt as exc:
+                self.get_logger().error(
+                    f'Rollout interrupted at step {step}: {exc}'
+                )
+
+                self.get_logger().warning(
+                    f'Saving partial rollout with {len(traj)} recorded steps.'
+                )
+
+                self.save_rollout(
+                    traj=traj,
+                    save_path=self.save_rollout_path,
+                    task_id=enter_task_id,
+                    traj_number=self.traj_cnt,
+                )
+
                 raise
 
             self.save_rollout(
@@ -983,7 +1014,6 @@ class AIControllerNode(Node):
                               task_id=enter_task_id,
                               traj_number=self.traj_cnt
                               )
-            self.traj_cnt += 1
                     
         
 
