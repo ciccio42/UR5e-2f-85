@@ -18,7 +18,7 @@ Runs the keyframe selection module and saves the extracted keyframes.
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage keyframe \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
   --artifacts-dir /seedo_tests/keyframe_selection
 ```
 
@@ -37,18 +37,18 @@ Runs the SeeDo visual prompting stage (GroundingDINO + SAM + SAM2).
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage visual_prompting \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
-  --expected-keyframes 25 51 \
+  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
+  --expected-keyframes 25 59 \
   --artifacts-dir /seedo_tests/visual_prompting
 ```
 
-NAT version:
+Nut version:
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage visual_prompting \
-  --video /dataset_nat/traj_000_camera_front_modified.mp4 \
+  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
   --expected-keyframes 25 59 \
-  --artifacts-dir /seedo_tests/nat_discovery_test
+  --artifacts-dir /seedo_tests/nut_discovery_test
 ```
 
 Outputs:
@@ -73,11 +73,11 @@ python -m ai_controller.models.seedo_controller.tests \
   --artifacts-dir /seedo_tests/action_planning
 ```
 
-NAT version:
+Nut version:
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage action_planning \
-  --video /dataset_nat/traj_000_camera_front_modified.mp4 \
+  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
   --expected-keyframes 25 59 \
   --artifacts-dir /seedo_tests/action_planning
 ```
@@ -99,7 +99,7 @@ Runs the runtime geometric perception pipeline starting from a captured RGB-D sc
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage scene_perceiver \
-  --scene-dir /scene_capture \
+  --scene-dir /scene_capture/scena_nat \
   --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
   --artifacts-dir /seedo_tests/scene_perceiver
@@ -141,19 +141,19 @@ Runs the complete planning pipeline from the demonstration video and captured ru
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage lmp_generator \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
-  --expected-keyframes 25 51 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_15/traj000/converted/traj000-h264-30fps_modified.mp4 \
+  --expected-keyframes 28 55 \
   --scene-dir /scene_capture \
   --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
   --artifacts-dir /seedo_tests/lmp_generator
 ```
 
-NAT version:
+Nut version:
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage lmp_generator \
-  --video /dataset_nat/traj_000_camera_front_modified.mp4 \
+  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
   --expected-keyframes 25 59 \
   --scene-dir /scene_capture \
   --base-to-table-transform /scene_capture/base_to_table_transform.yaml \

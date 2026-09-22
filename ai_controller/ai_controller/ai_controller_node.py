@@ -8,6 +8,8 @@ import time
 import traceback
 from pathlib import Path
 
+import random
+import torch
 import message_filters
 import numpy as np
 import rclpy
@@ -27,6 +29,22 @@ from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _
 from ai_controller.models.seedo_controller.ai_controller_node_utils import *
 from ai_controller.models.seedo_controller.timing_utils import TIMING
 _trajectory_cls = None
+
+def set_seed(seed: int = 42) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    cv2.setRNGSeed(seed)
+
+    print(f"[REPRODUCIBILITY] Global seed: {seed}")
 
 def _get_trajectory_cls(node):
     """Lazily resolve dataset_collector_pkg's savers.Trajectory class."""
@@ -1925,7 +1943,7 @@ def spin_executor(node=None, executor=None):
 
 def main(args=None):
     rclpy.init()
-
+    set_seed(42)
     node = AIControllerNode()
 
     if node.ai_controller_target == 'seedo_controller':

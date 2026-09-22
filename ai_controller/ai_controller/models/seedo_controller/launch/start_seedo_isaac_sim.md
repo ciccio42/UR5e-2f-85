@@ -85,7 +85,7 @@ docker run --rm -it \
   -e DISPLAY="$DISPLAY" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v "$(pwd)":/home/ros2_ws/src/UR5e-2f-85 \
-  -v "$(pwd)/../dataset_nat_assembly/video":/dataset_nat:ro \
+  -v "$(pwd)/../dataset_nut_assembly/video":/dataset_nut:ro \
   -v "$(pwd)/../test_dataset":/test_dataset:ro \
   -v "$(pwd)/../seedo_tests":/seedo_tests \
   -v "$(pwd)/../scene_capture":/scene_capture:ro \

@@ -190,7 +190,7 @@ class ScenePerceiver:
 
         # Nondeterministic generator.
         # A new camera-pose perturbation is sampled once per ScenePerceiver.run().
-        self._noise_rng = np.random.default_rng()
+        self._noise_rng = np.random.default_rng(42)
 
         self.device = torch.device(
             "cuda:0"
