@@ -583,7 +583,7 @@ import numpy as np
 
 for group in ('action', 'proprio'):
 
-    for key in ('mean', 'std'):
+    for key in ('p01', 'p99'):
 
         if key not in stats[group]:
             raise RuntimeError(
@@ -606,14 +606,19 @@ for group in ('action', 'proprio'):
                 f'{group}.{key} contains non-finite values'
             )
 
-    std = np.asarray(
-        stats[group]['std'],
+    p01 = np.asarray(
+        stats[group]['p01'],
         dtype=np.float32,
     )
 
-    if np.any(std <= 0.0):
+    p99 = np.asarray(
+        stats[group]['p99'],
+        dtype=np.float32,
+    )
+
+    if np.any(p99 <= p01):
         raise RuntimeError(
-            f'{group}.std must contain positive values'
+            f'{group}: every p99 must be greater than p01'
         )
 
 
@@ -635,7 +640,7 @@ if float(cfg.gripper_action_closed_value) != 20.0:
 
 if cfg.final_action_clip_value is not None:
     raise RuntimeError(
-        'final_action_clip_value must be null when using NORMAL'
+        'final_action_clip_value must be null when using BOUNDS'
     )
 
 
