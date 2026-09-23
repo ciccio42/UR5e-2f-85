@@ -91,6 +91,7 @@ docker run --rm -it \
   -v "$(pwd)/../scene_capture":/scene_capture:ro \
   -v "$(pwd)/../test_isaac":/test_isaac \
   -v "$(pwd)/../test_real":/test_real \
+  -v "$(pwd)/saved_trajectories":/home/saved_trajectories \
   -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \
   -e OPENAI_API_KEY="$OPENAI_API_KEY" \
   -e BUILD_SEEDO_ROS=1 \
