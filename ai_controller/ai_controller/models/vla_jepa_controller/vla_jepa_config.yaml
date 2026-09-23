@@ -230,7 +230,7 @@ tasks:
     prompt: "Move the yellow one to the far left"
 
   "23":
-    prompt: "Take the middle-right box and move it to the third bin"
+    prompt: "Take the middle-right box and move it to the first bin"
 
   "24":
     prompt: "Color: green; Destination: second from the left"
