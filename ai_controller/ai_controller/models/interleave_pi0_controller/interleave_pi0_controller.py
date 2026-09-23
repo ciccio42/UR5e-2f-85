@@ -803,8 +803,7 @@ class InterleavePi0Controller(AIController):
         #
         # denormalize_action_chunk():
         #   - denormalizza dx, dy, dz, droll, dpitch, dyaw con p01/p99;
-        #   - lascia invariato il gripper, perché nel training la settima
-        #     componente non veniva normalizzata.
+        #   
         #
         # Output:
         #
@@ -848,6 +847,8 @@ class InterleavePi0Controller(AIController):
 
         self._debug_normalized_chunk = normalized_chunk.copy()
 
+
+        # denormalizzazione BOUNDS + scale factor
         action_chunk = denormalize_action_chunk(
             action_chunk=output_data["action_chunk"],
             action_p01=self.action_p01,
@@ -916,6 +917,50 @@ class InterleavePi0Controller(AIController):
 
         )
 
+        # =============================================================
+        # RETREAT ALLA CHIUSURA DEL GRIPPER
+        # =============================================================
+
+        current_closed = bool(
+            output_data["gripper_closed"]
+        )
+
+        close_idx = None
+
+        for i, gripper_command in enumerate(gripper_commands):
+
+            is_closed = (
+                gripper_command == 255.0
+            )
+
+            # Prima transizione OPEN -> CLOSED
+            if not current_closed and is_closed:
+                close_idx = i
+                break
+
+            current_closed = is_closed
+
+
+        # Nella stessa action in cui chiude:
+        # sposta il target di 1 cm lungo -Y.
+        # Manteniamo lo stesso offset anche nelle action successive.
+        if close_idx is not None:
+            positions[close_idx:, 1] -= 0.01
+
+        # Patch empirica:
+        # appena un target supera y >= 0.75 m,
+        # forza OPEN da quella action in poi.
+        release_indices = np.where(
+            positions[:, 1] >= 0.85
+        )[0]
+
+        if len(release_indices) > 0:
+            first_release_idx = int(release_indices[0])
+
+            gripper_commands[first_release_idx:] = 0.0
+
+        
+
         self._debug_gripper_trace = []
 
         current_closed = bool(
@@ -953,6 +998,7 @@ class InterleavePi0Controller(AIController):
                     "command": gripper_command,
                 }
             )
+
 
         # -------------------------------------------------------------------------
         # 3. Costruzione del formato richiesto da AIControllerNode
