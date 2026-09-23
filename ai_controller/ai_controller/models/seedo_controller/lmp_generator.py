@@ -320,47 +320,39 @@ class LMPSceneWrapper:
                 value if value is not None else ""
             ).strip().casefold()
 
-        picked_category = normalize(
-            step.picked_category
-        )
-
-        picked_color = normalize(
-            step.picked_color
+        picked_label = normalize(
+            step.picked_detector_label
         )
 
         destination_category = normalize(
             step.destination_category
         )
 
-        if not all((
-            picked_category,
-            picked_color,
-            destination_category,
-        )):
+        if not picked_label:
             raise ValueError(
-                "ActionStep contains incomplete semantic information."
+                "ActionStep is missing picked_detector_label. "
+                "Regenerate the legacy action plan."
+            )
+
+        if not destination_category:
+            raise ValueError(
+                "ActionStep is missing destination_category."
             )
 
         # --------------------------------------------------
-        # Resolve the object to pick
+        # Resolve the object to pick using its detector label.
         # --------------------------------------------------
 
         pick_candidates = [
             obj
             for obj in self.scene_state.objects
-            if (
-                normalize(obj.category) == picked_category
-                and normalize(
-                    obj.attributes.get("color")
-                ) == picked_color
-            )
+            if normalize(obj.label) == picked_label
         ]
 
         if len(pick_candidates) != 1:
             raise ValueError(
                 "Cannot uniquely resolve picked object: "
-                f"category={picked_category!r}, "
-                f"color={picked_color!r}, "
+                f"label={picked_label!r}, "
                 f"matches={[obj.object_id for obj in pick_candidates]}"
             )
 

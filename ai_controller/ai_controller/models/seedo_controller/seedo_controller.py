@@ -123,6 +123,9 @@ class SeeDoController(AIController):
                 ),
                 relation=str(step["relation"]),
                 action=str(step["action"]),
+                picked_detector_label=str(
+                    step.get("picked_detector_label", "")
+                ),
             )
             for step in raw_steps
         )
