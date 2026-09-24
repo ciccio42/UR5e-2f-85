@@ -93,6 +93,7 @@ DEFAULT_ROLLOUTS_ROOT = (
     / "saved_rollouts"
     / "interleave_pi0_controller"
     / "pick_place"
+    / "grounding_bin"
 )
 
 DEFAULT_OUTPUT_DIR = SCRIPT_DIR

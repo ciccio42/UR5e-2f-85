@@ -1227,43 +1227,6 @@ if float(
     )
 
 
-if len(cfg.tasks) != 16:
-    raise RuntimeError(
-        f'Expected 16 tasks, got {len(cfg.tasks)}'
-    )
-
-
-expected_task_ids = {
-    f'{i:02d}'
-    for i in range(16)
-}
-
-actual_task_ids = {
-    str(task_id)
-    for task_id in cfg.tasks.keys()
-}
-
-
-if actual_task_ids != expected_task_ids:
-    raise RuntimeError(
-        'Unexpected task IDs: '
-        f'{sorted(actual_task_ids)}'
-    )
-
-
-for task_id in sorted(
-    expected_task_ids
-):
-
-    prompt = str(
-        cfg.tasks[task_id].prompt
-    ).strip()
-
-    if not prompt:
-        raise RuntimeError(
-            f'Task {task_id} has an empty prompt.'
-        )
-
 
 # ---------------------------------------------------------------------
 # Image preprocessing

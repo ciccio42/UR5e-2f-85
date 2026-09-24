@@ -220,22 +220,38 @@ tasks:
   "15":
     prompt: "Pick the red box and place it into the fourth bin"
 
+
+
   "20":
-    prompt: "Grab the red one and put it in the leftmost bin"
+    prompt: "Pick the red box and place it into the leftmost bin"
 
   "21":
-    prompt: "Pick up the object that is blue and move it to the second from the right destination."
+    prompt: "Color: green; Destination: second from the right"
 
   "22":
-    prompt: "Move the yellow one to the far left"
+    prompt: "Move the cube colored red and place it into the bin in front of it"
 
   "23":
     prompt: "Take the middle-right box and move it to the first bin"
 
   "24":
-    prompt: "Color: green; Destination: second from the left"
-
-  "25":
-    prompt: "Move the cube colored red and place it into the bin in front of it"
+    prompt: "Take the third box from the left and move it to the first bin"
 
   
+  
+  
+  
+  "25":
+    prompt: "Color: green; Destination: second bin"
+
+  "26":
+    prompt: "Move the red box and place it into the bin 3"
+
+  "27":
+    prompt: "Pick the cube which color isn't red, blue or yellow and move it in the bin 4"
+
+  "28":
+    prompt: "Into the second bin, move the blue box."
+
+  "29":
+    prompt: "Pick the third box and place it into the red bin"
