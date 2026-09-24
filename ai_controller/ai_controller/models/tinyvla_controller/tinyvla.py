@@ -131,8 +131,13 @@ class TinyVLAPolicy:
         state [eef_pos(3), eef_euler_rpy(3), gripper_open, gripper_closed]."""
         front_image = crop_front_image(obs['camera_front_image'], task_name)
 
-        eye_in_hand = cv2.flip(obs['eye_in_hand_image'], 1)
-        eye_in_hand = cv2.resize(eye_in_hand, (224, 224))
+        # eye_in_hand = cv2.flip(obs['eye_in_hand_image'], 1)
+        # eye_in_hand = cv2.resize(eye_in_hand, (224, 224))
+
+        eye_in_hand = cv2.resize(
+            obs['eye_in_hand_image'],
+            (224, 224)
+        )
 
         images = np.array([
             cv2.resize(front_image, (320, 180)),
