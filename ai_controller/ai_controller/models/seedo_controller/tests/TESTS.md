@@ -99,8 +99,8 @@ Runs the runtime geometric perception pipeline starting from a captured RGB-D sc
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage scene_perceiver \
-  --scene-dir /scene_capture/scene_nut \
-  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
+  --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
   --artifacts-dir /seedo_tests/scene_perceiver
 ```

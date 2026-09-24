@@ -11,7 +11,7 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from moveit_controller_srvs.srv import GoHome
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
-from sensor_msgs.msg import Image, JointState
+from sensor_msgs.msg import Image, JointState, Joy
 from std_srvs.srv import Trigger
 from ur5e_2f_85_teleoperation_msg.msg import TrajectoryState
 
@@ -60,6 +60,9 @@ class DatasetCollector(Node):
 
         self._video_writer = None
         self._video_path = None
+
+        # Human recording button edge detection.
+        self._previous_human_record_button_state = 0
 
         # ============================================================
         # Parameters
@@ -124,6 +127,7 @@ class DatasetCollector(Node):
         # Cameras
         # ------------------------------------------------------------
 
+        # Robot demonstrations keep the original four-camera setup.
         self.declare_parameter(
             'camera_names',
             [
@@ -134,19 +138,20 @@ class DatasetCollector(Node):
             ],
         )
 
-        # Current ZED ROS 2 topic:
-        #
-        # /zed_front/zed_node/left/color/rect/image
-        #
-        # If your setup still exposes the old:
-        #
-        # /zed_front/zed_node/rgb/color/rect/image
-        #
-        # simply override this parameter.
+        # Human demonstrations use only the three external cameras.
+        self.declare_parameter(
+            'human_camera_names',
+            [
+                '/zed_front/zed_node',
+                '/zed_left/zed_node',
+                '/zed_right/zed_node',
+            ],
+        )
 
+        # Topic exposed by the ZED setup currently used in this project.
         self.declare_parameter(
             'rgb_topic_suffix',
-            '/left/color/rect/image',
+            '/rgb/color/rect/image',
         )
 
         self.declare_parameter(
@@ -154,14 +159,38 @@ class DatasetCollector(Node):
             '/depth/depth_registered',
         )
 
+        # Robot demonstrations preserve the previous depth behavior.
         self.declare_parameter(
             'record_depth',
             True,
         )
 
+        # Human samples mirror the reference dataset: RGB frames only.
+        self.declare_parameter(
+            'human_record_depth',
+            False,
+        )
+
         self.declare_parameter(
             'show_images',
             False,
+        )
+
+        # Human recording controls. Circle is button index 1 on the
+        # joystick mapping already used by teleoperator_node.py.
+        self.declare_parameter(
+            'enable_human_joystick',
+            True,
+        )
+
+        self.declare_parameter(
+            'human_joy_topic',
+            '/joy',
+        )
+
+        self.declare_parameter(
+            'human_record_button_index',
+            1,
         )
 
         # ------------------------------------------------------------
@@ -328,10 +357,22 @@ class DatasetCollector(Node):
         # Cameras
         # ------------------------------------------------------------
 
-        self.camera_names = list(
+        self.robot_camera_names = list(
             self.get_parameter(
                 'camera_names'
             ).value
+        )
+
+        self.human_camera_names = list(
+            self.get_parameter(
+                'human_camera_names'
+            ).value
+        )
+
+        self.camera_names = (
+            self.human_camera_names
+            if self.is_human_demo
+            else self.robot_camera_names
         )
 
         self.rgb_topic_suffix = str(
@@ -346,15 +387,45 @@ class DatasetCollector(Node):
             ).value
         )
 
-        self.record_depth = bool(
+        self.robot_record_depth = bool(
             self.get_parameter(
                 'record_depth'
             ).value
         )
 
+        self.human_record_depth = bool(
+            self.get_parameter(
+                'human_record_depth'
+            ).value
+        )
+
+        self.record_depth = (
+            self.human_record_depth
+            if self.is_human_demo
+            else self.robot_record_depth
+        )
+
         self.show_images = bool(
             self.get_parameter(
                 'show_images'
+            ).value
+        )
+
+        self.enable_human_joystick = bool(
+            self.get_parameter(
+                'enable_human_joystick'
+            ).value
+        )
+
+        self.human_joy_topic = str(
+            self.get_parameter(
+                'human_joy_topic'
+            ).value
+        )
+
+        self.human_record_button_index = int(
+            self.get_parameter(
+                'human_record_button_index'
             ).value
         )
 
@@ -486,6 +557,13 @@ class DatasetCollector(Node):
             ).value
         )
 
+        if self.is_human_demo:
+            self.video_camera = {
+                'front_camera': 'camera_front',
+                'left_camera': 'camera_left',
+                'right_camera': 'camera_right',
+            }.get(self.video_camera, self.video_camera)
+
         self.video_fps = float(
             self.get_parameter(
                 'video_fps'
@@ -526,6 +604,11 @@ class DatasetCollector(Node):
                 'sync_slop_sec must be >= 0.'
             )
 
+        if self.human_record_button_index < 0:
+            raise ValueError(
+                'human_record_button_index must be >= 0.'
+            )
+
         if self.video_fps <= 0.0:
             raise ValueError(
                 'video_fps must be > 0.'
@@ -556,20 +639,36 @@ class DatasetCollector(Node):
 
             if 'front' in lower_name:
 
-                obs_name = 'front_camera'
+                obs_name = (
+                    'camera_front'
+                    if self.is_human_demo
+                    else 'front_camera'
+                )
                 self.front_camera_name = camera_name
 
             elif 'left' in lower_name:
 
-                obs_name = 'left_camera'
+                obs_name = (
+                    'camera_left'
+                    if self.is_human_demo
+                    else 'left_camera'
+                )
 
             elif 'right' in lower_name:
 
-                obs_name = 'right_camera'
+                obs_name = (
+                    'camera_right'
+                    if self.is_human_demo
+                    else 'right_camera'
+                )
 
             elif 'gripper' in lower_name:
 
-                obs_name = 'gripper_camera'
+                obs_name = (
+                    'camera_gripper'
+                    if self.is_human_demo
+                    else 'gripper_camera'
+                )
 
             else:
 
@@ -753,7 +852,24 @@ class DatasetCollector(Node):
 
         self.ur_topics_record_subscribers = []
 
+        # Human demonstrations do not need the teleoperator node or any
+        # robot controller. The collector listens directly to /joy.
         self.teleop_state_subscription = None
+        self.human_joy_subscription = None
+
+        if self.enable_human_joystick:
+            self.human_joy_subscription = self.create_subscription(
+                Joy,
+                self.human_joy_topic,
+                self._human_joy_callback,
+                10,
+            )
+
+            self.get_logger().info(
+                f'Human recording joystick enabled: topic='
+                f'{self.human_joy_topic}, button_index='
+                f'{self.human_record_button_index}'
+            )
 
         self.tf_buffer = None
         self.tf_listener = None
@@ -925,6 +1041,63 @@ class DatasetCollector(Node):
         self.ts.registerCallback(
             self.synced_callback
         )
+
+    # ================================================================
+    # HUMAN JOYSTICK START / STOP
+    # ================================================================
+
+    def _human_joy_callback(
+        self,
+        msg,
+    ):
+
+        if not self.is_human_demo:
+            return
+
+        if self.human_record_button_index >= len(msg.buttons):
+            self.get_logger().warn(
+                f'Joystick message has only {len(msg.buttons)} buttons, '
+                f'but human_record_button_index='
+                f'{self.human_record_button_index}.'
+            )
+            return
+
+        button_state = int(
+            msg.buttons[self.human_record_button_index]
+        )
+
+        # Rising-edge detection: holding Circle does not repeatedly toggle.
+        if (
+            button_state == 1
+            and self._previous_human_record_button_state == 0
+        ):
+
+            if not self.is_recording:
+                self._start_new_trajectory(
+                    TrajectoryState.TRAJECTORY_START
+                )
+
+                self.get_logger().info(
+                    'Human recording STARTED from joystick.'
+                )
+
+            elif self.current_t > 0:
+                saved_path = self._finish_trajectory()
+
+                if saved_path is not None:
+                    self.get_logger().info(
+                        f'Human recording STOPPED from joystick. '
+                        f'Saved to {saved_path}'
+                    )
+
+            else:
+                self.get_logger().warn(
+                    'Human recording stopped before any synchronized '
+                    'camera frames were received; discarding sample.'
+                )
+                self._reset_active_trajectory()
+
+        self._previous_human_record_button_state = button_state
 
     # ================================================================
     # HUMAN START / STOP SERVICES
@@ -1203,30 +1376,34 @@ class DatasetCollector(Node):
         # ------------------------------------------------------------
         # Timestamp
         #
-        # Use the timestamp of the first RGB frame.
+        # Keep robot samples unchanged. Human samples intentionally mirror
+        # the reference dataset, whose observations contain only camera
+        # frames and the per-step `done` flag.
         # ------------------------------------------------------------
 
-        if rgb_messages:
+        if not self.is_human_demo:
 
-            stamp = (
-                rgb_messages[0]
-                .header
-                .stamp
-            )
+            if rgb_messages:
 
-            obs['timestamp_ns'] = (
-                int(stamp.sec)
-                * 1_000_000_000
-                + int(stamp.nanosec)
-            )
+                stamp = (
+                    rgb_messages[0]
+                    .header
+                    .stamp
+                )
 
-        else:
+                obs['timestamp_ns'] = (
+                    int(stamp.sec)
+                    * 1_000_000_000
+                    + int(stamp.nanosec)
+                )
 
-            obs['timestamp_ns'] = (
-                self.get_clock()
-                .now()
-                .nanoseconds
-            )
+            else:
+
+                obs['timestamp_ns'] = (
+                    self.get_clock()
+                    .now()
+                    .nanoseconds
+                )
 
         # ------------------------------------------------------------
         # Optional manual annotation on first frame
@@ -1278,30 +1455,43 @@ class DatasetCollector(Node):
         # Save trajectory step
         # ------------------------------------------------------------
 
-        self._trajectory.append(
+        if self.is_human_demo:
 
-            obs=obs,
+            # Match the reference human sample: each step exposes only
+            # `obs` and `done` through Trajectory.get(). Images are
+            # compressed internally by Trajectory and decompressed on read.
+            self._trajectory.append(
+                obs=obs,
+                done=False,
+            )
 
-            reward=0,
+        else:
 
-            done=False,
+            # Robot collection behavior is intentionally preserved.
+            self._trajectory.append(
 
-            info=None,
+                obs=obs,
 
-            action=action,
+                reward=0,
 
-            raw_state={
+                done=False,
 
-                'teleop_state':
-                    self.trajectory_state,
+                info=None,
 
-                'trajectory_id':
-                    self._active_traj_id,
+                action=action,
 
-                'collector_mode':
-                    self.collector_mode,
-            },
-        )
+                raw_state={
+
+                    'teleop_state':
+                        self.trajectory_state,
+
+                    'trajectory_id':
+                        self._active_traj_id,
+
+                    'collector_mode':
+                        self.collector_mode,
+                },
+            )
 
         self.current_t += 1
 
@@ -1380,12 +1570,18 @@ class DatasetCollector(Node):
         obs,
     ):
 
+        front_obs_name = (
+            self.camera_names_obs_name_map[
+                self.front_camera_name
+            ]
+        )
+
         front_image_key = (
-            'front_camera_image'
+            f'{front_obs_name}_image'
         )
 
         front_depth_key = (
-            'front_camera_depth'
+            f'{front_obs_name}_depth'
         )
 
         if front_image_key not in obs:
@@ -1736,7 +1932,9 @@ class DatasetCollector(Node):
         )
 
         self._trajectory = (
-            Trajectory()
+            Trajectory(
+                compress_camera_images=self.is_human_demo
+            )
         )
 
         self.current_t = 0
@@ -1787,40 +1985,57 @@ class DatasetCollector(Node):
 
         try:
 
-            self._trajectory.save(
+            if self.is_human_demo:
 
-                trajectory_path,
+                # The reference human dataset marks the final sample as done.
+                self._trajectory.mark_last_done()
 
-                task_name=(
-                    self.task_name
-                ),
+                # Match the reference top-level schema exactly:
+                # ['traj', 'len', 'env_type', 'task_id']
+                self._trajectory.save(
+                    trajectory_path,
+                    len=self.current_t,
+                    env_type=self.task_name,
+                    task_id=f'{self.variation_id:02d}',
+                )
 
-                variation_id=(
-                    self.variation_id
-                ),
+            else:
 
-                traj_count_id=(
-                    self._active_traj_id
-                ),
+                # Preserve the current robot metadata and behavior.
+                self._trajectory.save(
 
-                human_demo=(
-                    self.is_human_demo
-                ),
+                    trajectory_path,
 
-                collector_mode=(
-                    self.collector_mode
-                ),
+                    task_name=(
+                        self.task_name
+                    ),
 
-                num_steps=(
-                    self.current_t
-                ),
+                    variation_id=(
+                        self.variation_id
+                    ),
 
-                video_path=(
-                    str(video_path)
-                    if video_path is not None
-                    else None
-                ),
-            )
+                    traj_count_id=(
+                        self._active_traj_id
+                    ),
+
+                    human_demo=(
+                        self.is_human_demo
+                    ),
+
+                    collector_mode=(
+                        self.collector_mode
+                    ),
+
+                    num_steps=(
+                        self.current_t
+                    ),
+
+                    video_path=(
+                        str(video_path)
+                        if video_path is not None
+                        else None
+                    ),
+                )
 
         except Exception as exc:
 
@@ -2563,12 +2778,15 @@ class DatasetCollector(Node):
 
                 'Human recording controls:\n'
 
-                '  START:\n'
+                f'  JOYSTICK TOGGLE: topic={self.human_joy_topic}, '
+                f'button_index={self.human_record_button_index}\n'
+
+                '  SERVICE START:\n'
                 '    ros2 service call '
                 '/dataset_collector/start '
                 'std_srvs/srv/Trigger {}\n'
 
-                '  STOP:\n'
+                '  SERVICE STOP:\n'
                 '    ros2 service call '
                 '/dataset_collector/stop '
                 'std_srvs/srv/Trigger {}'
