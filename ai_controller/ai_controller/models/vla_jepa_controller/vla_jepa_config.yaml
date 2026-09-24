@@ -240,7 +240,6 @@ tasks:
   
   
   
-  
   "25":
     prompt: "Color: green; Destination: second bin"
 
@@ -248,7 +247,7 @@ tasks:
     prompt: "Move the red box and place it into the bin 3"
 
   "27":
-    prompt: "Pick the cube which color isn't red, blue or yellow and move it in the bin 4"
+    prompt: "Pick the cube whose color is neither red, blue, nor yellow and move it into bin 4."
 
   "28":
     prompt: "Into the second bin, move the blue box."
