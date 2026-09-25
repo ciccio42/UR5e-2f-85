@@ -654,8 +654,9 @@ def build_tvf_formatter(config, env_name):
         cut into it incorrectly.
         """
         if wrist_crop:
-            img = transforms.ToTensor()(img.copy())
+            img = transforms.ToTensor()(img[:, :, ::-1].copy())
             img = resize(img, size=(config.dataset_cfg.height, config.dataset_cfg.width))
+            print(f"\n\tWrist crop: {wrist_crop}, img shape: {img.shape}")
             return img
 
         task_spec = config.tasks_cfgs.get(env_name, dict())

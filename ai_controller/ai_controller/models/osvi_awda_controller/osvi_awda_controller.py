@@ -19,7 +19,6 @@ import types
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
-import time
 import copy
 
 import cv2
@@ -30,26 +29,6 @@ from PIL import Image as PILImage
 
 from ai_controller.utils.ai_controller import AIController
 from ai_controller.utils.utils import EEF_POS_NAME, EEF_QUAT_NAME
-
-try:
-    import rclpy
-    import rclpy.wait_for_message
-    import tf2_ros
-    from cv_bridge import CvBridge
-    from rclpy.node import Node
-    from rclpy.time import Time as RclpyTime
-    from sensor_msgs.msg import CameraInfo
-    from sensor_msgs.msg import Image as RosImage
-except Exception:
-    # Keeping these imports optional lets preprocessing/projection unit tests run
-    # outside ROS. Refinement reports a clear warning if it is later enabled.
-    rclpy = None
-    tf2_ros = None
-    CvBridge = None
-    Node = None
-    RclpyTime = None
-    CameraInfo = None
-    RosImage = None
 
 IMAGENET_MEAN = np.asarray([0.485, 0.456, 0.406], dtype=np.float32).reshape(3, 1, 1)
 IMAGENET_STD = np.asarray([0.229, 0.224, 0.225], dtype=np.float32).reshape(3, 1, 1)
@@ -163,11 +142,13 @@ class OSVIAWDAController(AIController):
         self.last_execution_phase = None
         self.epoch = "unknown"
         self.global_step = "unknown"
-        self._depth_ros_node = None
-        self._depth_bridge = None
-        self._depth_tf_buffer = None
-        self._depth_tf_listener = None
-        self._depth_tf_spin_node = None
+        # Populated each step by pre_process() from input_data[2] (see
+        # ai_controller_node.py, which gathers this via ROS on this
+        # controller's behalf - mirrors current_eef_pos/quat for
+        # CODController). _depth_camera_matrix/_depth_camera_info_size keep
+        # their names so _scaled_depth_camera_matrix() needs no changes.
+        self._current_depth_data = None
+        self._current_gripper_rgb = None
         self._depth_camera_matrix = None
         self._depth_camera_info_size = None
         self._depth_warning_printed = False
@@ -177,8 +158,6 @@ class OSVIAWDAController(AIController):
         self._last_gripper_centroid_overlay_bgr = None
         self._last_gripper_centroid_uv = None
         self._last_depth_centroid_overlay_bgr = None
-        self._gripper_rgb_warning_printed = False
-        self._depth_frame_override_reported = False
         self._depth_debug_root = Path(
             "/home/ros2_ws/src/"
             "ai_controller/ai_controller/models/osvi_awda_controller/"
@@ -188,7 +167,6 @@ class OSVIAWDAController(AIController):
         self._depth_debug_capture_index = 0
         self._current_depth_debug_dir = None
         super().__init__(model_config)
-        self._maybe_init_gripper_depth_refinement()
 
     def _resolve_path(self, value: str) -> Path:
         path = Path(os.path.expanduser(str(value)))
@@ -505,9 +483,7 @@ class OSVIAWDAController(AIController):
         self._last_depth_centroid_overlay_bgr = None
         self._last_gripper_centroid_uv = None
 
-        self._gripper_rgb_warning_printed = False
         self._depth_warning_printed = False
-        self._depth_frame_override_reported = False
 
     def reset(self):
         """
@@ -533,218 +509,6 @@ class OSVIAWDAController(AIController):
         refine_cfg = self.cfg.grasp_refinement if self.cfg is not None else {}
         return bool(refine_cfg.get("enabled", False)) and bool(
             refine_cfg.get("use_gripper_depth", True)
-        )
-
-    def _maybe_init_gripper_depth_refinement(self):
-        """Create the ROS helpers needed by AWDA's eye-in-hand localization."""
-        if not self._gripper_depth_enabled() or self._depth_ros_node is not None:
-            return
-
-        missing = [
-            name
-            for name, value in (
-                ("rclpy", rclpy),
-                ("tf2_ros", tf2_ros),
-                ("CvBridge", CvBridge),
-                ("Node", Node),
-                ("CameraInfo", CameraInfo),
-                ("RosImage", RosImage),
-                ("RclpyTime", RclpyTime),
-            )
-            if value is None
-        ]
-        if missing:
-            self._print_depth_warning_once(
-                "Eye-in-hand grasp refinement unavailable: missing ROS dependency/dependencies "
-                f"{missing}."
-            )
-            return
-
-        try:
-            if not rclpy.ok():
-                self._print_depth_warning_once(
-                    "Eye-in-hand grasp refinement unavailable: rclpy is not initialized."
-                )
-                return
-
-            refine_cfg = self.cfg.grasp_refinement
-            node_name = str(
-                refine_cfg.get("depth_ros_node_name", "osvi_awda_gripper_depth_refinement")
-            )
-            self._depth_ros_node = Node(node_name)
-            self._depth_bridge = CvBridge()
-            self._depth_tf_buffer = tf2_ros.Buffer()
-            self._depth_tf_listener = tf2_ros.TransformListener(
-                self._depth_tf_buffer,
-                self._depth_ros_node,
-            )
-            print(
-                "[OSVIAWDAController] Eye-in-hand grasp refinement enabled on "
-                f"{self._gripper_depth_topic()}"
-            )
-        except Exception as exc:
-            self._print_depth_warning_once(
-                f"Eye-in-hand grasp refinement unavailable: could not create ROS helpers ({exc})."
-            )
-            if self._depth_ros_node is not None:
-                try:
-                    self._depth_ros_node.destroy_node()
-                except Exception:
-                    pass
-            self._depth_ros_node = None
-            self._depth_bridge = None
-            self._depth_tf_buffer = None
-            self._depth_tf_listener = None
-
-    def _gripper_depth_topic(self):
-        refine_cfg = self.cfg.grasp_refinement
-        topic = refine_cfg.get("depth_topic")
-        if topic:
-            return str(topic)
-        camera_name = str(refine_cfg.get("depth_camera_name", "zed_gripper"))
-        camera_node = str(refine_cfg.get("depth_camera_node_name", "zed_node"))
-        return f"/{camera_name}/{camera_node}/depth/depth_registered"
-
-    def _gripper_rgb_topic(self):
-        refine_cfg = self.cfg.grasp_refinement
-
-        topic = refine_cfg.get("rgb_topic")
-
-        if topic:
-            return str(topic)
-
-        camera_name = str(
-            refine_cfg.get(
-                "depth_camera_name",
-                "zed_gripper",
-            )
-        )
-
-        camera_node = str(
-            refine_cfg.get(
-                "depth_camera_node_name",
-                "zed_node",
-            )
-        )
-
-        return (
-            f"/{camera_name}/{camera_node}"
-            "/rgb/color/rect/image"
-        )
-
-    def _gripper_camera_info_topic(self):
-        refine_cfg = self.cfg.grasp_refinement
-        topic = refine_cfg.get("camera_info_topic")
-        if topic:
-            return str(topic)
-        camera_name = str(refine_cfg.get("depth_camera_name", "zed_gripper"))
-        camera_node = str(refine_cfg.get("depth_camera_node_name", "zed_node"))
-        return f"/{camera_name}/{camera_node}/rgb/color/rect/camera_info"
-
-    def _gripper_depth_source_frame(self, message_frame_id):
-        """Resolve the TF source frame for the registered gripper depth image.
-
-        Some ZED launch configurations use ``zed_gripper`` for the ROS topic
-        namespace while the robot description names the same physical camera
-        ``zed_mini``.  The optional override reconciles those names without
-        changing either URDF or the incoming image message.
-        """
-        message_frame_id = str(message_frame_id or "").lstrip("/")
-        override = str(
-            self.cfg.grasp_refinement.get("depth_source_frame_override", "") or ""
-        ).lstrip("/")
-        return override or message_frame_id
-
-    def set_depth_tf_buffer(self, tf_buffer, spin_node=None):
-        """Reuse the parent ROS node's populated TF buffer for depth projection."""
-        if tf_buffer is None:
-            raise ValueError("The shared depth TF buffer cannot be None.")
-        self._depth_tf_buffer = tf_buffer
-        self._depth_tf_spin_node = spin_node
-        print("[OSVIAWDAController] Using the AI controller node's shared TF buffer.")
-
-    def _ensure_gripper_depth_ros_ready(self):
-        if not self._gripper_depth_enabled():
-            return False
-        if self._depth_ros_node is None:
-            self._maybe_init_gripper_depth_refinement()
-        return self._depth_ros_node is not None
-
-    def _read_gripper_rgb_image(self):
-        """
-        Read one RGB frame from the wrist/gripper camera.
-
-        Returned image is BGR uint8 because it is used directly
-        by OpenCV for visualization.
-        """
-        if not self._ensure_gripper_depth_ros_ready():
-            return None
-
-        refine_cfg = self.cfg.grasp_refinement
-
-        topic = self._gripper_rgb_topic()
-
-        timeout = float(
-            refine_cfg.get(
-                "rgb_timeout_sec",
-                0.5,
-            )
-        )
-
-        self._spin_depth_ros_once()
-
-        try:
-            ok, msg = (
-                rclpy.wait_for_message.wait_for_message(
-                    topic=topic,
-                    msg_type=RosImage,
-                    node=self._depth_ros_node,
-                    time_to_wait=timeout,
-                )
-            )
-
-        except Exception as exc:
-            if not self._gripper_rgb_warning_printed:
-                print(
-                    "[OSVIAWDAController] "
-                    "Gripper RGB read failed on "
-                    f"{topic}: {exc}"
-                )
-                self._gripper_rgb_warning_printed = True
-
-            return None
-
-        if not ok:
-            if not self._gripper_rgb_warning_printed:
-                print(
-                    "[OSVIAWDAController] "
-                    "No gripper RGB image received on "
-                    f"{topic}."
-                )
-                self._gripper_rgb_warning_printed = True
-
-            return None
-
-        try:
-            image = self._depth_bridge.imgmsg_to_cv2(
-                msg,
-                desired_encoding="bgr8",
-            )
-
-        except Exception as exc:
-            if not self._gripper_rgb_warning_printed:
-                print(
-                    "[OSVIAWDAController] "
-                    "Gripper RGB conversion failed: "
-                    f"{exc}"
-                )
-                self._gripper_rgb_warning_printed = True
-
-            return None
-
-        return np.asarray(
-            image,
-            dtype=np.uint8,
         )
 
     def _depth_debug_grayscale(
@@ -1191,10 +955,28 @@ class OSVIAWDAController(AIController):
 
     def _estimate_gripper_depth_target_base(self):
 
-        if (
-            not self._ensure_gripper_depth_ros_ready()
-            or not self._load_depth_camera_info()
-        ):
+        depth_data = self._current_depth_data
+        if not depth_data or depth_data.get("transform") is None:
+            self._print_depth_warning_once(
+                "Eye-in-hand localization skipped: depth/transform not available "
+                "(ai_controller_node.py couldn't get CameraInfo or the depth_camera -> "
+                f"{self.cfg.projection.get('output_frame', 'base_link')} transform)."
+            )
+            return None
+
+        depth_m = depth_data.get("image")
+        if depth_m is None:
+            self._print_depth_warning_once(
+                "Eye-in-hand localization skipped: no gripper depth frame received yet."
+            )
+            return None
+
+        self._depth_camera_matrix = depth_data.get("camera_matrix")
+        self._depth_camera_info_size = depth_data.get("camera_info_size")
+        if self._depth_camera_matrix is None:
+            self._print_depth_warning_once(
+                "Eye-in-hand localization skipped: gripper CameraInfo not available."
+            )
             return None
 
         # ---------------------------------------------------------
@@ -1202,17 +984,6 @@ class OSVIAWDAController(AIController):
         # ---------------------------------------------------------
 
         debug_dir = self._create_depth_debug_capture_dir()
-
-        time.sleep(1)
-
-        # ---------------------------------------------------------
-        # DEPTH
-        # ---------------------------------------------------------
-
-        depth_m, frame_id = self._read_gripper_depth_image()
-
-        if depth_m is None:
-            return None
 
         # ---------------------------------------------------------
         # SAVE RAW DEPTH AS FIXED 0.1-1.0 m GRAYSCALE
@@ -1234,7 +1005,7 @@ class OSVIAWDAController(AIController):
         # READ + SAVE RAW GRIPPER RGB
         # ---------------------------------------------------------
 
-        gripper_rgb = self._read_gripper_rgb_image()
+        gripper_rgb = self._current_gripper_rgb
 
         if gripper_rgb is not None:
 
@@ -1341,91 +1112,7 @@ class OSVIAWDAController(AIController):
             camera_matrix,
         )
 
-        return self._transform_depth_point_to_target_frame(
-            point_camera,
-            frame_id,
-        )
-
-    def _load_depth_camera_info(self):
-        if self._depth_camera_matrix is not None:
-            return True
-
-        refine_cfg = self.cfg.grasp_refinement
-        topic = self._gripper_camera_info_topic()
-        retries = max(1, int(refine_cfg.get("camera_info_retries", 3)))
-        timeout = float(refine_cfg.get("camera_info_timeout_sec", 0.5))
-        for _ in range(retries):
-            self._spin_depth_ros_once()
-            try:
-                ok, msg = rclpy.wait_for_message.wait_for_message(
-                    topic=topic,
-                    msg_type=CameraInfo,
-                    node=self._depth_ros_node,
-                    time_to_wait=timeout,
-                )
-            except Exception as exc:
-                self._print_depth_warning_once(
-                    f"Eye-in-hand CameraInfo read failed on {topic} ({exc})."
-                )
-                return False
-            if ok:
-                camera_matrix = np.asarray(msg.k, dtype=np.float64).reshape((3, 3))
-                if camera_matrix[0, 0] <= 0.0 or camera_matrix[1, 1] <= 0.0:
-                    self._print_depth_warning_once(
-                        f"Eye-in-hand CameraInfo has invalid intrinsics on {topic}."
-                    )
-                    return False
-                self._depth_camera_matrix = camera_matrix
-                self._depth_camera_info_size = (int(msg.width), int(msg.height))
-                return True
-
-        self._print_depth_warning_once(
-            f"Eye-in-hand localization skipped: no CameraInfo received on {topic}."
-        )
-        return False
-
-    def _read_gripper_depth_image(self):
-        refine_cfg = self.cfg.grasp_refinement
-        topic = self._gripper_depth_topic()
-        timeout = float(refine_cfg.get("depth_timeout_sec", 0.5))
-        self._spin_depth_ros_once()
-        try:
-            ok, msg = rclpy.wait_for_message.wait_for_message(
-                topic=topic,
-                msg_type=RosImage,
-                node=self._depth_ros_node,
-                time_to_wait=timeout,
-            )
-        except Exception as exc:
-            self._print_depth_warning_once(f"Eye-in-hand depth read failed on {topic} ({exc}).")
-            return None, None
-        if not ok:
-            self._print_depth_warning_once(
-                f"Eye-in-hand localization skipped: no depth image received on {topic}."
-            )
-            return None, None
-
-        message_frame_id = str(getattr(msg.header, "frame_id", "") or "").lstrip("/")
-        frame_id = self._gripper_depth_source_frame(message_frame_id)
-        if not frame_id:
-            self._print_depth_warning_once(
-                "Eye-in-hand localization skipped: depth image has no frame_id."
-            )
-            return None, None
-
-        if frame_id != message_frame_id and not self._depth_frame_override_reported:
-            reported = message_frame_id or "<empty>"
-            print(
-                "[OSVIAWDAController] Using configured depth source frame "
-                f"{frame_id!r} instead of message frame {reported!r}."
-            )
-            self._depth_frame_override_reported = True
-        try:
-            raw_depth = self._depth_bridge.imgmsg_to_cv2(msg, desired_encoding="passthrough")
-        except Exception as exc:
-            self._print_depth_warning_once(f"Eye-in-hand depth conversion failed ({exc}).")
-            return None, None
-        return raw_depth, frame_id
+        return self._transform_depth_point_to_target_frame(point_camera)
 
     def _find_depth_object_centroid(self, depth_m, debug_dir=None):
         """Find the centroid of the closest object contour in the depth image.
@@ -1487,8 +1174,7 @@ class OSVIAWDAController(AIController):
         blur_kernel = int(
             refine_cfg.get(
                 "depth_edge_blur_kernel_px",
-                #5,
-                3,  # --- IGNORE ---
+                3,
             )
         )
 
@@ -2004,85 +1690,47 @@ class OSVIAWDAController(AIController):
         y = (float(v) - center_y) * depth / focal_y
         return np.asarray([x, y, depth], dtype=np.float64)
 
-    def _transform_depth_point_to_target_frame(self, point_camera, camera_frame):
-        refine_cfg = self.cfg.grasp_refinement
-        target_frame = str(
-            refine_cfg.get("depth_target_frame")
-            or self.cfg.projection.get("output_frame", "base_link")
-        ).lstrip("/")
-        camera_frame = str(camera_frame).lstrip("/")
-        if target_frame == camera_frame:
-            return np.asarray(point_camera, dtype=np.float64)
-
-        transform = self._lookup_depth_transform(target_frame, camera_frame)
+    def _transform_depth_point_to_target_frame(self, point_camera):
+        """Applies the depth_camera -> target_frame transform ai_controller_node.py
+        already looked up this step (self._current_depth_data['transform']), instead
+        of doing a TF lookup here."""
+        transform = self._current_depth_data.get("transform") if self._current_depth_data else None
         if transform is None:
             return None
-        translation_msg = transform.transform.translation
-        rotation_msg = transform.transform.rotation
-        translation = np.asarray(
-            [translation_msg.x, translation_msg.y, translation_msg.z], dtype=np.float64
-        )
-        rotation = self._quat_xyzw_to_mat(
-            np.asarray(
-                [rotation_msg.x, rotation_msg.y, rotation_msg.z, rotation_msg.w],
-                dtype=np.float64,
-            )
-        )
+        rotation = transform["rotation"]
+        translation = transform["translation"]
         return rotation @ np.asarray(point_camera, dtype=np.float64) + translation
-
-    def _lookup_depth_transform(self, target_frame, source_frame):
-        timeout = float(self.cfg.grasp_refinement.get("tf_timeout_sec", 0.5))
-        spin_interval = 0.02
-        attempts = max(1, int(np.ceil(timeout / spin_interval)))
-        last_exception = None
-        for _ in range(attempts):
-            try:
-                return self._depth_tf_buffer.lookup_transform(
-                    target_frame,
-                    source_frame,
-                    RclpyTime(),
-                )
-            except Exception as exc:
-                last_exception = exc
-                self._spin_depth_ros_once(spin_interval)
-
-        self._print_depth_warning_once(
-            "Eye-in-hand localization skipped: could not transform "
-            f"{source_frame} -> {target_frame} ({last_exception})."
-        )
-        return None
-
-    def _spin_depth_ros_once(self, timeout_sec=0.02):
-        spin_node = self._depth_tf_spin_node or self._depth_ros_node
-        if spin_node is None or rclpy is None:
-            return
-        try:
-            rclpy.spin_once(spin_node, timeout_sec=timeout_sec)
-        except Exception:
-            pass
 
     def _print_depth_warning_once(self, message):
         if not self._depth_warning_printed:
             print(f"[OSVIAWDAController] {message}")
             self._depth_warning_printed = True
 
-    @staticmethod
-    def _quat_xyzw_to_mat(quaternion):
-        quaternion = np.asarray(quaternion, dtype=np.float64)
-        norm = float(np.linalg.norm(quaternion))
-        if norm <= 1e-8:
-            return np.eye(3, dtype=np.float64)
-        x, y, z, w = quaternion / norm
-        xx, yy, zz = x * x, y * y, z * z
-        xy, xz, yz = x * y, x * z, y * z
-        wx, wy, wz = w * x, w * y, w * z
-        return np.asarray(
-            [
-                [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
-                [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
-                [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
-            ],
-            dtype=np.float64,
+    def _update_runtime_sensor_inputs(self, input_data):
+        """Cache runtime sensor inputs supplied by the caller.
+
+        The controller intentionally has no ROS dependency: depth, camera
+        intrinsics and the camera->target-frame transform are gathered by the
+        runtime (AIControllerNode on the real robot) and passed here as plain
+        Python/NumPy data.
+
+        This helper is also called when resuming a pending grasp so that the
+        depth/RGB used for refinement are the *new* post-hover observations.
+        """
+        if input_data is None or len(input_data) < 1:
+            raise ValueError("OSVI-AWDA inference requires at least an image list.")
+
+        images = input_data[0]
+
+        # Optional payload: callers such as offline tests may provide only
+        # (images, robot_state).
+        self._current_depth_data = input_data[2] if len(input_data) > 2 else None
+
+        gripper_index = int(self.cfg.grasp_refinement.get("gripper_camera_index", 3))
+        self._current_gripper_rgb = (
+            cv2.cvtColor(images[gripper_index], cv2.COLOR_RGB2BGR)
+            if 0 <= gripper_index < len(images)
+            else None
         )
 
     def pre_process(self, input_data):
@@ -2092,6 +1740,8 @@ class OSVIAWDAController(AIController):
             )
 
         images, robot_state = input_data[0], input_data[1]
+        self._update_runtime_sensor_inputs(input_data)
+
         front_index = int(self.cfg.image.get("front_camera_index", 0))
         if front_index >= len(images):
             raise IndexError(
@@ -2633,7 +2283,7 @@ class OSVIAWDAController(AIController):
         but scaling is handled if their resolutions differ.
         """
         if rgb is None:
-            rgb = self._read_gripper_rgb_image()
+            rgb = self._current_gripper_rgb
 
         if rgb is None:
             return None
@@ -3405,9 +3055,11 @@ class OSVIAWDAController(AIController):
         and returns the remainder without running the model a second time.
         """
         if self._pending_grasp_plan is not None:
-            # The previous call ended at grasp-hover. The unchanged ROS node has
-            # now executed that action, so depth localization happens at the same
-            # point as grasp_primitive() in the OSVI-AWDA repository.
+            # The previous call ended at grasp-hover. The runtime has now
+            # executed that action and supplied a fresh observation. Cache those
+            # NEW sensor values before resuming, otherwise refinement would reuse
+            # the pre-hover depth/RGB from the previous inference call.
+            self._update_runtime_sensor_inputs(input_data)
             actions = self._resume_pending_grasp()
             # _resume_pending_grasp() has just run the wrist-depth
             # localization. Therefore the gripper RGB panel now contains

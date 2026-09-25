@@ -587,6 +587,7 @@ class VideoImitation(nn.Module):
         # wrist (eye-in-hand) camera: own encoder, agent-observation only (no demo pairing,
         # since the demo trajectory does not have a matching wrist view)
         self._use_wrist_img = action_cfg.get("use_wrist_img", False)
+        
         self._embed_wrist = None
         if self._use_wrist_img:
             self._embed_wrist = _TransformerFeatures(

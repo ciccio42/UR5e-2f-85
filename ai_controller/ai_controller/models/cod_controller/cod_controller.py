@@ -57,7 +57,7 @@ class CODController(AIController):
 
         # max per-axis (x, y, z) translation step, in meters, allowed from
         # the robot's current position in a single inference step.
-        self.max_position_step = 0.01
+        self.max_position_step = 0.02
 
         # once the model first predicts gripper closure, the arm keeps
         # descending (still bounded by max_position_step) instead of
@@ -186,7 +186,7 @@ class CODController(AIController):
                             start_moving = t
                         elif state != 'moving' and start_moving != 0 and end_moving == 0:
                             end_moving = t
-                            breakdata
+                            break
                     n = start_moving + int((end_moving-start_moving)/2)
                 selected_frames_indx.append(n)
 
@@ -400,8 +400,10 @@ class CODController(AIController):
                     # z target reached: close now, nudging the gripper a little
                     # forward to avoid collision when closing
                     desired_position = desired_position.copy()
+                    # desired_position[1] += 0.01
+                    desired_position[2] -= 0.02
+                    desired_position[0] += 0.01
                     desired_position[1] += 0.01
-                    desired_position[2] -= 0.04
                     gripper_finger_pos = 255
                     self.gripper_closed = True
                     self.has_grasped = True
@@ -411,7 +413,7 @@ class CODController(AIController):
             # keep the gripper closed until the model predicts an opening, to avoid
             # accidentally dropping the object while moving to the place location
             gripper_finger_pos = 255
-        elif predicted_gripper < 0.1 and self.gripper_closed and releasing_at_place:
+        elif predicted_gripper < 0.4 and self.gripper_closed and releasing_at_place:
             gripper_finger_pos = 0
             self.gripper_closed = False
         else:

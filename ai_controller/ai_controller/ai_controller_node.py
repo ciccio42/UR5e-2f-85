@@ -1,4 +1,3 @@
-import functools
 import importlib
 import json
 import math
@@ -11,6 +10,7 @@ from pathlib import Path
 import message_filters
 import numpy as np
 import rclpy
+import rclpy.wait_for_message
 import cv2
 import tf2_ros
 from cv_bridge import CvBridge
@@ -18,7 +18,7 @@ from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image as RosImage, JointState
+from sensor_msgs.msg import CameraInfo, Image as RosImage, JointState
 from PIL import Image
 import os
 from moveit_controller_srvs.srv import GoHome, GoToPose
@@ -70,15 +70,19 @@ class AIControllerNode(Node):
                                             '/zed_right/zed_node/rgb/color/rect/image',
                                             '/zed_gripper/zed_node/rgb/color/rect/image'])
         # Extra cameras (RGB already flows through camera_topic above; these
-        # are the matching depth topics) saved into the rollout alongside
-        # camera_front_image, purely for logging/video purposes - NOT fed to
-        # the controller's inference.
+        # are the matching depth topics). Saved into the rollout alongside
+        # camera_front_image for logging/video purposes. The gripper one is
+        # also fed to osvi_awda_controller's grasp-refinement (via input_data,
+        # see the control loop below) so that controller needs no ROS of its
+        # own - mirrors how CODController receives current_eef_pos/quat.
         self.declare_parameter('camera_lateral_left_depth_topic',
                                                     '/zed_left/zed_node/depth/depth_registered')
         self.declare_parameter('camera_lateral_right_depth_topic',
                                                     '/zed_right/zed_node/depth/depth_registered')
         self.declare_parameter('camera_gripper_depth_topic',
                                                     '/zed_gripper/zed_node/depth/depth_registered')
+        self.declare_parameter('gripper_camera_info_topic',
+                                                    '/zed_gripper/zed_node/rgb/color/rect/camera_info')
         self.declare_parameter('task_name',
                                             "pick_place")
         self.declare_parameter('demo_path', 
@@ -117,7 +121,14 @@ class AIControllerNode(Node):
             'camera_lateral_right_depth': self.get_parameter('camera_lateral_right_depth_topic').get_parameter_value().string_value,
             'camera_gripper_depth': self.get_parameter('camera_gripper_depth_topic').get_parameter_value().string_value,
         }
-        self.latest_depth_images = {}
+        self.gripper_camera_info_topic = self.get_parameter('gripper_camera_info_topic').get_parameter_value().string_value
+        # populated by synced_images_callback (RGB+depth are now in one
+        # ApproximateTimeSynchronizer group, see below)
+        self.latest_synced_depths = {}
+        self.latest_depth_frame_ids = {}
+        # gripper intrinsics, fetched once (see _fetch_gripper_camera_info)
+        self.gripper_camera_matrix = None
+        self.gripper_camera_info_size = None
         self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
         self.demo_path = self.get_parameter('demo_path').get_parameter_value().string_value
         self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
@@ -191,11 +202,6 @@ class AIControllerNode(Node):
         self.create_subscription(JointState, self.joint_states_topic, self._joint_state_callback, 10)
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
-        if self.ai_controller_target == 'osvi_awda_controller':
-            # Reuse the node's continuously populated TF graph for eye-in-hand
-            # projection. The controller's auxiliary node is still used to read
-            # CameraInfo/depth, but no longer relies on a second, partial TF cache.
-            self.controller.set_depth_tf_buffer(self.tf_buffer, spin_node=self)
         if self.debug_mode:
             self.get_logger().warning(
                 'DEBUG MODE ENABLED: camera topics will NOT be used. '
@@ -233,24 +239,24 @@ class AIControllerNode(Node):
                 message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
                 for topic in self.camera_topic
             ]
+            # Depth subscribers (lateral_left/lateral_right/gripper) are part of
+            # the SAME sync group as the RGB cameras above, so every recorded
+            # step's depth frames are time-aligned with the RGB used for that
+            # step. synced_images_callback splits the combined message tuple
+            # back into self.latest_synced_images (RGB only, unchanged shape/
+            # order for every controller) and self.latest_synced_depths (extra,
+            # only consumed when ai_controller_target == 'osvi_awda_controller').
+            self.depth_subs = [
+                message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
+                for topic in self.extra_depth_topics.values()
+            ]
             self.camera_sync = message_filters.ApproximateTimeSynchronizer(
-                self.camera_subs, queue_size=10, slop=100
+                self.camera_subs + self.depth_subs, queue_size=10, slop=100
             )
             self.camera_sync.registerCallback(self.synced_images_callback)
 
-            # Extra depth subscribers (lateral_left/lateral_right/gripper), for
-            # logging/video only: kept independent of camera_sync above since
-            # depth frames need 'passthrough' decoding (32FC1 meters), not the
-            # 'rgb8' used for the RGB cameras, and don't need to be in lockstep
-            # with the control loop - the most recently received frame per
-            # camera is used when a rollout step is recorded.
-            self.depth_subs = [
-                self.create_subscription(
-                    RosImage, topic,
-                    functools.partial(self._depth_image_callback, key),
-                    qos_profile_sensor_data)
-                for key, topic in self.extra_depth_topics.items()
-            ]
+            if self.ai_controller_target == 'osvi_awda_controller':
+                self._fetch_gripper_camera_info()
 
         self.traj_cnt = 0
         self.max_step = 200
@@ -278,15 +284,21 @@ class AIControllerNode(Node):
             raise KeyboardInterrupt('Esc pressed')
 
     def synced_images_callback(self, *image_msgs):
-        """Called once per cycle when all camera topics have a message within the sync window."""
+        """Called once per cycle when all camera+depth topics have a message within the
+        sync window. Splits the combined tuple back into RGB (self.latest_synced_images,
+        same order/shape as camera_topic - what every controller's images arg is) and
+        depth (self.latest_synced_depths, extra - only osvi_awda_controller uses it)."""
+        n_rgb = len(self.camera_topic)
+        rgb_msgs, depth_msgs = image_msgs[:n_rgb], image_msgs[n_rgb:]
         self.latest_synced_images = [
-            self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8') for msg in image_msgs
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8') for msg in rgb_msgs
         ]
+        self.latest_synced_depths = {}
+        self.latest_depth_frame_ids = {}
+        for key, msg in zip(self.extra_depth_topics.keys(), depth_msgs):
+            self.latest_synced_depths[key] = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.latest_depth_frame_ids[key] = str(getattr(msg.header, 'frame_id', '') or '').lstrip('/')
         self.synced_images_event.set()
-
-    def _depth_image_callback(self, key, msg):
-        """Stores the most recent depth frame (meters, passthrough) for one of the extra cameras."""
-        self.latest_depth_images[key] = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
 
     def get_synced_images(self, timeout_sec=5.0):
         """Block (while spinning callbacks) until a fresh synchronized set of camera images arrives."""
@@ -304,6 +316,62 @@ class AIControllerNode(Node):
                 return None
         self._raise_if_esc_pressed()
         return self.latest_synced_images
+
+    def _fetch_gripper_camera_info(self, timeout_sec=2.0, retries=5):
+        """One-shot fetch of the gripper camera intrinsics (they don't change over
+        time, unlike the depth image/pose), so osvi_awda_controller never has to
+        subscribe to CameraInfo itself."""
+        for attempt in range(retries):
+            try:
+                ok, msg = rclpy.wait_for_message.wait_for_message(
+                    topic=self.gripper_camera_info_topic,
+                    msg_type=CameraInfo,
+                    node=self,
+                    time_to_wait=timeout_sec,
+                )
+            except Exception as exc:
+                self.get_logger().warning(
+                    f'Gripper CameraInfo read failed on {self.gripper_camera_info_topic} ({exc}).')
+                continue
+            if ok:
+                camera_matrix = np.asarray(msg.k, dtype=np.float64).reshape((3, 3))
+                if camera_matrix[0, 0] > 0.0 and camera_matrix[1, 1] > 0.0:
+                    self.gripper_camera_matrix = camera_matrix
+                    self.gripper_camera_info_size = (int(msg.width), int(msg.height))
+                    self.get_logger().info(
+                        f'Gripper CameraInfo received on {self.gripper_camera_info_topic}.')
+                    return
+            self.get_logger().warning(
+                f'Waiting for gripper CameraInfo on {self.gripper_camera_info_topic} '
+                f'(attempt {attempt + 1}/{retries})...')
+        self.get_logger().error(
+            f'Could not get gripper CameraInfo on {self.gripper_camera_info_topic} '
+            f'after {retries} attempts; osvi_awda_controller depth grasp refinement will be skipped.')
+
+    def _lookup_gripper_depth_transform(self):
+        """Looks up the gripper depth camera's optical frame -> self.frame_id transform,
+        as plain numpy (rotation matrix + translation), for osvi_awda_controller's grasp
+        refinement - mirrors how current_eef_pos/quat are looked up for CODController."""
+        frame_id = self.latest_depth_frame_ids.get('camera_gripper_depth')
+        if not frame_id:
+            return None
+        override = ''
+        cfg = getattr(self.controller, 'cfg', None)
+        if cfg is not None:
+            override = str(cfg.grasp_refinement.get('depth_source_frame_override', '') or '')
+        source_frame = override or frame_id
+        try:
+            transform = self.tf_buffer.lookup_transform(self.frame_id, source_frame, rclpy.time.Time())
+        except Exception as exc:
+            self.get_logger().warning(
+                f'Could not look up transform {source_frame} -> {self.frame_id}: {exc}')
+            return None
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        return {
+            'rotation': _quat2mat([q.x, q.y, q.z, q.w]),
+            'translation': np.array([t.x, t.y, t.z], dtype=np.float64),
+        }
 
     def _add_dataset_collector_scripts_to_path(self):
         """Best-effort: make dataset_collector_pkg's savers.Trajectory importable."""
@@ -679,12 +747,14 @@ class AIControllerNode(Node):
 
                     # 1. Get sensor data (e.g., camera images)
                     images = self.get_synced_images()
+                    print(f"Length of images: {len(images) if images is not None else 'None'}")
                     if images is None:
                         self.get_logger().error('Skipping step: failed to get synchronized camera images.')
                         continue
                     # images is a list of cv2/numpy arrays in the same order as self.camera_topic
                     # save the images with PIL format for debugging
                     for i, image in enumerate(images):
+                        print(f'Saving image {i} for step {step} to {save_path}/camera_image_{i}.png')
                         img = Image.fromarray(image)
                         img.save(f'{save_path}/camera_image_{i}.png')
 
@@ -713,10 +783,22 @@ class AIControllerNode(Node):
                         self.controller.current_eef_pos = robot_state.get(EEF_POS_NAME)
                         self.controller.current_eef_quat = robot_state.get(EEF_QUAT_NAME)
 
+                    depth_data = None
+                    if self.ai_controller_target == 'osvi_awda_controller':
+                        # everything osvi_awda_controller's grasp refinement needs,
+                        # gathered here so that controller has no ROS of its own -
+                        # mirrors current_eef_pos/quat above for CODController
+                        depth_data = {
+                            'image': self.latest_synced_depths.get('camera_gripper_depth'),
+                            'camera_matrix': self.gripper_camera_matrix,
+                            'camera_info_size': self.gripper_camera_info_size,
+                            'transform': self._lookup_gripper_depth_transform(),
+                        }
+
                     # 3. Perform inference using the AI controller
                     step_save_path = f'{save_path}/step_{step}'
                     out = self.controller.inference(
-                                                    input_data=[images, states],
+                                                    input_data=[images, states, depth_data],
                                                     t=step,
                                                     save_path=step_save_path)
                     predicted_bb = None
@@ -739,8 +821,54 @@ class AIControllerNode(Node):
                             new_action[3:7] = quat
                             new_action[7] = actions[i][6] # gripper position remains the same
                             actions[i] = new_action
+                    is_osvi = self.ai_controller_target in (
+                        'osvi_controller',
+                        'osvi_awda_controller',
+                    )
+
+                    # Keep the execution logic unchanged. For OSVI/OSVI-AWDA only,
+                    # record one observation/action pair for every action returned by
+                    # the same inference. The first action uses the observation that
+                    # produced the inference; before each following action we acquire
+                    # a fresh synchronized RGB/depth observation and robot state.
+                    episode_done = False
 
                     for indx, action in enumerate(actions):
+
+                        if is_osvi and indx > 0:
+                            images = self.get_synced_images()
+                            if images is None:
+                                raise RuntimeError(
+                                    'Failed to get synchronized camera images between OSVI actions.'
+                                )
+                            robot_state = self._capture_robot_state()
+
+                        # For OSVI/OSVI-AWDA the observation must be captured before
+                        # executing the corresponding action, so the PKL stores
+                        # coherent (obs_t, action_t) pairs and camera_front_image can
+                        # be used to reconstruct the executed trajectory as a video.
+                        if is_osvi:
+                            step_obs = dict(robot_state)
+                            step_obs['camera_front_image'] = cv2.cvtColor(
+                                images[0], cv2.COLOR_RGB2BGR
+                            )
+
+                            extra_rgb_keys = [
+                                'camera_lateral_left_image',
+                                'camera_lateral_right_image',
+                                'camera_gripper_image',
+                            ]
+                            for i, key in enumerate(extra_rgb_keys, start=1):
+                                if i < len(images):
+                                    step_obs[key] = cv2.cvtColor(
+                                        images[i], cv2.COLOR_RGB2BGR
+                                    )
+
+                            # get_synced_images() is released by the same callback that
+                            # updates latest_synced_depths, so use the current synchronized
+                            # depth frames directly, as in the existing code.
+                            step_obs.update(self.latest_synced_depths)
+
                         self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
                         if self.move_robot:
                             self._raise_if_esc_pressed()
@@ -815,45 +943,77 @@ class AIControllerNode(Node):
                                 self.gripper_closed = True
 
                             time.sleep(1)
-                    # check if a transiction close->open has been made
-                    episode_done = False
-                    if self.gripper_closed and gripper_goal.command.position == 0.0:
-                        self.get_logger().info(f'Gripper is opening at step {step}')
-                        self.gripper_closed = False
-                        episode_done = True
 
-                    # 7. Record this step (observation image, cropped model input, predicted
-                    # bounding boxes, computed action and robot state) into the rollout Trajectory
-                    step_obs = dict(robot_state)
-                    step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+                        if is_osvi:
+                            # Record this specific OSVI action. Do not change the
+                            # execution/termination logic here: episode completion is
+                            # still evaluated below exactly as before, after the full
+                            # action list has been executed.
+                            action_done = bool(
+                                self.move_robot
+                                and indx == len(actions) - 1
+                                and self.gripper_closed
+                                and gripper_goal.command.position == 0.0
+                            )
+                            traj.append(
+                                obs=step_obs,
+                                action=action,
+                                done=action_done,
+                                reward=1 if action_done else 0,
+                            )
 
-                    # extra RGB cameras (logging only): rely on the same order as
-                    # the default camera_topic param (front, left, right, gripper)
-                    extra_rgb_keys = ['camera_lateral_left_image', 'camera_lateral_right_image', 'camera_gripper_image']
-                    for i, key in enumerate(extra_rgb_keys, start=1):
-                        if i < len(images):
-                            step_obs[key] = cv2.cvtColor(images[i], cv2.COLOR_RGB2BGR)
-
-                    # extra depth cameras (logging only): most recently received
-                    # frame per camera, independent of the RGB sync above
-                    step_obs.update(self.latest_depth_images)
-
-                    cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
-                    if os.path.isfile(cropped_image_path):
-                        step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                    # Keep the original episode-completion behavior unchanged:
+                    # evaluate the close->open transition only after all actions
+                    # returned by this inference have been executed.
+                    if is_osvi:
+                        if (
+                            self.move_robot
+                            and self.gripper_closed
+                            and gripper_goal.command.position == 0.0
+                        ):
+                            self.get_logger().info(f'Gripper is opening at step {step}')
+                            self.gripper_closed = False
+                            episode_done = True
                     else:
-                        self.get_logger().warning(
-                            f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+                        # check if a transiction close->open has been made
+                        episode_done = False
+                        if self.gripper_closed and gripper_goal.command.position == 0.0:
+                            self.get_logger().info(f'Gripper is opening at step {step}')
+                            self.gripper_closed = False
+                            episode_done = True
 
-                    if predicted_bb is not None:
-                        step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
-                    
-                    traj.append(
-                        obs=step_obs,
-                        action=action,
-                        done=episode_done,
-                        reward=1 if episode_done else 0,
-                    )
+                        # 7. Record this step (observation image, cropped model input, predicted
+                        # bounding boxes, computed action and robot state) into the rollout Trajectory
+                        step_obs = dict(robot_state)
+                        step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+
+                        # extra RGB cameras (logging only): rely on the same order as
+                        # the default camera_topic param (front, left, right, gripper)
+                        extra_rgb_keys = ['camera_lateral_left_image', 'camera_lateral_right_image', 'camera_gripper_image']
+                        for i, key in enumerate(extra_rgb_keys, start=1):
+                            if i < len(images):
+                                step_obs[key] = cv2.cvtColor(images[i], cv2.COLOR_RGB2BGR)
+
+                        # extra depth cameras (logging only): most recently received
+                        # frame per camera, independent of the RGB sync above
+                        step_obs.update(self.latest_synced_depths)
+
+                        cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
+                        if os.path.isfile(cropped_image_path):
+                            step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                        else:
+                            self.get_logger().warning(
+                                f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+
+                        if predicted_bb is not None:
+                            step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
+                        
+                        traj.append(
+                            obs=step_obs,
+                            action=action,
+                            done=episode_done,
+                            reward=1 if episode_done else 0,
+                        )
 
                     if episode_done:
                         break  # exit the loop if the gripper has opened after being closed
