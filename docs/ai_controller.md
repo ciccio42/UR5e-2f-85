@@ -115,48 +115,8 @@ ros2 run moveit_controller moveit_controller_node --ros-args -p execute_trajecto
 docker exec -it ur_robotiq_teleoperation_container  bash
 source install/setup.bash
 
-# Run AI-Controller (COD-Default)
-ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=True  \
-    -p ai_controller_target:="cod_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-Batch24/config.yaml"
-
-# Run AI-Controller (Open-VLA)
-pip install --upgrade protobuf --break-system-packages
-ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=True  \
-    -p ai_controller_target:="openvla_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml"
-
-# Run AI-Controller (TinyVLA)
-export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA
-export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA/llava-pythia
-ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=True  \
-    -p ai_controller_target:="tinyvla_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml"
-
-#Run AI-Controller (OSVI-WM)
-docker exec -it ur_robotiq_teleoperation_container bash
-cd /home/ros2_ws
-colcon build --packages-select ai_controller --symlink-install
-source install/setup.bash
-python3 -m pip install einops hydra-core omegaconf torchsummary tqdm pyyaml matplotlib --break-system-packages
-ros2 run ai_controller ai_controller_node --ros-args \
-  -p move_robot:=True \
-  -p ai_controller_target:="osvi_controller" \
-  -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/osvi_config.yaml"
-
-# Run AI-Controller (OSVI-AWDA)
-docker exec -it ur_robotiq_teleoperation_container bash
-cd /home/ros2_ws
-colcon build --packages-select ai_controller --symlink-install
-source install/setup.bash
-python3 -m pip install einops hydra-core omegaconf torchsummary tqdm pyyaml matplotlib --break-system-packages
-ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=True \
-    -p ai_controller_target:="osvi_awda_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_awda_controller/osvi_awda_config.yaml"
+# Run AI-Controller: see ai_controller_models/<model>.md (linked from "## Models"
+# below) for that model's installation steps and the exact ros2 run command.
 
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check
@@ -165,9 +125,6 @@ ros2 run ai_controller replicate_rollout --ros-args \
     -p context_trajectory_path:=/home/ros2_ws/src/ai_controller/saved_rollouts/cod_controller/pick_place/task_01/context_000.pkl \
     -p save_video:=True
 ``` 
-
-Script-Controller (scripted, click-to-target pick-place, no learned model) has its own
-launch command and instructions in [Script-Controller](script_controller.md).
 
 **Docker-2: Launch Zed-Camera Drivers**
 docker exec -it zed_camera_container  bash
@@ -179,96 +136,20 @@ ros2 launch zed_camera_driver zed_multi_camera.launch.py \
     rviz:=false
 ```
 
-## OpenVLA Dependencies
+## Models
 
-Install the following inside the container (`docker exec -it ur_robotiq_teleoperation_container bash`).
+Each AI-controller model has its own page with installation steps and the
+exact `ros2 run` command to launch it (all of them assume the Docker/UR-driver/
+`moveit_controller` setup above is already running):
 
-### Required
-```bash
-cd  /home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller
-git clone https://github.com/ciccio42/openvla-oft.git
-source /home/ros2_ws/src/ai_controller/ai_controller/models/requirements/openvla_oft_installation.sh
-cd openvla-oft
-pip install -e . --break-system-packages
+- [COD-Controller](ai_controller_models/cod_controller.md)
+- [OpenVLA-Controller](ai_controller_models/openvla_controller.md)
+- [TinyVLA-Controller](ai_controller_models/tinyvla_controller.md)
+- [OSVI-WM-Controller](ai_controller_models/osvi_controller.md)
+- [OSVI-AWDA-Controller](ai_controller_models/osvi_awda_controller.md)
 
-# unit test
-cd /home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller
-python3 test.py 
-```
-
-### Optional – quantization (reduces GPU memory from ~14 GB to ~8 / ~4 GB)
-```bash
-pip install bitsandbytes --break-system-packages
-```
-
-### Configuration
-Set the ROS parameters to use OpenVLA:
-```bash
-ros2 run ai_controller ai_controller_node \
-  --ros-args \
-  -p ai_controller_target:=openvla_controller \
-  -p model_config_path:=/home/ros2_ws/src/ai_controller/ai_controller/models/openvla_controller/openvla_config.yaml \
-  -p task_name:=pick_place
-```
-
-## TinyVLA Dependencies
-
-Install the following inside the container (`docker exec -it ur_robotiq_teleoperation_container bash`).
-Reference (validated) inference code this controller is ported from lives at
-`~/Desktop/Multi-Task-LFD/repo/VLA-Bench/robosuite_test/models/tinyvla.py`; the
-original TinyVLA training repo is at `~/Desktop/Multi-Task-LFD/repo/TinyVLA`.
-
-### Required
-```bash
-cd /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller
-git clone https://github.com/ciccio42/TinyVLA.git
-
-# llava_pythia (model/tokenizer/image-processor code) and policy_heads (action
-# head implementations: act / droid_diffusion / transformer_diffusion)
-cd TinyVLA/llava-pythia && pip install -e . --break-system-packages
-cd ../policy_heads && pip install -e . --break-system-packages
-
-pip uninstall torch torchvision --break-system-packages
-pip install "torch==2.7.0" "torchvision==0.22.0" --index-url https://download.pytorch.org/whl/cu128 --break-system-packages
-pip install ipython --break-system-packages --ignore-installed psutil
-pip install "diffusers==0.39.0" --break-system-packages
-pip uninstall flash-attn -y  --break-system-packages
-
-
-# pip install "numpy<2" opencv-python --force-reinstall --break-system-packages
-# # pip install "huggingface-hub<1.0,>=0.19.3" --break-system-package
-# pip install "deepspeed==0.18.1" --break-system-packages
-# pip install "bitsandbytes==0.48.0" --break-system-packages
-# pip install "sentencepiece==0.1.99" --break-system-packages
-# pip install "timm==0.6.13" --break-system-packages
-# pip install "torch==2.7.0" --break-system-packages
-# pip install "torchvision==0.22.0" --break-system-packages
-# pip install pyquaternion --break-system-packages --ignore-installed psutil
-
-export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA
-export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA/llava-pythia
-
-# unit test
-cd /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller
-python3 test.py \
-        --config /home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml
-```
-
-Checkpoint layout expected by `tinyvla_config.yaml` (`model_path` / `model_base`):
-a LoRA (or merged) checkpoint directory, its Llava-Pythia-1.3B base, and a
-`dataset_stats.pkl` (qpos/action normalization stats) one level above
-`model_path` - see the comments in `tinyvla_config.yaml` and
-`TinyVLAPolicy.__init__` in `tinyvla.py`.
-
-### Configuration
-Set the ROS parameters to use TinyVLA:
-```bash
-ros2 run ai_controller ai_controller_node \
-  --ros-args \
-  -p ai_controller_target:=tinyvla_controller \
-  -p model_config_path:=/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml \
-  -p task_name:=pick_place
-```
+Script-Controller (scripted, click-to-target pick-place, no learned model) has its own
+launch command and instructions in [Script-Controller](script_controller.md).
 
 ## Dependencies to bring in docker
 ```bash
