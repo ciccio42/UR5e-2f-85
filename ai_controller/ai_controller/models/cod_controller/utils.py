@@ -466,6 +466,10 @@ def get_req_anchors(anc_boxes_all, gt_bboxes_all, gt_classes_all, pos_thresh=0.7
     positive_anc_coords - (n_pos, 4) coords of +ve anchors (for visualization)
     negative_anc_coords - (n_pos, 4) coords of -ve anchors (for visualization)
     positive_anc_ind_sep - list of indices to keep track of +ve anchors
+    GT_bboxes_pos - torch.Tensor of shape (n_pos, 4)
+        gt bbox coordinates mapped to each +ve anchor (same order as
+        positive_anc_coords / the proposals derived from them), used by
+        the second-stage box-regression head and the GIoU loss
     '''
     # get the size and shape parameters
     B, w_amap, h_amap, A, _ = anc_boxes_all.shape
@@ -551,7 +555,8 @@ def get_req_anchors(anc_boxes_all, gt_bboxes_all, gt_classes_all, pos_thresh=0.7
     negative_anc_coords = anc_boxes_flat[negative_anc_ind]
 
     return positive_anc_ind, negative_anc_ind, GT_conf_scores, GT_offsets, GT_class_pos, \
-        positive_anc_coords, negative_anc_coords, positive_anc_ind_sep
+        positive_anc_coords, negative_anc_coords, positive_anc_ind_sep, GT_bboxes_pos
+
 
 # # -------------- Visualization utils ----------------
 def display_img(img_data, fig, axes):
@@ -649,8 +654,9 @@ def build_tvf_formatter(config, env_name):
         cut into it incorrectly.
         """
         if wrist_crop:
-            img = transforms.ToTensor()(img.copy())
+            img = transforms.ToTensor()(img[:, :, ::-1].copy())
             img = resize(img, size=(config.dataset_cfg.height, config.dataset_cfg.width))
+            print(f"\n\tWrist crop: {wrist_crop}, img shape: {img.shape}")
             return img
 
         task_spec = config.tasks_cfgs.get(env_name, dict())

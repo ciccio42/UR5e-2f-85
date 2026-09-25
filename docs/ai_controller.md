@@ -2,7 +2,7 @@
 
 ## UR-Container
 ```bash
-export ROBOT_IP=172.16.174.59
+export ROBOT_IP=192.168.1.100
 
 docker build -t ur_robotiq_teleoperation . -f UR_Robotiq_Teleoperation
 xhost +local:docker
@@ -29,7 +29,7 @@ docker run -it --rm \
   -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
   -v ${UR5e_2f_85_PATH}/ai_controller:/home/ros2_ws/src/ai_controller \
   -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
-  -v ${UR5e_2f_85_PATH}/zed_camera/zed_camera_calibration:/home/ros2_ws/src/zed_camera/zed_camera_calibration:ro \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed-ros2-description:/home/ros2_ws/src/zed-ros2-description\
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
   -v /home/asus-mivia/Desktop/saved_trajectories:/home/saved_trajectories \
   -v /home/asus-mivia/Desktop/dataset:/dataset \
@@ -63,6 +63,8 @@ docker run -it --rm \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev:/dev \
   -v ${UR5e_2f_85_PATH}/zed_camera:/home/ros2_ws/src/zed_camera \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed_docker_cache/resources:/usr/local/zed/resources \
+  -v ${UR5e_2f_85_PATH}/zed_camera/zed_docker_cache/settings:/usr/local/zed/settings \
   --name zed_camera_container \
   5.3-ros2-devel-l4t-r38.4
 ```
@@ -117,7 +119,7 @@ source install/setup.bash
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True  \
     -p ai_controller_target:="cod_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-EYE-IN-HAND--Batch24/config.yaml"
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-Batch24/config.yaml"
 
 # Run AI-Controller (Open-VLA)
 pip install --upgrade protobuf --break-system-packages
@@ -130,9 +132,31 @@ ros2 run ai_controller ai_controller_node --ros-args \
 export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA
 export PYTHONPATH=$PYTHONPATH:/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/TinyVLA/llava-pythia
 ros2 run ai_controller ai_controller_node --ros-args \
-    -p move_robot:=False  \
+    -p move_robot:=True  \
     -p ai_controller_target:="tinyvla_controller" \
     -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/tinyvla_controller/tinyvla_config.yaml"
+
+#Run AI-Controller (OSVI-WM)
+docker exec -it ur_robotiq_teleoperation_container bash
+cd /home/ros2_ws
+colcon build --packages-select ai_controller --symlink-install
+source install/setup.bash
+python3 -m pip install einops hydra-core omegaconf torchsummary tqdm pyyaml matplotlib --break-system-packages
+ros2 run ai_controller ai_controller_node --ros-args \
+  -p move_robot:=True \
+  -p ai_controller_target:="osvi_controller" \
+  -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_controller/osvi_config.yaml"
+
+# Run AI-Controller (OSVI-AWDA)
+docker exec -it ur_robotiq_teleoperation_container bash
+cd /home/ros2_ws
+colcon build --packages-select ai_controller --symlink-install
+source install/setup.bash
+python3 -m pip install einops hydra-core omegaconf torchsummary tqdm pyyaml matplotlib --break-system-packages
+ros2 run ai_controller ai_controller_node --ros-args \
+    -p move_robot:=True \
+    -p ai_controller_target:="osvi_awda_controller" \
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_awda_controller/osvi_awda_config.yaml"
 
 # Replicate saved trajectories
 # add -p dry_run:=false to actually execute it once you trust the check
@@ -146,6 +170,7 @@ Script-Controller (scripted, click-to-target pick-place, no learned model) has i
 launch command and instructions in [Script-Controller](script_controller.md).
 
 **Docker-2: Launch Zed-Camera Drivers**
+docker exec -it zed_camera_container  bash
 ```bash
 ros2 launch zed_camera_driver zed_multi_camera.launch.py \
     camera_model:='zedm' \

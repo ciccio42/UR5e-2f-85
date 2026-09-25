@@ -22,7 +22,7 @@ TINYVLA_IMAGE_SIZE = 224
 # TASK_CROP - NOT the same numbers as openvla_controller/openvla_utils.py's
 # TASK_CROP, since that controller uses a different checkpoint/crop window.
 TASK_CROP = {
-    'pick_place': [0, 30, 140, 120],
+    'pick_place': [0, 10, 140, 90],
     'nut_assembly': [20, 25, 80, 75],
     'stack_block': [20, 25, 80, 75],
     'press_button': [10, 10, 70, 70],

@@ -111,7 +111,7 @@ class MotionPrimitives:
         delta = target_pos - actual_pos
         self.node.get_logger().info(f'Move completed. Target pos: {target_pos}, \nActual pos: {actual_pos}, \nError: {error:.6f} m\nDelta: {delta}')
 
-        if delta[0] > 0.002 or delta[1] > 0.002 or delta[2] > 0.002:  # 5 mm tolerance
+        if error > 0.005:  # 5 mm tolerance
             self.node.get_logger().warn(f'Delta exceeds tolerance, retrying move. Delta: {delta}')
             self._send_pose(target_pos, quat)  # retry to correct the error
 

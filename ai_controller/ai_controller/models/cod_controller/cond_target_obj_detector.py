@@ -138,6 +138,12 @@ class ClassificationModule(nn.Module):
         # define classification head
         self.cls_head = nn.Linear(hidden_dim, n_classes)
 
+        # second-stage (Fast-R-CNN-style) box-regression head: refines
+        # each proposal with a class-agnostic (tx,ty,tw,th) delta, on top
+        # of the first-stage RPN regression. Sibling of cls_head, sharing
+        # the same pooled-ROI trunk.
+        self.reg_head = nn.Linear(hidden_dim, 4)
+
     def forward(self, feature_map, proposals_list, gt_classes=None):
 
         # if gt_classes is None:
@@ -145,8 +151,9 @@ class ClassificationModule(nn.Module):
         # else:
         #     mode = 'train'
 
-        # apply roi pooling on proposals followed by avg pooling
-        roi_out = ops.roi_pool(feature_map, proposals_list, self.roi_size)
+        # apply roi align (sub-pixel accurate, unlike roi_pool's
+        # grid-quantized sampling) on proposals followed by avg pooling
+        roi_out = ops.roi_align(feature_map, proposals_list, self.roi_size)
         roi_out = self.avg_pool(roi_out)
 
         # flatten the output
@@ -159,8 +166,11 @@ class ClassificationModule(nn.Module):
 
         # get the classification scores
         cls_scores = self.cls_head(out)  # Number of positive bb, Num classes
+        # get the second-stage box-regression deltas, relative to the
+        # proposal box each ROI was pooled from
+        bbox_deltas = self.reg_head(out)  # Number of positive bb, 4
 
-        return cls_scores
+        return cls_scores, bbox_deltas
 
 
 class FiLM(nn.Module):
@@ -351,7 +361,7 @@ class CondModule(nn.Module):
 
 class AgentModule(nn.Module):
 
-    def __init__(self, height=120, width=160, obs_T=4, model_name="resnet18", pretrained=False, load_film=True, n_res_blocks=6, n_classes=2, task_embedding_dim=128, dim_H=7, dim_W=7, conv_drop_dim=3, anc_scales=[1.0, 1.5, 2.0, 3.0, 4.0], anc_ratios=[0.2, 0.5, 0.8, 1, 1.2, 1.5, 2.0], x_offset=1.5, y_offset=1.5):
+    def __init__(self, height=120, width=160, obs_T=4, model_name="resnet18", pretrained=False, load_film=True, n_res_blocks=6, n_classes=2, task_embedding_dim=128, dim_H=7, dim_W=7, conv_drop_dim=3, anc_scales=[1.0, 1.5, 2.0, 3.0, 4.0], anc_ratios=[0.2, 0.5, 0.8, 1, 1.2, 1.5, 2.0], x_offset=1.5, y_offset=1.5, pos_thresh=0.5, neg_thresh=0.3, conf_thresh=0.7, nms_thresh=0.5, roi_size=(7, 7)):
         super().__init__()
         self.task_embedding_dim = task_embedding_dim
         if not load_film:
@@ -395,10 +405,10 @@ class AgentModule(nn.Module):
             self.n_anc_boxes = len(self.anc_scales) * len(self.anc_ratios)
 
             # IoU thresholds for +ve and -ve anchors
-            self.pos_thresh = 0.4
-            self.neg_thresh = 0.3
-            self.conf_thresh = 0.7
-            self.nms_thresh = 0.5
+            self.pos_thresh = pos_thresh
+            self.neg_thresh = neg_thresh
+            self.conf_thresh = conf_thresh
+            self.nms_thresh = nms_thresh
 
             self.proposal_module = ProposalModule(
                 self.out_channels_backbone,
@@ -407,7 +417,7 @@ class AgentModule(nn.Module):
             self.classifier = ClassificationModule(
                 out_channels=self.out_channels_backbone,
                 n_classes=n_classes,
-                roi_size=(2, 2))
+                roi_size=roi_size)
 
             # generate anchors
             start = time.time()
@@ -523,7 +533,7 @@ class AgentModule(nn.Module):
                     torch.tensor(self.height_scale_factor, dtype=float),
                     mode='p2a').float()
 
-                positive_anc_ind, negative_anc_ind, GT_conf_scores, GT_offsets, GT_class_pos, positive_anc_coords, negative_anc_coords, positive_anc_ind_sep = get_req_anchors(
+                positive_anc_ind, negative_anc_ind, GT_conf_scores, GT_offsets, GT_class_pos, positive_anc_coords, negative_anc_coords, positive_anc_ind_sep, GT_bboxes_pos = get_req_anchors(
                     anc_boxes_all.to(agent_obs.get_device()),
                     gt_bboxes_proj.to(agent_obs.get_device()),
                     gt_classes.to(agent_obs.get_device()),
@@ -550,9 +560,21 @@ class AgentModule(nn.Module):
                 pos_proposals_list = [proposals[torch.where(mask[i])[0]].detach().clone() for i in range(batch_size)]
                 # class_positive_list = [GT_class_pos[torch.where(mask[i])[0]].detach().clone() for i in range(batch_size)]
                 # print(f"Time to separate proposals {time.time()-start_time}")
-                
-                cls_scores = self.classifier(
+
+                cls_scores, bbox_deltas_2nd = self.classifier(
                     feature_map, pos_proposals_list, GT_class_pos)
+
+                # second-stage (Fast-R-CNN-style) box refinement: regress
+                # each (detached) first-stage proposal towards its
+                # matched gt box, on top of the RPN's own regression.
+                # proposals_detached matches bbox_deltas_2nd 1:1 since
+                # both come from the same pos_proposals_list ordering.
+                proposals_detached = torch.cat(pos_proposals_list, dim=0)
+                GT_bboxes_pos = GT_bboxes_pos.to(agent_obs.get_device())
+                GT_offsets_2nd = calc_gt_offsets(
+                    proposals_detached, GT_bboxes_pos)
+                refined_boxes = generate_proposals(
+                    proposals_detached, bbox_deltas_2nd)
 
                 ret_dict['feature_map'] = feature_map
                 ret_dict['proposals'] = pos_proposals_list
@@ -562,6 +584,10 @@ class AgentModule(nn.Module):
                 ret_dict['conf_scores_neg'] = conf_scores_neg
                 ret_dict['cls_scores'] = cls_scores
                 ret_dict['GT_class_pos'] = GT_class_pos
+                ret_dict['GT_offsets_2nd'] = GT_offsets_2nd
+                ret_dict['offsets_pos_2nd'] = bbox_deltas_2nd
+                ret_dict['refined_boxes'] = refined_boxes
+                ret_dict['GT_bboxes_pos'] = GT_bboxes_pos
 
                 # if DEBUG:
                 #     # test plot proposal
@@ -678,23 +704,32 @@ class AgentModule(nn.Module):
                         # conf_scores_final.append(conf_scores_pos)
                     # print(f"Sequential {time.time()-start}")
 
-                    cls_scores = self.classifier(feature_map, proposals_final)
+                    cls_scores, bbox_deltas_2nd = self.classifier(
+                        feature_map, proposals_final)
                     cls_probs = F.softmax(cls_scores, dim=-1)
                     # get classes with highest probability
                     classes_all = torch.argmax(cls_probs, dim=-1)
 
-                  
+                    # second-stage box refinement: apply the classifier's
+                    # per-proposal deltas on top of the RPN proposals
+                    proposals_final_flat = torch.cat(proposals_final, dim=0)
+                    refined_boxes_flat = generate_proposals(
+                        proposals_final_flat, bbox_deltas_2nd) if proposals_final_flat.shape[0] > 0 else proposals_final_flat
+
                     classes_final = []
-                    # slice classes to map to their corresponding image
+                    proposals_refined = []
+                    # slice classes/boxes to map to their corresponding image
                     c = 0
                     for i in range(B):
                         # get the number of proposals for each image
                         n_proposals = len(proposals_final[i])
                         classes_final.append(classes_all[c: c+n_proposals])
+                        proposals_refined.append(
+                            refined_boxes_flat[c: c+n_proposals])
                         c += n_proposals
 
                     # print(f"Inference time {time.time()-start}")
-                    ret_dict['proposals'] = proposals_final
+                    ret_dict['proposals'] = proposals_refined
                     ret_dict['conf_scores_final'] = conf_scores_final
                     ret_dict['cls_scores'] = cls_scores
                     ret_dict['feature_map'] = feature_map
@@ -743,7 +778,12 @@ class CondTargetObjectDetector(nn.Module):
                                           anc_scales=cond_target_obj_detector_cfg.anc_scales,
                                           n_classes=cond_target_obj_detector_cfg.get('n_classes', 2),
                                           x_offset=cond_target_obj_detector_cfg.x_offset,
-                                          y_offset=cond_target_obj_detector_cfg.y_offset,)
+                                          y_offset=cond_target_obj_detector_cfg.y_offset,
+                                          pos_thresh=cond_target_obj_detector_cfg.get('pos_thresh', 0.5),
+                                          neg_thresh=cond_target_obj_detector_cfg.get('neg_thresh', 0.3),
+                                          conf_thresh=cond_target_obj_detector_cfg.get('conf_thresh', 0.7),
+                                          nms_thresh=cond_target_obj_detector_cfg.get('nms_thresh', 0.5),
+                                          roi_size=tuple(cond_target_obj_detector_cfg.get('roi_size', [7, 7])),)
 
         # summary(self)
         model_parameters = filter(lambda p: p.requires_grad, self.parameters())

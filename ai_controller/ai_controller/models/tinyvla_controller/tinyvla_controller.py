@@ -125,11 +125,13 @@ class TinyVLAController(AIController):
 
         combined = np.hstack([front_bgr, gripper_bgr])
         cv2.imshow(self.PREVIEW_WINDOW_NAME, combined)
-        print("[TinyVLAController] Showing front/gripper camera preview - press Enter to continue...")
-        while True:
-            key = cv2.waitKey(0) & 0xFF
-            if key in (13, 10):  # Enter
-                break
+        cv2.waitKey(1000)  # Wait 1 sec
+        # print("[TinyVLAController] Showing front/gripper camera preview - press Enter to continue...")
+        
+        # while True:
+        #     key = cv2.waitKey(0) & 0xFF
+        #     if key in (13, 10):  # Enter
+        #         break
 
     def _axis_angle_from_quat(self, eef_quat):
         eef_euler = np.array([normalize_angle(a) for a in _mat2euler_sxyz(_quat2mat(eef_quat))])
@@ -218,14 +220,19 @@ class TinyVLAController(AIController):
         gripper_value = action_world[-1]
         print(f"[TinyVLAController] Raw gripper value: {gripper_value:.3f} (closed={self.gripper_closed})")
         if self.gripper_closed:
-            self.gripper_closed = gripper_value >= 0.4
+            self.gripper_closed = gripper_value >= 0.3
         else:
-            self.gripper_closed = gripper_value >= 0.5
+            self.gripper_closed = gripper_value >= 0.3
         action_world[-1] = 255.0 if self.gripper_closed else 0.0
         
         # if action_world[2] < 0.05:
         #     print(f"[TinyVLAController] Adding x offset")
         #     action_world[0] -= 0.04
+        # if action_world[2] < -0.05:
+        #     # force the gripper to close
+        #     self.gripper_closed = True
+        #     action_world[-1] = 255.0
+        
         return action_world
 
     def inference(self, input_data, t: int, save_path: Optional[str] = None):
