@@ -14,3 +14,4 @@ saved_rollouts/
 zed_camera/zed_docker_cache/
 *npy
 *json
+external/

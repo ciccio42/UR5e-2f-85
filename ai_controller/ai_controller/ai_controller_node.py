@@ -85,8 +85,13 @@ class AIControllerNode(Node):
                                                     '/zed_gripper/zed_node/rgb/color/rect/camera_info')
         self.declare_parameter('task_name',
                                             "pick_place")
-        self.declare_parameter('demo_path', 
+        self.declare_parameter('demo_path',
                                             "/dataset/pick_place/human_rgb_pick_place")
+        # vla_jepa_controller only: caption a rendered clip of demo_path's task_<id>
+        # demo trajectory with Cosmos-Reason2 once per task (mirrors
+        # run_robosuite_eval.py's use_cosmos_name pattern) and use that instead of
+        # vla_jepa_config.yaml's static per-task prompt.
+        self.declare_parameter('use_cosmos_task_description', False)
         self.declare_parameter('pose_before_first_inference', [-0.15552094619366708,
                                                                0.34869994018501943,
                                                                0.1532803451753288,
@@ -131,6 +136,7 @@ class AIControllerNode(Node):
         self.gripper_camera_info_size = None
         self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
         self.demo_path = self.get_parameter('demo_path').get_parameter_value().string_value
+        self.use_cosmos_task_description = self.get_parameter('use_cosmos_task_description').get_parameter_value().bool_value
         self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
         self.debug_mode = self.get_parameter('debug_mode').get_parameter_value().bool_value
         self.debug_trajectory_path = self.get_parameter('debug_trajectory_path').get_parameter_value().string_value
@@ -163,6 +169,15 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'osvi_awda_controller':
             from ai_controller.models.osvi_awda_controller.osvi_awda_controller import OSVIAWDAController
             self.controller = OSVIAWDAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'vla_jepa_controller':
+            # VLAJEPAController itself needs lerobot/transformers/scipy, which
+            # require numpy>=2 - incompatible with cv_bridge's numpy<2 compiled
+            # extension used throughout this node. VLAJEPAControllerClient is a
+            # thin HTTP client talking to server.py, which runs the real
+            # controller (+ CosmosCaptioner) in a separate venv - see both
+            # modules' docstrings. Requires that server to be started first.
+            from ai_controller.models.vla_jepa_controller.vla_jepa_client import VLAJEPAControllerClient
+            self.controller = VLAJEPAControllerClient(self.model_config_path, self.task_name)
         else:
             self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
             raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
@@ -526,6 +541,30 @@ class AIControllerNode(Node):
             np.asarray(eef_quat, dtype=np.float64),
         ])
 
+    def _build_vla_jepa_state(self, robot_state):
+        """Build the 8-dim [eef_x, eef_y, eef_z, qx, qy, qz, qw, gripper_closed]
+        vector expected by VLAJEPAController.pre_process (ROBOT_STATE_DIM=8 in
+        vla_jepa_utils.py). Same eef_pos/eef_quat as _build_tinyvla_state, plus
+        the current binary gripper state (1.0=closed, matching
+        _build_openvla_state's gripper_closed convention) - the checkpoint does
+        NOT use observation.state, so this is only used downstream by
+        VLAJEPAController.post_process() to convert the model's predicted delta
+        into an absolute target relative to the robot's actual current pose.
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build VLA-JEPA proprio state.')
+            return None
+
+        gripper_closed = 1.0 if self.gripper_closed else 0.0
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+            [gripper_closed],
+        ])
+
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
         self.get_logger().info('Moving robot to initial pose before first inference...')
@@ -744,6 +783,15 @@ class AIControllerNode(Node):
                                                      traj_cnt=self.traj_cnt,
                                                      save_path=self.save_rollout_path)
 
+                        if self.ai_controller_target == 'vla_jepa_controller' and self.use_cosmos_task_description:
+                            # override vla_jepa_config.yaml's static tasks[task_id].prompt
+                            # (already set by load_command above) with a Cosmos-Reason2
+                            # caption of this task's human demo, for the whole episode.
+                            # Runs server-side (see server.py's /caption_task) - Cosmos
+                            # needs the same numpy>=2 stack as VLAJEPAController itself.
+                            caption = self.controller.caption_task_with_cosmos(self.demo_path, enter_task_id)
+                            self.get_logger().info(f'Cosmos task description: {caption!r}')
+
 
                     # 1. Get sensor data (e.g., camera images)
                     images = self.get_synced_images()
@@ -773,7 +821,8 @@ class AIControllerNode(Node):
                         states = self._build_tinyvla_state(robot_state)
                     elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
                         states = robot_state
-                    
+                    elif self.ai_controller_target == 'vla_jepa_controller':
+                        states = self._build_vla_jepa_state(robot_state)
                     else:
                         states = None
 
@@ -797,16 +846,25 @@ class AIControllerNode(Node):
 
                     # 3. Perform inference using the AI controller
                     step_save_path = f'{save_path}/step_{step}'
-                    out = self.controller.inference(
-                                                    input_data=[images, states, depth_data],
-                                                    t=step,
-                                                    save_path=step_save_path)
+                    if self.ai_controller_target == 'vla_jepa_controller':
+                        # VLAJEPAController.pre_process() requires exactly
+                        # [images, robot_state] (no depth_data slot, unlike every
+                        # other controller here) - raises ValueError otherwise.
+                        out = self.controller.inference(
+                                                        input_data=[images, states],
+                                                        t=step,
+                                                        save_path=step_save_path)
+                    else:
+                        out = self.controller.inference(
+                                                        input_data=[images, states, depth_data],
+                                                        t=step,
+                                                        save_path=step_save_path)
                     predicted_bb = None
                     target_obj_prediction = None
                     if self.ai_controller_target == 'cod_controller':
                         pred_action, predicted_bb, target_obj_prediction = out
                         actions = [pred_action]
-                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller', 'vla_jepa_controller'):
                         actions = [np.asarray(action, dtype=np.float64) for action in out]
                     elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
                         actions = out
