@@ -1,0 +1,1144 @@
+import importlib
+import json
+import math
+import pickle
+import sys
+import threading
+import time
+from pathlib import Path
+
+import message_filters
+import numpy as np
+import rclpy
+import rclpy.wait_for_message
+import cv2
+import tf2_ros
+from cv_bridge import CvBridge
+from rclpy.action import ActionClient
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import CameraInfo, Image as RosImage, JointState
+from PIL import Image
+import os
+from moveit_controller_srvs.srv import GoHome, GoToPose
+from control_msgs.action import GripperCommand
+from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _normalize_angle, EEF_POS_NAME, EEF_QUAT_NAME, JOINT_POS_NAME, JOINT_VEL_NAME, GRIPPER_QPOS_NAME, GRIPPER_QVEL_NAME
+
+_trajectory_cls = None
+
+def _get_trajectory_cls(node):
+    """Lazily resolve dataset_collector_pkg's savers.Trajectory class."""
+    global _trajectory_cls
+    if _trajectory_cls is None:
+        node._add_dataset_collector_scripts_to_path()
+        from savers import Trajectory as TrajectoryClass
+        _trajectory_cls = TrajectoryClass
+    return _trajectory_cls
+
+
+class DebugTrajectoryUnpickler(pickle.Unpickler):
+    """Resolves the 'Trajectory' class saved by dataset_collector_pkg's savers.py."""
+
+    def find_class(self, module, name):
+        if module.startswith('multi_task_il') and name == 'Trajectory':
+            return importlib.import_module('savers').Trajectory
+        return super().find_class(module, name)
+
+class AIControllerNode(Node):
+    
+    def __init__(self):
+        super().__init__('ai_controller_node')
+        self.get_logger().info('AI Controller Node has been started.')
+        
+        # define parameters
+        self.declare_parameter('ai_controller_target', 
+                                                    'cod_controller')
+        self.declare_parameter('model_config_path', 
+                                                '/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-Batch24/config.yaml')
+        self.declare_parameter('frame_id', 
+                                        'base_link')
+        self.declare_parameter('set_home_service', 
+                                                'set_robot_to_home')
+        self.declare_parameter('set_pose_service', 
+                                                'set_robot_to_pose')
+        self.declare_parameter('gripper_action_topic', 
+                                                    '/robotiq_gripper_controller/gripper_cmd')
+        self.declare_parameter('camera_topic', 
+                                            ['/zed_front/zed_node/rgb/color/rect/image', 
+                                            '/zed_left/zed_node/rgb/color/rect/image',
+                                            '/zed_right/zed_node/rgb/color/rect/image',
+                                            '/zed_gripper/zed_node/rgb/color/rect/image'])
+        # Extra cameras (RGB already flows through camera_topic above; these
+        # are the matching depth topics). Saved into the rollout alongside
+        # camera_front_image for logging/video purposes. The gripper one is
+        # also fed to osvi_awda_controller's grasp-refinement (via input_data,
+        # see the control loop below) so that controller needs no ROS of its
+        # own - mirrors how CODController receives current_eef_pos/quat.
+        self.declare_parameter('camera_lateral_left_depth_topic',
+                                                    '/zed_left/zed_node/depth/depth_registered')
+        self.declare_parameter('camera_lateral_right_depth_topic',
+                                                    '/zed_right/zed_node/depth/depth_registered')
+        self.declare_parameter('camera_gripper_depth_topic',
+                                                    '/zed_gripper/zed_node/depth/depth_registered')
+        self.declare_parameter('gripper_camera_info_topic',
+                                                    '/zed_gripper/zed_node/rgb/color/rect/camera_info')
+        self.declare_parameter('task_name',
+                                            "pick_place")
+        self.declare_parameter('demo_path',
+                                            "/dataset/pick_place/human_rgb_pick_place")
+        # vla_jepa_controller only: caption a rendered clip of demo_path's task_<id>
+        # demo trajectory with Cosmos-Reason2 once per task (mirrors
+        # run_robosuite_eval.py's use_cosmos_name pattern) and use that instead of
+        # vla_jepa_config.yaml's static per-task prompt.
+        self.declare_parameter('use_cosmos_task_description', False)
+        self.declare_parameter('pose_before_first_inference', [-0.15552094619366708,
+                                                               0.34869994018501943,
+                                                               0.1532803451753288,
+                                                               0.9994452044624775,
+                                                               0.03161651380119412,
+                                                               0.0021438049655468088,
+                                                               0.010251021036213035])
+        # DEBUG TEST ONLY: when enabled, camera_front_image frames are read from
+        # a saved trajectory .pkl file instead of the live camera topics.
+        self.declare_parameter('debug_mode', False)
+        self.declare_parameter('debug_trajectory_path', '')
+        self.declare_parameter('save_rollout_path', '/home/ros2_ws/src/ai_controller/saved_rollouts')
+        # Robot-state capture (for recording the executed rollout as a Trajectory)
+        self.declare_parameter('joint_states_topic', '/joint_states')
+        self.declare_parameter('joint_robot_names', ['elbow_joint', 'shoulder_lift_joint', 'shoulder_pan_joint', 'wrist_1_joint', 'wrist_2_joint', 'wrist_3_joint'])
+        self.declare_parameter('gripper_robot_names', ['robotiq_85_left_knuckle_joint'])
+        self.declare_parameter('eef_frame_name', 'tcp_link')
+        self.declare_parameter('move_robot', False)
+        self.declare_parameter('manual_step_waypoints', False)
+
+
+        # get parameters
+        self.ai_controller_target = self.get_parameter('ai_controller_target').get_parameter_value().string_value
+        self.model_config_path = self.get_parameter('model_config_path').get_parameter_value().string_value
+        self.frame_id = self.get_parameter('frame_id').get_parameter_value().string_value
+        self.set_home_service = self.get_parameter('set_home_service').get_parameter_value().string_value
+        self.set_pose_service = self.get_parameter('set_pose_service').get_parameter_value().string_value
+        self.gripper_action_topic = self.get_parameter('gripper_action_topic').get_parameter_value().string_value
+        self.camera_topic = self.get_parameter('camera_topic').get_parameter_value().string_array_value
+        self.extra_depth_topics = {
+            'camera_lateral_left_depth': self.get_parameter('camera_lateral_left_depth_topic').get_parameter_value().string_value,
+            'camera_lateral_right_depth': self.get_parameter('camera_lateral_right_depth_topic').get_parameter_value().string_value,
+            'camera_gripper_depth': self.get_parameter('camera_gripper_depth_topic').get_parameter_value().string_value,
+        }
+        self.gripper_camera_info_topic = self.get_parameter('gripper_camera_info_topic').get_parameter_value().string_value
+        # populated by synced_images_callback (RGB+depth are now in one
+        # ApproximateTimeSynchronizer group, see below)
+        self.latest_synced_depths = {}
+        self.latest_depth_frame_ids = {}
+        # gripper intrinsics, fetched once (see _fetch_gripper_camera_info)
+        self.gripper_camera_matrix = None
+        self.gripper_camera_info_size = None
+        self.task_name = self.get_parameter('task_name').get_parameter_value().string_value
+        self.demo_path = self.get_parameter('demo_path').get_parameter_value().string_value
+        self.use_cosmos_task_description = self.get_parameter('use_cosmos_task_description').get_parameter_value().bool_value
+        self.pose_before_first_inference = self.get_parameter('pose_before_first_inference').get_parameter_value().double_array_value
+        self.debug_mode = self.get_parameter('debug_mode').get_parameter_value().bool_value
+        self.debug_trajectory_path = self.get_parameter('debug_trajectory_path').get_parameter_value().string_value
+        self.save_rollout_path = self.get_parameter('save_rollout_path').get_parameter_value().string_value
+        self.joint_states_topic = self.get_parameter('joint_states_topic').get_parameter_value().string_value
+        self.joint_robot_names = self.get_parameter('joint_robot_names').get_parameter_value().string_array_value
+        self.gripper_robot_names = self.get_parameter('gripper_robot_names').get_parameter_value().string_array_value
+        self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
+        self.move_robot = self.get_parameter('move_robot').get_parameter_value().bool_value
+        self.manual_step_waypoints = self.get_parameter('manual_step_waypoints').get_parameter_value().bool_value
+        self.debug_steps = None
+        self.debug_step_index = 0
+        self.latest_joint_state = None
+
+        # 1. Initialize the AI controller
+        self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
+        if self.ai_controller_target == 'cod_controller':
+            from ai_controller.models.cod_controller.cod_controller import CODController
+            self.controller = CODController(self.model_config_path, self.task_name)
+            
+        elif self.ai_controller_target == 'openvla_controller':
+            from ai_controller.models.openvla_controller.openvla_controller import OpenVLAController
+            self.controller = OpenVLAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'tinyvla_controller':
+            from ai_controller.models.tinyvla_controller.tinyvla_controller import TinyVLAController
+            self.controller = TinyVLAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'osvi_controller':
+            from ai_controller.models.osvi_controller.osvi_controller import OSVIController
+            self.controller = OSVIController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'osvi_awda_controller':
+            from ai_controller.models.osvi_awda_controller.osvi_awda_controller import OSVIAWDAController
+            self.controller = OSVIAWDAController(self.model_config_path, self.task_name)
+        elif self.ai_controller_target == 'vla_jepa_controller':
+            # VLAJEPAController itself needs lerobot/transformers/scipy, which
+            # require numpy>=2 - incompatible with cv_bridge's numpy<2 compiled
+            # extension used throughout this node. VLAJEPAControllerClient is a
+            # thin HTTP client talking to server.py, which runs the real
+            # controller (+ CosmosCaptioner) in a separate venv - see both
+            # modules' docstrings. Requires that server to be started first.
+            from ai_controller.models.vla_jepa_controller.vla_jepa_client import VLAJEPAControllerClient
+            self.controller = VLAJEPAControllerClient(self.model_config_path, self.task_name)
+        else:
+            self.get_logger().error(f'Unknown AI Controller target: {self.ai_controller_target}')
+            raise ValueError(f'Unknown AI Controller target: {self.ai_controller_target}')
+        
+        # add controller  name to save_rollout_path
+        self.save_rollout_path = os.path.join(self.save_rollout_path, self.ai_controller_target, self.task_name)
+        if self.ai_controller_target == 'cod_controller':
+            # further split rollouts by checkpoint epoch/step and whether the
+            # wrist/eye-in-hand image was used, so runs from different
+            # checkpoints don't get mixed together on disk.
+            epoch = getattr(self.controller, 'epoch', 'unknown')
+            wrist_dir = 'wrist' if getattr(self.controller, 'use_wrist_img', False) else 'no_wrist'
+            self.save_rollout_path = os.path.join(self.save_rollout_path, f'epoch_{epoch}', wrist_dir)
+        os.makedirs(self.save_rollout_path, exist_ok=True)
+        
+        # 2. Set up ROS2 interfaces (publishers, subscribers, services)
+        self.get_logger().info(f'Waiting for service {self.set_home_service}...')
+        self.set_home_client = self.create_client(GoHome, self.set_home_service)
+        self.set_home_client.wait_for_service()
+        self.get_logger().info(f'Service {self.set_home_service} is available.')
+        
+        self.get_logger().info(f'Waiting for service {self.set_pose_service}...')
+        self.set_pose_client = self.create_client(GoToPose, self.set_pose_service)
+        self.set_pose_client.wait_for_service()
+        self.get_logger().info(f'Service {self.set_pose_service} is available.')
+        
+        self.get_logger().info(f"Creating publisher for gripper action on topic {self.gripper_action_topic}...")
+        self.gripper_action_client = ActionClient(
+            self,
+            GripperCommand,
+            self.gripper_action_topic,
+        )
+        self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
+
+        # Robot-state capture: joint states + TF (base_link -> eef_frame_name), used to
+        # record the actually-executed rollout as a Trajectory (see save_rollout()).
+        self.create_subscription(JointState, self.joint_states_topic, self._joint_state_callback, 10)
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+        if self.debug_mode:
+            self.get_logger().warning(
+                'DEBUG MODE ENABLED: camera topics will NOT be used. '
+                f'Frames will be read from debug_trajectory_path={self.debug_trajectory_path!r} instead.'
+            )
+            self._load_debug_trajectory(self.debug_trajectory_path)
+        else:
+            # 3. Wait for camera topics to be available
+            self.get_logger().info(f'Waiting for camera topics: {self.camera_topic}')
+            for camera_topic in self.camera_topic:
+                self.get_logger().info(f'Waiting for camera topic: {camera_topic}')
+                # wait for the topic to be available
+                find = False
+                while not find:
+                    topics_info = self.get_topic_names_and_types()
+                    for topic_info in topics_info:
+                        topic_name = topic_info[0]
+                        if topic_name == camera_topic:
+                            self.get_logger().info(f'Camera topic {camera_topic} is available.')
+                            find = True
+                            break
+
+                    if not find:
+                        self.get_logger().info(f'Camera topic {camera_topic} not available yet. Waiting...')
+                        rclpy.spin_once(self, timeout_sec=1.0)
+
+                self.get_logger().info(f'Camera topic {camera_topic} is available.')
+
+            # 4. Set up synchronized camera subscribers
+            self.bridge = CvBridge()
+            self.latest_synced_images = None
+            self.synced_images_event = threading.Event()
+
+            self.camera_subs = [
+                message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
+                for topic in self.camera_topic
+            ]
+            # Depth subscribers (lateral_left/lateral_right/gripper) are part of
+            # the SAME sync group as the RGB cameras above, so every recorded
+            # step's depth frames are time-aligned with the RGB used for that
+            # step. synced_images_callback splits the combined message tuple
+            # back into self.latest_synced_images (RGB only, unchanged shape/
+            # order for every controller) and self.latest_synced_depths (extra,
+            # only consumed when ai_controller_target == 'osvi_awda_controller').
+            self.depth_subs = [
+                message_filters.Subscriber(self, RosImage, topic, qos_profile=qos_profile_sensor_data)
+                for topic in self.extra_depth_topics.values()
+            ]
+            self.camera_sync = message_filters.ApproximateTimeSynchronizer(
+                self.camera_subs + self.depth_subs, queue_size=10, slop=100
+            )
+            self.camera_sync.registerCallback(self.synced_images_callback)
+
+            if self.ai_controller_target == 'osvi_awda_controller':
+                self._fetch_gripper_camera_info()
+
+        self.traj_cnt = 0
+        self.max_step = 200
+
+        self.gripper_closed = False
+        self.previous_gripper_position = 0.0
+        self.initial_gripper_pose = None
+        self.abort_window_name = 'AI Controller Abort'
+
+        self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
+        self.control_loop()
+
+    def _show_abort_window(self):
+        image = np.zeros((60, 420, 3), dtype=np.uint8)
+        cv2.putText(image, 'Press ESC to stop and save', (12, 36),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        cv2.imshow(self.abort_window_name, image)
+
+    def _esc_pressed(self):
+        self._show_abort_window()
+        return cv2.waitKey(1) & 0xFF == 27
+
+    def _raise_if_esc_pressed(self):
+        if self._esc_pressed():
+            raise KeyboardInterrupt('Esc pressed')
+
+    def synced_images_callback(self, *image_msgs):
+        """Called once per cycle when all camera+depth topics have a message within the
+        sync window. Splits the combined tuple back into RGB (self.latest_synced_images,
+        same order/shape as camera_topic - what every controller's images arg is) and
+        depth (self.latest_synced_depths, extra - only osvi_awda_controller uses it)."""
+        n_rgb = len(self.camera_topic)
+        rgb_msgs, depth_msgs = image_msgs[:n_rgb], image_msgs[n_rgb:]
+        self.latest_synced_images = [
+            self.bridge.imgmsg_to_cv2(msg, desired_encoding='rgb8') for msg in rgb_msgs
+        ]
+        self.latest_synced_depths = {}
+        self.latest_depth_frame_ids = {}
+        for key, msg in zip(self.extra_depth_topics.keys(), depth_msgs):
+            self.latest_synced_depths[key] = self.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+            self.latest_depth_frame_ids[key] = str(getattr(msg.header, 'frame_id', '') or '').lstrip('/')
+        self.synced_images_event.set()
+
+    def get_synced_images(self, timeout_sec=5.0):
+        """Block (while spinning callbacks) until a fresh synchronized set of camera images arrives."""
+        if self.debug_mode:
+            return self._get_debug_images()
+
+        self.synced_images_event.clear()
+        start = self.get_clock().now()
+        while not self.synced_images_event.is_set():
+            self._raise_if_esc_pressed()
+            rclpy.spin_once(self, timeout_sec=0.1)
+            elapsed = (self.get_clock().now() - start).nanoseconds / 1e9
+            if elapsed > timeout_sec:
+                self.get_logger().error('Timed out waiting for synchronized camera images.')
+                return None
+        self._raise_if_esc_pressed()
+        return self.latest_synced_images
+
+    def _fetch_gripper_camera_info(self, timeout_sec=2.0, retries=5):
+        """One-shot fetch of the gripper camera intrinsics (they don't change over
+        time, unlike the depth image/pose), so osvi_awda_controller never has to
+        subscribe to CameraInfo itself."""
+        for attempt in range(retries):
+            try:
+                ok, msg = rclpy.wait_for_message.wait_for_message(
+                    topic=self.gripper_camera_info_topic,
+                    msg_type=CameraInfo,
+                    node=self,
+                    time_to_wait=timeout_sec,
+                )
+            except Exception as exc:
+                self.get_logger().warning(
+                    f'Gripper CameraInfo read failed on {self.gripper_camera_info_topic} ({exc}).')
+                continue
+            if ok:
+                camera_matrix = np.asarray(msg.k, dtype=np.float64).reshape((3, 3))
+                if camera_matrix[0, 0] > 0.0 and camera_matrix[1, 1] > 0.0:
+                    self.gripper_camera_matrix = camera_matrix
+                    self.gripper_camera_info_size = (int(msg.width), int(msg.height))
+                    self.get_logger().info(
+                        f'Gripper CameraInfo received on {self.gripper_camera_info_topic}.')
+                    return
+            self.get_logger().warning(
+                f'Waiting for gripper CameraInfo on {self.gripper_camera_info_topic} '
+                f'(attempt {attempt + 1}/{retries})...')
+        self.get_logger().error(
+            f'Could not get gripper CameraInfo on {self.gripper_camera_info_topic} '
+            f'after {retries} attempts; osvi_awda_controller depth grasp refinement will be skipped.')
+
+    def _lookup_gripper_depth_transform(self):
+        """Looks up the gripper depth camera's optical frame -> self.frame_id transform,
+        as plain numpy (rotation matrix + translation), for osvi_awda_controller's grasp
+        refinement - mirrors how current_eef_pos/quat are looked up for CODController."""
+        frame_id = self.latest_depth_frame_ids.get('camera_gripper_depth')
+        if not frame_id:
+            return None
+        override = ''
+        cfg = getattr(self.controller, 'cfg', None)
+        if cfg is not None:
+            override = str(cfg.grasp_refinement.get('depth_source_frame_override', '') or '')
+        source_frame = override or frame_id
+        try:
+            transform = self.tf_buffer.lookup_transform(self.frame_id, source_frame, rclpy.time.Time())
+        except Exception as exc:
+            self.get_logger().warning(
+                f'Could not look up transform {source_frame} -> {self.frame_id}: {exc}')
+            return None
+        t = transform.transform.translation
+        q = transform.transform.rotation
+        return {
+            'rotation': _quat2mat([q.x, q.y, q.z, q.w]),
+            'translation': np.array([t.x, t.y, t.z], dtype=np.float64),
+        }
+
+    def _add_dataset_collector_scripts_to_path(self):
+        """Best-effort: make dataset_collector_pkg's savers.Trajectory importable."""
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            scripts_dir = Path(get_package_share_directory('dataset_collector_pkg')) / 'scripts'
+        except Exception as exc:
+            self.get_logger().error(f'Could not locate dataset_collector_pkg scripts directory: {exc}')
+            return
+
+        if scripts_dir.is_dir() and str(scripts_dir) not in sys.path:
+            sys.path.append(str(scripts_dir))
+
+    def _load_debug_trajectory(self, trajectory_path):
+        """DEBUG TEST ONLY: load a saved trajectory .pkl to replay its camera_front_image frames."""
+        if not trajectory_path:
+            raise ValueError('Parameter debug_trajectory_path must be set when debug_mode is enabled.')
+
+        path = Path(trajectory_path).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f'Debug trajectory file does not exist: {path}')
+
+        self._add_dataset_collector_scripts_to_path()
+
+        with path.open('rb') as f:
+            data = DebugTrajectoryUnpickler(f).load()
+
+        trajectory = data['traj']
+        self.debug_steps = [trajectory[t]['obs'] for t in range(len(trajectory))]
+        self.debug_step_index = 0
+        self.get_logger().warning(
+            f'DEBUG MODE: loaded {len(self.debug_steps)} frames from {path}.'
+        )
+
+    def _get_debug_images(self):
+        """DEBUG TEST ONLY: return the next camera_front_image from the loaded trajectory."""
+        if not self.debug_steps:
+            self.get_logger().error('Debug trajectory has no steps to replay.')
+            return None
+
+        index = self.debug_step_index % len(self.debug_steps)
+        front_image = self.debug_steps[index].get('camera_front_image')
+        if front_image is None:
+            self.get_logger().error(f'Debug step {index} has no camera_front_image.')
+            return None
+
+        if hasattr(front_image, 'ndim') and front_image.ndim == 1:
+            front_image = cv2.imdecode(front_image, cv2.IMREAD_COLOR)
+            front_image = cv2.cvtColor(front_image, cv2.COLOR_BGR2RGB)
+
+        self.get_logger().info(
+            f'[DEBUG] Using camera_front_image from trajectory step {index + 1}/{len(self.debug_steps)}.'
+        )
+        self.debug_step_index += 1
+        return [front_image]
+
+    def _joint_state_callback(self, msg):
+        self.latest_joint_state = msg
+
+    def _capture_robot_state(self, timeout_sec=1.0):
+        """Spin briefly to receive a fresh /joint_states + TF, then build a robot-state obs dict.
+
+        Field names mirror dataset_collector_pkg/utils.py so rollouts saved here are
+        readable by the same tooling (replicate_trajectory.py, cod_controller.py) as
+        recorded demonstrations.
+        """
+        start = self.get_clock().now()
+        while self.latest_joint_state is None:
+            self._raise_if_esc_pressed()
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if (self.get_clock().now() - start).nanoseconds / 1e9 > timeout_sec:
+                self.get_logger().warning('Timed out waiting for /joint_states message.')
+                break
+
+        state = {}
+        joint_state = self.latest_joint_state
+        if joint_state is not None:
+            joint_name_to_index = {name: idx for idx, name in enumerate(joint_state.name)}
+            try:
+                state[JOINT_POS_NAME] = np.array(
+                    [joint_state.position[joint_name_to_index[j]] for j in self.joint_robot_names])
+                state[JOINT_VEL_NAME] = np.array(
+                    [joint_state.velocity[joint_name_to_index[j]] for j in self.joint_robot_names])
+                state[GRIPPER_QPOS_NAME] = np.array(
+                    [joint_state.position[joint_name_to_index[j]] for j in self.gripper_robot_names])
+                state[GRIPPER_QVEL_NAME] = np.array(
+                    [joint_state.velocity[joint_name_to_index[j]] for j in self.gripper_robot_names])
+            except KeyError as exc:
+                self.get_logger().warning(f'Joint name missing from /joint_states: {exc}')
+        else:
+            self.get_logger().warning('No /joint_states message received; skipping joint/gripper state fields.')
+
+        try:
+            trans = self.tf_buffer.lookup_transform(self.frame_id, self.eef_frame_name, rclpy.time.Time())
+            state[EEF_POS_NAME] = np.array([trans.transform.translation.x,
+                                            trans.transform.translation.y,
+                                            trans.transform.translation.z])
+            state[EEF_QUAT_NAME] = np.array([trans.transform.rotation.x,
+                                             trans.transform.rotation.y,
+                                             trans.transform.rotation.z,
+                                             trans.transform.rotation.w])
+        except Exception as exc:
+            self.get_logger().warning(
+                f'Could not look up EEF pose via TF ({self.frame_id} -> {self.eef_frame_name}): {exc}')
+
+        return state
+
+    def _build_openvla_state(self, robot_state):
+        """Build the 8-dim proprio vector [eef_x, eef_y, eef_z, roll, pitch, yaw,
+        gripper_open, gripper_closed] expected by OpenVLAController (proprio_dim: 8
+        in openvla_config.yaml), matching the EEF_state (6) + gripper_state (2)
+        fields recorded by real_ur5e_pick_place_delta_removed_0_5_10_15/ur5e_pick_place.py
+        (PickPlaceEnv._create_step): eef_pose = [eef_pos(3), eef_euler_rpy(3)] and
+        gripper_state = [0.0, last commanded gripper action].
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build OpenVLA proprio state.')
+            return None
+
+        euler = _mat2euler_sxyz(_quat2mat(eef_quat))
+        euler = np.array([_normalize_angle(angle) for angle in euler])
+
+        gripper_open = 0.0
+        gripper_closed = 1.0 if self.gripper_closed else 0.0
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            euler,
+            [gripper_open, gripper_closed],
+        ])
+
+    def _build_tinyvla_state(self, robot_state):
+        """Build the 7-dim [eef_x, eef_y, eef_z, qx, qy, qz, qw] vector expected by
+        TinyVLAController. Unlike _build_openvla_state, orientation is passed as a
+        raw quaternion rather than pre-converted Euler angles: TinyVLAPolicy derives
+        its own gripper-frame Euler angles via R_EE_TO_GRIPPER (see tinyvla.py's
+        prepare_observation), which uses a different EEF->gripper frame convention
+        than OpenVLA's.
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build TinyVLA proprio state.')
+            return None
+
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+        ])
+
+    def _build_vla_jepa_state(self, robot_state):
+        """Build the 8-dim [eef_x, eef_y, eef_z, qx, qy, qz, qw, gripper_closed]
+        vector expected by VLAJEPAController.pre_process (ROBOT_STATE_DIM=8 in
+        vla_jepa_utils.py). Same eef_pos/eef_quat as _build_tinyvla_state, plus
+        the current binary gripper state (1.0=closed, matching
+        _build_openvla_state's gripper_closed convention) - the checkpoint does
+        NOT use observation.state, so this is only used downstream by
+        VLAJEPAController.post_process() to convert the model's predicted delta
+        into an absolute target relative to the robot's actual current pose.
+        """
+        eef_pos = robot_state.get(EEF_POS_NAME)
+        eef_quat = robot_state.get(EEF_QUAT_NAME)
+        if eef_pos is None or eef_quat is None:
+            self.get_logger().warning(
+                'Missing eef_pos/eef_quat from robot state; cannot build VLA-JEPA proprio state.')
+            return None
+
+        gripper_closed = 1.0 if self.gripper_closed else 0.0
+        return np.concatenate([
+            np.asarray(eef_pos, dtype=np.float64),
+            np.asarray(eef_quat, dtype=np.float64),
+            [gripper_closed],
+        ])
+
+    def move_to_initial_pose(self):
+        """Move the robot to the initial pose before starting the control loop."""
+        self.get_logger().info('Moving robot to initial pose before first inference...')
+        input("Press Enter to move the robot to the initial pose. Make sure the robot is in a safe position.")
+        pose_request = GoToPose.Request()
+        pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+        pose_request.pose.header.frame_id = self.frame_id
+        pose_request.pose.pose.position.x = self.pose_before_first_inference[0]
+        pose_request.pose.pose.position.y = self.pose_before_first_inference[1]
+        pose_request.pose.pose.position.z = self.pose_before_first_inference[2]
+        pose_request.pose.pose.orientation.x = self.pose_before_first_inference[3]
+        pose_request.pose.pose.orientation.y = self.pose_before_first_inference[4]
+        pose_request.pose.pose.orientation.z = self.pose_before_first_inference[5]
+        pose_request.pose.pose.orientation.w = self.pose_before_first_inference[6]
+        
+        future = self.set_pose_client.call_async(pose_request)
+        self._raise_if_esc_pressed()
+        rclpy.spin_until_future_complete(self, future)
+        self._raise_if_esc_pressed()
+        response = future.result()
+        if response is None:
+            self.get_logger().error('set_pose_client service call failed.')
+            raise RuntimeError('set_pose_client service call failed.')
+
+        if response.success:
+            self.get_logger().info(response.message)
+        else:
+            self.get_logger().error(response.message)
+            raise RuntimeError(f'Failed to move robot to initial pose: {response.message}')
+        
+        # Open the gripper to a known position (e.g., fully open) before starting
+        self.get_logger().info('Opening gripper to a known position before first inference...')
+        gripper_goal = GripperCommand.Goal()
+        gripper_goal.command.position = 0.1  # Fully open position (adjust as needed)
+        gripper_goal.command.max_effort = 50.0
+        future = self.gripper_action_client.send_goal_async(gripper_goal)
+        self._raise_if_esc_pressed()
+        rclpy.spin_until_future_complete(self, future)
+        self._raise_if_esc_pressed()
+        if future.result() is not None:
+            self.get_logger().info('Gripper opened successfully before first inference.')
+        else:
+            self.get_logger().error(f'Failed to open gripper before first inference: {future.exception()}')
+            raise RuntimeError(f'Failed to open gripper before first inference: {future.exception()}')
+    
+    def save_rollout(self, traj=None, save_path=None, task_id=None, traj_number=None,
+                     completed=True, abort_reason='', ask_results=None, timing=None):
+        """Save the current rollout Trajectory to a .pkl file, plus outcome metadata to a .json file."""
+        complete_save_path = os.path.join(save_path, f'task_{task_id}')
+        os.makedirs(complete_save_path,
+                    exist_ok=True)
+
+        traj_name = 'traj_{:03d}'.format(traj_number)
+        trajectory_path = None
+
+        if ask_results is None:
+            ask_results = completed
+        res_dict = {
+            'trajectory_complete': int(completed),
+            'aborted': int(not completed),
+            'abort_reason': abort_reason,
+        }
+        if timing is not None:
+            trajectory_time = timing.get('trajectory_execution_sec') if isinstance(timing, dict) else timing
+            if trajectory_time is not None:
+                res_dict['trajectory_execution_sec'] = float(trajectory_time)            
+        if ask_results:
+            # 1. Ask for object reached
+            object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
+            res_dict['object_reached'] = int(object_reached)
+
+            # 2. Ask for object picked
+            object_picked = input("Did the robot successfully pick the target object? [1,0]: ")
+            res_dict['object_picked'] = int(object_picked)
+
+            # 3. Ask for object placed
+            object_placed = input("Did the robot successfully place the target object? [1,0]: ")
+            res_dict['object_placed'] = int(object_placed)
+        else:
+            res_dict['object_reached'] = 0
+            res_dict['object_picked'] = 0
+            res_dict['object_placed'] = 0
+
+        res_dict['reached_wrong'] = 0
+        res_dict['picked_wrong'] = 0
+        res_dict['place_wrong_correct_bin'] = 0
+        res_dict['place_wrong_wrong_bin'] = 0
+
+        if ask_results and res_dict['object_reached'] != 1:
+            reached_wrong = input("Did the robot reach the wrong object? [1,0]: ")
+            res_dict['reached_wrong'] = int(reached_wrong)
+
+            picked_wrong = input("Did the robot pick the wrong object? [1,0]: ")
+            res_dict['picked_wrong'] = int(picked_wrong)
+
+            place_wrong_correct_bin = input("Did the robot place the wrong object in correct bin? [1,0]: ")
+            res_dict['place_wrong_correct_bin'] = int(place_wrong_correct_bin)
+
+            place_wrong_wrong_bin = input("Did the robot place the wrong object in wrong bin? [1,0]: ")
+            res_dict['place_wrong_wrong_bin'] = int(place_wrong_wrong_bin)
+
+        if traj is not None:
+            trajectory_path = os.path.join(complete_save_path, traj_name + '.pkl')
+            traj.save(
+                trajectory_path,
+                task_id=task_id,
+                traj_number=traj_number,
+                ai_controller_target=self.ai_controller_target,
+                task_name=self.task_name,
+                completed=completed,
+                aborted=not completed,
+                abort_reason=abort_reason,
+            )
+            status = 'complete' if completed else 'incomplete'
+            self.get_logger().info(f'Saved rollout trajectory to {trajectory_path} ({status})')
+
+        
+        with open(os.path.join(complete_save_path, traj_name + '.json'), 'w') as f:
+            json.dump(res_dict, f)
+
+        return trajectory_path
+
+    def check_robot_pose_reached(self, pose_request, timeout_sec=5.0):
+        # get current pose with TF listener
+        cnt = 100
+        target_position = np.array([pose_request.pose.pose.position.x,
+                                    pose_request.pose.pose.position.y,
+                                    pose_request.pose.pose.position.z]) 
+        while cnt > 0:
+            try:
+                # perform rclpy.spin_once() to allow TF listener to update
+                rclpy.spin_once(self, timeout_sec=0.1)
+                trans = self.tf_buffer.lookup_transform(self.frame_id, self.eef_frame_name, rclpy.time.Time())
+            except Exception as exc:
+                self.get_logger().warning(
+                    f'Could not look up EEF pose via TF ({self.frame_id} -> {self.eef_frame_name}): {exc}')
+                cnt -= 1
+                continue
+            
+            current_position = np.array([trans.transform.translation.x,
+                                        trans.transform.translation.y,
+                                        trans.transform.translation.z])
+            
+            position_error = np.linalg.norm(current_position - target_position)
+            delta = current_position - target_position
+            
+            if position_error < 0.01:
+                self.get_logger().info(f'Robot reached the desired pose with position error: {position_error:.4f}')
+                return True
+            else:
+                self.get_logger().warning(f'Robot has not reached the desired pose yet. Position error: {position_error:.4f}, Delta: {delta}')
+                return False
+            
+                
+    def _finish_timing(self, start_time):
+        return {'trajectory_execution_sec': time.perf_counter() - start_time} 
+
+    def control_loop(self):
+        """Main control loop for the AI controller."""
+        
+        self.get_logger().info('Starting control loop...')
+        # create a directory to save the images
+        save_path = f'/home/ros2_ws/src/ai_controller/saved_images/task_{self.task_name}'
+        os.makedirs(save_path, exist_ok=True)
+
+        Trajectory = _get_trajectory_cls(self)
+        
+        traj_cnt = int(input("Write the current trajectory count to the console: "))
+        self.traj_cnt = traj_cnt
+        
+        while rclpy.ok():
+
+            input("Press Enter to start the control loop. Make sure the robot is in a safe position.")
+
+            enter_task_id = input("Enter task ID (e.g., 1, 2, 3): ")
+            self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
+            # make task_id like XX
+            enter_task_id = enter_task_id.zfill(2)
+
+            # create a new trajectory
+            traj = Trajectory()
+            trajectory_start = time.perf_counter()
+
+            try:
+                for step in range(self.max_step):
+                    
+                    if step == 0:
+                        # resetting controller state for the new task
+                        self.controller.reset()
+                        self.get_logger().info(f'Setting robot to home position for task ID: {enter_task_id}')
+                        # call service to set robot to home position
+                        # wait for the service to complete
+                        future = self.set_home_client.call_async(GoHome.Request())
+                        self._raise_if_esc_pressed()
+                        rclpy.spin_until_future_complete(self, future)
+                        self._raise_if_esc_pressed()
+                        response = future.result()
+                        if response is None:
+                            self.get_logger().error('set_home_client service call failed.')
+                            raise RuntimeError('set_home_client service call failed.')
+
+                        if response.success:
+                            self.get_logger().info(response.message)
+
+                        else:
+                            self.get_logger().error(response.message)
+                            raise RuntimeError(f'Failed to set robot to home position: {response.message}')
+
+                        self.move_to_initial_pose()
+
+                        # load the demo data for the given task_id
+                        self.get_logger().info(f'Loading demo data for task ID: {enter_task_id}')
+                        self.controller.load_command(self.demo_path,
+                                                     enter_task_id,
+                                                     save_demo_frames=True,
+                                                     traj_cnt=self.traj_cnt,
+                                                     save_path=self.save_rollout_path)
+
+                        if self.ai_controller_target == 'vla_jepa_controller' and self.use_cosmos_task_description:
+                            # override vla_jepa_config.yaml's static tasks[task_id].prompt
+                            # (already set by load_command above) with a Cosmos-Reason2
+                            # caption of this task's human demo, for the whole episode.
+                            # Runs server-side (see server.py's /caption_task) - Cosmos
+                            # needs the same numpy>=2 stack as VLAJEPAController itself.
+                            caption = self.controller.caption_task_with_cosmos(self.demo_path, enter_task_id)
+                            self.get_logger().info(f'Cosmos task description: {caption!r}')
+
+
+                    # 1. Get sensor data (e.g., camera images)
+                    images = self.get_synced_images()
+                    print(f"Length of images: {len(images) if images is not None else 'None'}")
+                    if images is None:
+                        self.get_logger().error('Skipping step: failed to get synchronized camera images.')
+                        continue
+                    # images is a list of cv2/numpy arrays in the same order as self.camera_topic
+                    # save the images with PIL format for debugging
+                    for i, image in enumerate(images):
+                        print(f'Saving image {i} for step {step} to {save_path}/camera_image_{i}.png')
+                        img = Image.fromarray(image)
+                        img.save(f'{save_path}/camera_image_{i}.png')
+
+                    # capture the robot state (eef pose, joint pos/vel, gripper qpos/qvel) paired
+                    # with the observation image used for this step's inference
+                    robot_state = self._capture_robot_state()
+
+                    # 2. Get joint-states or other relevant robot states (if needed for inference).
+                    # Each controller expects a different state format (or none at all), so branch
+                    # on the loaded model: CODController.pre_process() raises NotImplementedError
+                    # if states is not None, while OpenVLAController needs the 8-dim proprio vector,
+                    # OSVI uses the full robot_state dict.
+                    if self.ai_controller_target == 'openvla_controller':
+                        states = self._build_openvla_state(robot_state)
+                    elif self.ai_controller_target == 'tinyvla_controller':
+                        states = self._build_tinyvla_state(robot_state)
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
+                        states = robot_state
+                    elif self.ai_controller_target == 'vla_jepa_controller':
+                        states = self._build_vla_jepa_state(robot_state)
+                    else:
+                        states = None
+
+                    if self.ai_controller_target == 'cod_controller':
+                        # let CODController bound its predicted pose relative to the
+                        # robot's actual current pose (see _post_process_action)
+                        self.controller.current_eef_pos = robot_state.get(EEF_POS_NAME)
+                        self.controller.current_eef_quat = robot_state.get(EEF_QUAT_NAME)
+
+                    depth_data = None
+                    if self.ai_controller_target == 'osvi_awda_controller':
+                        # everything osvi_awda_controller's grasp refinement needs,
+                        # gathered here so that controller has no ROS of its own -
+                        # mirrors current_eef_pos/quat above for CODController
+                        depth_data = {
+                            'image': self.latest_synced_depths.get('camera_gripper_depth'),
+                            'camera_matrix': self.gripper_camera_matrix,
+                            'camera_info_size': self.gripper_camera_info_size,
+                            'transform': self._lookup_gripper_depth_transform(),
+                        }
+
+                    # 3. Perform inference using the AI controller
+                    step_save_path = f'{save_path}/step_{step}'
+                    if self.ai_controller_target == 'vla_jepa_controller':
+                        # VLAJEPAController.pre_process() requires exactly
+                        # [images, robot_state] (no depth_data slot, unlike every
+                        # other controller here) - raises ValueError otherwise.
+                        out = self.controller.inference(
+                                                        input_data=[images, states],
+                                                        t=step,
+                                                        save_path=step_save_path)
+                    else:
+                        out = self.controller.inference(
+                                                        input_data=[images, states, depth_data],
+                                                        t=step,
+                                                        save_path=step_save_path)
+                    predicted_bb = None
+                    target_obj_prediction = None
+                    if self.ai_controller_target == 'cod_controller':
+                        pred_action, predicted_bb, target_obj_prediction = out
+                        actions = [pred_action]
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller', 'vla_jepa_controller'):
+                        actions = [np.asarray(action, dtype=np.float64) for action in out]
+                    elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
+                        actions = out
+                        # OpenVLAController/TinyVLAController both return a list of
+                        # actions wrt base_link frame [x, y, z, roll, pitch, yaw, gripper_position]
+                        # convert orientation from roll/pitch/yaw to quaternion
+                        for i in range(len(actions)):
+                            new_action = np.zeros(8)
+                            new_action[:3] = actions[i][:3] # position remains the same
+                            roll, pitch, yaw = actions[i][3:6]
+                            quat = _euler2quat(roll, pitch, yaw)
+                            new_action[3:7] = quat
+                            new_action[7] = actions[i][6] # gripper position remains the same
+                            actions[i] = new_action
+                    is_osvi = self.ai_controller_target in (
+                        'osvi_controller',
+                        'osvi_awda_controller',
+                    )
+
+                    # Keep the execution logic unchanged. For OSVI/OSVI-AWDA only,
+                    # record one observation/action pair for every action returned by
+                    # the same inference. The first action uses the observation that
+                    # produced the inference; before each following action we acquire
+                    # a fresh synchronized RGB/depth observation and robot state.
+                    episode_done = False
+
+                    for indx, action in enumerate(actions):
+
+                        if is_osvi and indx > 0:
+                            images = self.get_synced_images()
+                            if images is None:
+                                raise RuntimeError(
+                                    'Failed to get synchronized camera images between OSVI actions.'
+                                )
+                            robot_state = self._capture_robot_state()
+
+                        # For OSVI/OSVI-AWDA the observation must be captured before
+                        # executing the corresponding action, so the PKL stores
+                        # coherent (obs_t, action_t) pairs and camera_front_image can
+                        # be used to reconstruct the executed trajectory as a video.
+                        if is_osvi:
+                            step_obs = dict(robot_state)
+                            step_obs['camera_front_image'] = cv2.cvtColor(
+                                images[0], cv2.COLOR_RGB2BGR
+                            )
+
+                            extra_rgb_keys = [
+                                'camera_lateral_left_image',
+                                'camera_lateral_right_image',
+                                'camera_gripper_image',
+                            ]
+                            for i, key in enumerate(extra_rgb_keys, start=1):
+                                if i < len(images):
+                                    step_obs[key] = cv2.cvtColor(
+                                        images[i], cv2.COLOR_RGB2BGR
+                                    )
+
+                            # get_synced_images() is released by the same callback that
+                            # updates latest_synced_depths, so use the current synchronized
+                            # depth frames directly, as in the existing code.
+                            step_obs.update(self.latest_synced_depths)
+
+                        self.get_logger().info(f'Computed Action at step {step} - Indx {indx}: {action}')
+                        if self.move_robot:
+                            self._raise_if_esc_pressed()
+                            # 5. Send commands to the robot (e.g., set pose, control gripper)
+                            # call service to set robot to the desired pose
+                            if self.manual_step_waypoints:
+                                input(
+                                    "Press Enter to execute "
+                                    f"step {step}, waypoint/action {indx + 1}/{len(actions)} "
+                                    f"(xyz={action[:3]}, gripper={action[-1]})."
+                                )
+                                self._raise_if_esc_pressed()                            
+                            self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
+                            # input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
+                            pose_request = GoToPose.Request()
+                            pose_request.pose.header.stamp = self.get_clock().now().to_msg()
+                            pose_request.pose.header.frame_id = self.frame_id
+                            pose_request.pose.pose.position.x = action[0]
+                            pose_request.pose.pose.position.y = action[1]
+                            pose_request.pose.pose.position.z = action[2]
+                            pose_request.pose.pose.orientation.x = action[3]
+                            pose_request.pose.pose.orientation.y = action[4]
+                            pose_request.pose.pose.orientation.z = action[5]
+                            pose_request.pose.pose.orientation.w = action[6]
+                            future = self.set_pose_client.call_async(pose_request)
+                            self._raise_if_esc_pressed()
+                            rclpy.spin_until_future_complete(self, future)
+                            self._raise_if_esc_pressed()
+                            if future.result() is not None:
+                                self.get_logger().info(f'Robot set to desired pose at step {step}')
+                            else:
+                                self.get_logger().error(f'Service call failed for setting robot to desired pose: {future.exception()}')
+                                raise RuntimeError(f'Service call failed for setting robot to desired pose: {future.exception()}')
+
+                            # 6. Control the gripper based on the predicted action
+                            self.get_logger().info(f'Controlling gripper at step {step}')
+                            gripper_goal = GripperCommand.Goal()
+                            gripper_goal.command.position = action[-1]  # Assuming the last element of action is the gripper position
+                            # check the z-position of the action to determine if the gripper should be closed or opened
+
+                            # if self.gripper_closed:
+                            #     self.get_logger().info(f'Keeping gripper closed at step {step}')
+                            #     gripper_goal.command.position = 255.0  # Keep the gripper closed
+                            gripper_goal.command.max_effort = 50.0
+                            future = self.gripper_action_client.send_goal_async(gripper_goal)
+                            self._raise_if_esc_pressed()
+                            rclpy.spin_until_future_complete(self, future)
+                            self._raise_if_esc_pressed()
+
+                            if self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
+                                goal_handle = future.result()
+                                if goal_handle is None or not goal_handle.accepted:
+                                    self.get_logger().error('Gripper goal was rejected.')
+                                    raise RuntimeError('Gripper goal was rejected.')
+                                result_future = goal_handle.get_result_async()
+                                self._raise_if_esc_pressed()
+                                rclpy.spin_until_future_complete(self, result_future)
+                                self._raise_if_esc_pressed()
+                                if result_future.result() is None:
+                                    self.get_logger().error('Failed to receive gripper action result.')
+                                    raise RuntimeError('Failed to receive gripper action result.')
+
+                            if future.result() is not None:
+                                self.get_logger().info(f'Gripper command sent at step {step}')
+                            else:
+                                self.get_logger().error(f'Failed to send gripper command: {future.exception()}')
+                                raise RuntimeError(f'Failed to send gripper command: {future.exception()}')
+
+                            self.get_logger().info(f'Gripper command position: {gripper_goal.command.position}')
+                            if not self.gripper_closed and gripper_goal.command.position == 255.0:
+                                self.get_logger().info(f'Gripper is closing at step {step}')
+                                self.gripper_closed = True
+
+                            time.sleep(1)
+
+                        if is_osvi:
+                            # Record this specific OSVI action. Do not change the
+                            # execution/termination logic here: episode completion is
+                            # still evaluated below exactly as before, after the full
+                            # action list has been executed.
+                            action_done = bool(
+                                self.move_robot
+                                and indx == len(actions) - 1
+                                and self.gripper_closed
+                                and gripper_goal.command.position == 0.0
+                            )
+                            traj.append(
+                                obs=step_obs,
+                                action=action,
+                                done=action_done,
+                                reward=1 if action_done else 0,
+                            )
+
+                    # Keep the original episode-completion behavior unchanged:
+                    # evaluate the close->open transition only after all actions
+                    # returned by this inference have been executed.
+                    if is_osvi:
+                        if (
+                            self.move_robot
+                            and self.gripper_closed
+                            and gripper_goal.command.position == 0.0
+                        ):
+                            self.get_logger().info(f'Gripper is opening at step {step}')
+                            self.gripper_closed = False
+                            episode_done = True
+                    else:
+                        # check if a transiction close->open has been made
+                        episode_done = False
+                        if self.gripper_closed and gripper_goal.command.position == 0.0:
+                            self.get_logger().info(f'Gripper is opening at step {step}')
+                            self.gripper_closed = False
+                            episode_done = True
+
+                        # 7. Record this step (observation image, cropped model input, predicted
+                        # bounding boxes, computed action and robot state) into the rollout Trajectory
+                        step_obs = dict(robot_state)
+                        step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
+
+                        # extra RGB cameras (logging only): rely on the same order as
+                        # the default camera_topic param (front, left, right, gripper)
+                        extra_rgb_keys = ['camera_lateral_left_image', 'camera_lateral_right_image', 'camera_gripper_image']
+                        for i, key in enumerate(extra_rgb_keys, start=1):
+                            if i < len(images):
+                                step_obs[key] = cv2.cvtColor(images[i], cv2.COLOR_RGB2BGR)
+
+                        # extra depth cameras (logging only): most recently received
+                        # frame per camera, independent of the RGB sync above
+                        step_obs.update(self.latest_synced_depths)
+
+                        cropped_image_path = os.path.join(step_save_path, 'pre_processed_img_0.png')
+                        if os.path.isfile(cropped_image_path):
+                            step_obs['cropped_image'] = np.array(Image.open(cropped_image_path))
+                        else:
+                            self.get_logger().warning(
+                                f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
+
+                        if predicted_bb is not None:
+                            step_obs['predicted_bb'] = predicted_bb.detach().cpu().numpy() if hasattr(predicted_bb, 'detach') else predicted_bb
+                        
+                        traj.append(
+                            obs=step_obs,
+                            action=action,
+                            done=episode_done,
+                            reward=1 if episode_done else 0,
+                        )
+
+                    if episode_done:
+                        break  # exit the loop if the gripper has opened after being closed
+
+                self.save_rollout(
+                                  traj=traj,
+                                  save_path=self.save_rollout_path,
+                                  task_id=enter_task_id,
+                                  traj_number=self.traj_cnt,
+                                  timing=self._finish_timing(trajectory_start)
+                                  )
+                self.traj_cnt += 1
+            except KeyboardInterrupt as exc:
+                abort_reason = str(exc) or 'KeyboardInterrupt'
+                self.get_logger().warning(
+                    'Execution interrupted by user. Saving incomplete rollout before shutdown...')
+                self.save_rollout(
+                                  traj=traj,
+                                  save_path=self.save_rollout_path,
+                                  task_id=enter_task_id,
+                                  traj_number=self.traj_cnt,
+                                  completed=False,
+                                  abort_reason=abort_reason,
+                                  ask_results=True,
+                                  timing=self._finish_timing(trajectory_start)
+                                  )
+                # OPEN GRIPPER
+                gripper_goal = GripperCommand.Goal()
+                gripper_goal.command.position = 0.0  # Fully open position (adjust as needed)
+                gripper_goal.command.max_effort = 50.0
+                future = self.gripper_action_client.send_goal_async(gripper_goal)
+                rclpy.spin_until_future_complete(self, future)
+                if future.result() is not None:
+                    self.get_logger().info('Gripper opened successfully after KeyboardInterrupt.')
+                else:
+                    self.get_logger().error(f'Failed to open gripper after KeyboardInterrupt: {future.exception()}')
+                raise
+            except Exception as exc:
+                abort_reason = f'{type(exc).__name__}: {exc}'
+                self.get_logger().error(
+                    f'AI controller execution failed. Saving incomplete rollout: {abort_reason}')
+                self.save_rollout(
+                                  traj=traj,
+                                  save_path=self.save_rollout_path,
+                                  task_id=enter_task_id,
+                                  traj_number=self.traj_cnt,
+                                  completed=False,
+                                  abort_reason=abort_reason,
+                                  ask_results=True,
+                                  timing=self._finish_timing(trajectory_start)
+                                  )
+                self.traj_cnt += 1
+                    
+        
+
+def main(args=None):
+    rclpy.init()
+    node = AIControllerNode()
+    executor = MultiThreadedExecutor(num_threads=1)
+    executor.add_node(node)
+    
+    try:
+        node.get_logger().info('Beginning client, shut down with CTRL-C')
+        node.control_loop()
+        executor.spin()
+        node.get_logger().info('Shutting down AIControllerNode\n')
+    except KeyboardInterrupt:
+        node.get_logger().info('Keyboard interrupt, shutting down.\n')
+    node.destroy_node()
+    rclpy.shutdown()

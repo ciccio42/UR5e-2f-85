@@ -35,6 +35,10 @@ OBJ_LIST = {
     'pick_place': ['greenbox', 'yellowbox', 'bluebox', 'redbox', 'bin1', 'bin2', 'bin3', 'bin4']
 }
 
+TASK_NAME_ALIASES = {
+    'pick_and_place': 'pick_place',
+}
+
 def on_mouse_click(event, x, y, flags, param):
     if event == cv2.EVENT_LBUTTONDOWN:
         # print(f'Clicked at: ({x}, {y})')
@@ -48,16 +52,20 @@ def get_object_centers(node, task_name, variation_id, camera_name, rgb_image, de
     global obj_loc
     obj_loc = []
 
+    task_key = TASK_NAME_ALIASES.get(task_name, task_name)
+    if task_key not in MAP_TASK_ID_OBJECT:
+        raise KeyError(f'Unsupported task_name: {task_name}')
+
     obj_bb = dict()
     obj_bb[camera_name] = dict()
 
     node.get_logger().info(f'Getting object centers for task {task_name} and variation {variation_id}...')
 
     # get the object name and bin name from the task id and variation id
-    target_object_name, target_bin_name = MAP_TASK_ID_OBJECT[task_name][variation_id]
+    target_object_name, target_bin_name = MAP_TASK_ID_OBJECT[task_key][variation_id]
     node.get_logger().info(f'\tObject name: {target_object_name}, Bin name: {target_bin_name}')
 
-    for obj_idx, obj_name in enumerate(OBJ_LIST[task_name]):
+    for obj_idx, obj_name in enumerate(OBJ_LIST[task_key]):
         if obj_name == target_object_name or obj_name == target_bin_name:
             node.get_logger().info(f'\tGetting center for target object {obj_name}...')
             # show image

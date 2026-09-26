@@ -1,10 +1,9 @@
-ARG UBUNTU_RELEASE_YEAR="24"
 ARG ZED_SDK_MAJOR="5"
-ARG ZED_SDK_MINOR="1"
-ARG CUDA_MAJOR="13"
-ARG CUDA_MINOR="0"
+ARG ZED_SDK_MINOR="3"
+ARG L4T_RELEASE="r38.4"
+ARG TARGET_PLATFORM="linux/arm64"
 
-FROM stereolabs/zed:${ZED_SDK_MAJOR}.${ZED_SDK_MINOR}-devel-cuda${CUDA_MAJOR}.${CUDA_MINOR}-ubuntu${UBUNTU_RELEASE_YEAR}.04
+FROM --platform=linux/arm64 stereolabs/zed:5.3-devel-l4t-r38.4
 
 ARG ROS_DISTRO_ARG="jazzy"
 SHELL ["/bin/bash", "-c"]

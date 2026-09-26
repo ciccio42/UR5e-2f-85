@@ -1,0 +1,271 @@
+# =============================================================================
+# VLA-JEPA CONTROLLER CONFIGURATION
+# =============================================================================
+#
+# Configurazione runtime del controller VLA-JEPA per UR5e.
+#
+# IMPORTANTE:
+# Questo file NON descrive l'architettura VLA-JEPA.
+#
+# Parametri come:
+#   - action_dim
+#   - chunk_size
+#   - n_action_steps
+#   - num_inference_timesteps
+#   - Qwen / JEPA backbone
+#   - normalizzazione
+#   - gripper preprocessing/postprocessing
+#
+# vengono caricati direttamente dal config.json del checkpoint LeRobot.
+#
+# Questo YAML contiene soltanto i parametri specifici del deployment
+# all'interno di ai_controller.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# CHECKPOINT
+# -----------------------------------------------------------------------------
+
+# Path visto DENTRO il container ur_robotiq_teleoperation_container, dove
+# ai_controller/ (repo host) e' montato su /home/ros2_ws/src/ai_controller -
+# checkpoint gia' presente li' (nessun mount/copy separato necessario, a
+# differenza del setup Docker standalone originale). Questa stessa config
+# viene usata sia con Cosmos (use_cosmos_task_description:=true, override
+# del prompt a runtime) sia senza (prompt statico da tasks: sotto) - i due
+# modi non richiedono file di config separati.
+#
+# La directory deve contenere almeno:
+#   config.json
+#   model.safetensors
+#   policy_preprocessor.json
+#   policy_postprocessor.json
+#   relativi *.safetensors dei processor
+#
+checkpoint_path: /home/ros2_ws/src/ai_controller/checkpoint_folder/lerobot/vla-jepa/016000/pretrained_model
+
+
+# -----------------------------------------------------------------------------
+# DEVICE
+# -----------------------------------------------------------------------------
+
+# Il deployment sulla DGX Spark utilizza CUDA.
+device: cuda
+
+
+# -----------------------------------------------------------------------------
+# SERVER (HTTP bridge)
+# -----------------------------------------------------------------------------
+
+# lerobot/transformers/scipy richiedono numpy>=2, che rompe l'estensione C++
+# di cv_bridge (compilata per numpy 1.x) usata da ai_controller_node.py - le
+# due cose non possono coesistere nello stesso interprete Python. Server.py
+# (eseguito nel venv separato /opt/vla_jepa_venv, numpy>=2) carica il vero
+# VLAJEPAController + CosmosCaptioner ed espone /reset, /load_command,
+# /caption_task, /inference via HTTP; vla_jepa_client.py (eseguito nel
+# python di sistema di ai_controller_node.py, numpy<2) e' un client leggero
+# che implementa la stessa interfaccia (reset/load_command/inference) e
+# inoltra le chiamate qui. Stessa config usata da entrambi i lati.
+server_host: "127.0.0.1"
+server_port: 8770
+
+
+# -----------------------------------------------------------------------------
+# RANDOM SEED
+# -----------------------------------------------------------------------------
+
+# VLA-JEPA genera l'action chunk attraverso un processo di flow matching
+# inizializzato da rumore.
+#
+# Il seed viene impostato dal controller prima del caricamento della policy.
+#
+# Si mantiene il seed utilizzato nel training ricevuto.
+seed: 1000
+
+
+# -----------------------------------------------------------------------------
+# CAMERA INPUT
+# -----------------------------------------------------------------------------
+
+# Ordine delle camere fornito da AIControllerNode:
+#
+#   images[0] = front
+#   images[1] = left
+#   images[2] = right
+#   images[3] = gripper
+#
+# VLA-JEPA utilizza soltanto:
+#   - front
+#   - gripper
+#
+front_camera_index: 0
+gripper_camera_index: 3
+
+
+# AIControllerNode fornisce le immagini già in RGB.
+#
+# Valori supportati dalle utils:
+#   rgb
+#   bgr
+#
+input_color_order: rgb
+
+
+# -----------------------------------------------------------------------------
+# ACTION REPRESENTATION
+# -----------------------------------------------------------------------------
+
+# Nel dataset UR5e le prime sei componenti delle action sono state salvate
+# dividendo il delta fisico per 0.05.
+#
+# Dopo il postprocessor LeRobot:
+#
+#   physical_delta[:6] = predicted_action[:6] * 0.05
+#
+# La settima componente (gripper) NON viene moltiplicata per questo valore.
+#
+dataset_action_scale: 0.05
+
+
+# -----------------------------------------------------------------------------
+# GRIPPER
+# -----------------------------------------------------------------------------
+
+# Convenzione comune utilizzata dai controller:
+#
+#   0 = open
+#   1 = closed
+#
+# Le utils convertono successivamente lo stato binario nel comando
+# utilizzato dal Robotiq / MoveIt:
+#
+#   open   -> 0
+#   closed -> 255
+#
+
+
+# Processor LeRobot
+postprocessor_config_filename: policy_postprocessor_ur5e.json
+
+gripper_open_position: 0.0
+gripper_closed_position: 255.0
+
+
+# -----------------------------------------------------------------------------
+# DEBUG
+# -----------------------------------------------------------------------------
+
+# Se true vengono stampati:
+#   - action restituita dal postprocessor LeRobot
+#   - delta xyz fisici
+#   - delta RPY in radianti e gradi
+#   - pose di riferimento
+#   - target assoluto
+#   - comando gripper
+#
+#
+trace_action_conversions: true
+grasp_z_offset_m: -0.02
+
+
+# =============================================================================
+# TASKS
+# =============================================================================
+#
+# AIControllerNode utilizza task ID nel formato:
+#
+#   "00", "01", ..., "15"
+#
+# VLA-JEPA utilizza direttamente l'istruzione testuale originale:
+#
+#   "Pick the <color> box and place it into the <ordinal> bin"
+#
+# =============================================================================
+
+tasks:
+
+  "00":
+    prompt: "Pick the green box and place it into the first bin"
+
+  "01":
+    prompt: "Pick the green box and place it into the second bin"
+
+  "02":
+    prompt: "Pick the green box and place it into the third bin"
+
+  "03":
+    prompt: "Pick the green box and place it into the fourth bin"
+
+
+  "04":
+    prompt: "Pick the yellow box and place it into the first bin"
+
+  "05":
+    prompt: "Pick the yellow box and place it into the second bin"
+
+  "06":
+    prompt: "Pick the yellow box and place it into the third bin"
+
+  "07":
+    prompt: "Pick the yellow box and place it into the fourth bin"
+
+
+  "08":
+    prompt: "Pick the blue box and place it into the first bin"
+
+  "09":
+    prompt: "Pick the blue box and place it into the second bin"
+
+  "10":
+    prompt: "Pick the blue box and place it into the third bin"
+
+  "11":
+    prompt: "Pick the blue box and place it into the fourth bin"
+
+
+  "12":
+    prompt: "Pick the red box and place it into the first bin"
+
+  "13":
+    prompt: "Pick the red box and place it into the second bin"
+
+  "14":
+    prompt: "Pick the red box and place it into the third bin"
+
+  "15":
+    prompt: "Pick the red box and place it into the fourth bin"
+
+
+
+  "20":
+    prompt: "Pick the red box and place it into the leftmost bin"
+
+  "21":
+    prompt: "Color: green; Destination: second from the right"
+
+  "22":
+    prompt: "Move the cube colored red and place it into the bin in front of it"
+
+  "23":
+    prompt: "Take the middle-right box and move it to the first bin"
+
+  "24":
+    prompt: "Take the third box from the left and move it to the first bin"
+
+  
+  
+  
+  "25":
+    prompt: "Color: green; Destination: second bin"
+
+  "26":
+    prompt: "Move the red box and place it into the bin 3"
+
+  "27":
+    prompt: "Pick the cube whose color is neither red, blue, nor yellow and move it into bin 4."
+
+  "28":
+    prompt: "Into the second bin, move the blue box."
+
+  "29":
+    prompt: "Pick the third box and place it into the red bin"

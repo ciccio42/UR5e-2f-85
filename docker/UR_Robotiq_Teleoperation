@@ -33,9 +33,33 @@ RUN apt update && apt install -y iputils-ping \
 && colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 RUN apt update && apt install usbutils && pip install pydualsense --break-system-packages
 # Source ROS 2 automatically
+RUN apt-get update && apt-get install -y ros-$ROS_DISTRO-moveit-py
+RUN python3 -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128 --break-system-packages && python3 -m pip install hydra-core omegaconf einops torchsummary tqdm --break-system-packages
 # Add entrypoint
 COPY ./ur_robotiq_teleoperation_entrypoint.sh /ur_robotiq_teleoperation_entrypoint.sh
 ENTRYPOINT ["/ur_robotiq_teleoperation_entrypoint.sh"]
+
+# Install OpenVLA-OFT dependencies
+RUN pip install peft==0.11.1 \
+                accelerate==1.10.1 \
+                sentencepiece==0.1.99 \
+                timm==0.9.10 \
+                pyyaml  \
+                git+https://github.com/moojink/transformers-openvla-oft.git \
+                tensorflow \
+                json_numpy \
+                einops  \
+                packaging ninja \
+                --break-system-packages
+
+RUN apt-get install cuda-toolkit-12-8 -y
+RUN update-alternatives --set cuda /usr/local/cuda-12.8
+RUN pip install "flash-attn==2.5.5" \
+                --no-build-isolation \
+                --break-system-packages
+RUN pip install --no-deps "dlimp @ git+https://github.com/moojink/dlimp_openvla" --break-system-packages
+RUN pip install -U protobuf --break-system-packages
+RUN pip install bitsandbytes --break-system-packages
 
 WORKDIR ${ROS_WS}
 CMD ["bash"]

@@ -1,6 +1,8 @@
 import cv2
 import copy
 import numpy as np
+import pickle
+from pathlib import Path
 
 def _compress_obs(obs):
     if 'image' in obs:
@@ -80,6 +82,19 @@ class Trajectory:
 
     def set_config_str(self, config_str):
         self._config_str = config_str
+
+    def save(self, path, **metadata):
+        path = Path(path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {'traj': self}
+        if self._config_str is not None:
+            payload['config_str'] = self._config_str
+        payload.update(metadata)
+
+        with path.open('wb') as file_handle:
+            pickle.dump(payload, file_handle)
+
+        return path
 
     @property
     def config_str(self):

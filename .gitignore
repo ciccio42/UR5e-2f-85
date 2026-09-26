@@ -5,3 +5,13 @@ install/
 *.pyc
 traj_tmp/
 *.pkl
+resource/
+test/
+checkpoint_folder/
+*png
+saved_images/
+saved_rollouts/
+zed_camera/zed_docker_cache/
+*npy
+*json
+external/

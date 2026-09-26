@@ -78,110 +78,7 @@
     <!--END EFFECTOR: Purpose: Represent information about an end effector.-->
     <end_effector name="eef" parent_link="tool0" group="gripper"/>
     <!--DISABLE COLLISIONS: By default it is assumed that any link of the robot could potentially come into collision with any other link in the robot. This tag disables collision checking between a specified pair of links. -->
-    <disable_collisions link1="adapter_gripper" link2="base" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="base_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="base_link_camera" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="base_link_inertia" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="base_link_platform" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="ft_frame" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robot_base_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_base_link" reason="Adjacent"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_left_finger_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_left_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_left_knuckle_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_right_finger_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_right_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="robotiq_85_right_knuckle_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="table_support_sx_back_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="tool0" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="upper_block_gripper" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="ur_to_robotiq_link" reason="Adjacent"/>
-    <disable_collisions link1="adapter_gripper" link2="vertical_back_dx_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="vertical_back_sx_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="vertical_front_dx_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="world" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="adapter_gripper" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="base" link2="base_link" reason="Adjacent"/>
-    <disable_collisions link1="base" link2="base_link_camera" reason="Never"/>
-    <disable_collisions link1="base" link2="base_link_inertia" reason="Default"/>
-    <disable_collisions link1="base" link2="base_link_platform" reason="Never"/>
-    <disable_collisions link1="base" link2="forearm_link" reason="Never"/>
-    <disable_collisions link1="base" link2="ft_frame" reason="Never"/>
-    <disable_collisions link1="base" link2="robot_base_1" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_left_finger_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_left_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_left_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_right_finger_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_right_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base" link2="robotiq_85_right_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base" link2="shoulder_link" reason="Never"/>
-    <disable_collisions link1="base" link2="table_1" reason="Never"/>
-    <disable_collisions link1="base" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="base" link2="table_support_sx_back_1" reason="Never"/>
-    <disable_collisions link1="base" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="base" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="base" link2="tool0" reason="Never"/>
-    <disable_collisions link1="base" link2="upper_arm_link" reason="Never"/>
-    <disable_collisions link1="base" link2="upper_block_gripper" reason="Never"/>
-    <disable_collisions link1="base" link2="ur_to_robotiq_link" reason="Never"/>
-    <disable_collisions link1="base" link2="vertical_back_dx_1" reason="Never"/>
-    <disable_collisions link1="base" link2="vertical_back_sx_1" reason="Never"/>
-    <disable_collisions link1="base" link2="vertical_front_dx_1" reason="Never"/>
-    <disable_collisions link1="base" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="base" link2="world" reason="Never"/>
-    <disable_collisions link1="base" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="base" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="base" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="base" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="base" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="base_link" link2="base_link_camera" reason="Never"/>
-    <disable_collisions link1="base_link" link2="base_link_inertia" reason="Adjacent"/>
-    <disable_collisions link1="base_link" link2="base_link_platform" reason="Never"/>
-    <disable_collisions link1="base_link" link2="forearm_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="ft_frame" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robot_base_1" reason="Adjacent"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_left_finger_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_left_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_left_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_right_finger_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_right_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="robotiq_85_right_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="shoulder_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="table_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="table_support_sx_back_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="tool0" reason="Never"/>
-    <disable_collisions link1="base_link" link2="upper_arm_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="upper_block_gripper" reason="Never"/>
-    <disable_collisions link1="base_link" link2="ur_to_robotiq_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="vertical_back_dx_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="vertical_back_sx_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="vertical_front_dx_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="base_link" link2="world" reason="Never"/>
-    <disable_collisions link1="base_link" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="base_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="base_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="base_link_platform" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="ft_frame" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="robotiq_85_base_link" reason="Default"/>
     <disable_collisions link1="base_link_camera" link2="robotiq_85_left_finger_link" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
@@ -194,49 +91,35 @@
     <disable_collisions link1="base_link_camera" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="tool0" reason="Adjacent"/>
     <disable_collisions link1="base_link_camera" link2="upper_block_gripper" reason="Adjacent"/>
-    <disable_collisions link1="base_link_camera" link2="ur_to_robotiq_link" reason="Default"/>
+    <disable_collisions link1="base_link_camera" link2="ur_to_robotiq_link" reason="Adjacent"/>
     <disable_collisions link1="base_link_camera" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="world" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="base_link_camera" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="base_link_camera" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="base_link_camera" link2="wrist_3_link" reason="Adjacent"/>
+    <disable_collisions link1="base_link_camera" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="base_link_platform" reason="Never"/>
-    <disable_collisions link1="base_link_inertia" link2="ft_frame" reason="Never"/>
-    <disable_collisions link1="base_link_inertia" link2="robot_base_1" reason="Default"/>
+    <disable_collisions link1="base_link_inertia" link2="robot_base_1" reason="Adjacent"/>
     <disable_collisions link1="base_link_inertia" link2="shoulder_link" reason="Adjacent"/>
     <disable_collisions link1="base_link_inertia" link2="table_1" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="base_link_inertia" link2="tool0" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="vertical_back_dx_1" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="base_link_inertia" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="base_link_inertia" link2="world" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="forearm_link" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="ft_frame" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="robot_base_1" reason="Adjacent"/>
-    <disable_collisions link1="base_link_platform" link2="robotiq_85_base_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="robotiq_85_left_finger_link" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="robotiq_85_left_inner_knuckle_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="robotiq_85_left_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="robotiq_85_right_knuckle_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="shoulder_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="table_1" reason="Adjacent"/>
     <disable_collisions link1="base_link_platform" link2="table_support_dx_front_1" reason="Adjacent"/>
     <disable_collisions link1="base_link_platform" link2="table_support_sx_back_1" reason="Adjacent"/>
     <disable_collisions link1="base_link_platform" link2="table_support_sx_front_1" reason="Adjacent"/>
-    <disable_collisions link1="base_link_platform" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="tool0" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="upper_arm_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="ur_to_robotiq_link" reason="Never"/>
@@ -244,62 +127,27 @@
     <disable_collisions link1="base_link_platform" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="world" reason="Adjacent"/>
     <disable_collisions link1="base_link_platform" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="base_link_platform" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="base_link_platform" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="base_link_platform" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="forearm_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="forearm_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="forearm_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="forearm_link" link2="tcp_link" reason="Never"/>
     <disable_collisions link1="forearm_link" link2="upper_arm_link" reason="Adjacent"/>
     <disable_collisions link1="forearm_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="forearm_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="forearm_link" link2="world" reason="Never"/>
     <disable_collisions link1="forearm_link" link2="wrist_1_link" reason="Adjacent"/>
     <disable_collisions link1="forearm_link" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robot_base_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_base_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_left_finger_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_left_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_left_knuckle_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_right_finger_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_right_finger_tip_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="robotiq_85_right_knuckle_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="shoulder_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="table_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="table_support_sx_back_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="tool0" reason="Default"/>
-    <disable_collisions link1="ft_frame" link2="upper_block_gripper" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="ur_to_robotiq_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="vertical_back_dx_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="vertical_back_sx_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="vertical_front_dx_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="world" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="wrist_3_link" reason="Adjacent"/>
-    <disable_collisions link1="ft_frame" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="ft_frame" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="shoulder_link" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="table_1" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robot_base_1" link2="tool0" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="vertical_back_dx_1" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robot_base_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robot_base_1" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="robotiq_85_left_finger_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="robotiq_85_left_finger_tip_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="robotiq_85_left_inner_knuckle_link" reason="Adjacent"/>
@@ -309,20 +157,15 @@
     <disable_collisions link1="robotiq_85_base_link" link2="robotiq_85_right_inner_knuckle_link" reason="Adjacent"/>
     <disable_collisions link1="robotiq_85_base_link" link2="robotiq_85_right_knuckle_link" reason="Adjacent"/>
     <disable_collisions link1="robotiq_85_base_link" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="upper_block_gripper" reason="Default"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="ur_to_robotiq_link" reason="Default"/>
+    <disable_collisions link1="robotiq_85_base_link" link2="ur_to_robotiq_link" reason="Adjacent"/>
     <disable_collisions link1="robotiq_85_base_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_base_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_base_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_base_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="robotiq_85_left_finger_tip_link" reason="Adjacent"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="robotiq_85_left_inner_knuckle_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="robotiq_85_left_knuckle_link" reason="Adjacent"/>
@@ -333,18 +176,14 @@
     <disable_collisions link1="robotiq_85_left_finger_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="ur_to_robotiq_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_left_finger_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="robotiq_85_left_inner_knuckle_link" reason="Default"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="robotiq_85_left_knuckle_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="robotiq_85_right_finger_link" reason="Never"/>
@@ -354,16 +193,14 @@
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="ur_to_robotiq_link" reason="Never"/>
+    <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_left_finger_tip_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="robotiq_85_left_knuckle_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="robotiq_85_right_finger_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="robotiq_85_right_finger_tip_link" reason="Never"/>
@@ -372,18 +209,14 @@
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="ur_to_robotiq_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_left_inner_knuckle_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="robotiq_85_right_finger_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="robotiq_85_right_finger_tip_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
@@ -391,108 +224,79 @@
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_knuckle_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_knuckle_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="ur_to_robotiq_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_knuckle_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_left_knuckle_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_knuckle_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_left_knuckle_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_left_knuckle_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="robotiq_85_right_finger_tip_link" reason="Adjacent"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="robotiq_85_right_inner_knuckle_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="robotiq_85_right_knuckle_link" reason="Adjacent"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="ur_to_robotiq_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_right_finger_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="robotiq_85_right_inner_knuckle_link" reason="Default"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="robotiq_85_right_knuckle_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="ur_to_robotiq_link" reason="Never"/>
+    <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_right_finger_tip_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="robotiq_85_right_knuckle_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="ur_to_robotiq_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_right_inner_knuckle_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="table_support_dx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="ur_to_robotiq_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="world" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="robotiq_85_right_knuckle_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="robotiq_85_right_knuckle_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="table_1" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="shoulder_link" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="shoulder_link" link2="tool0" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="upper_arm_link" reason="Adjacent"/>
     <disable_collisions link1="shoulder_link" link2="vertical_back_dx_1" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="shoulder_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="shoulder_link" link2="world" reason="Never"/>
     <disable_collisions link1="table_1" link2="table_support_dx_front_1" reason="Never"/>
     <disable_collisions link1="table_1" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="table_1" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="table_1" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="table_1" link2="tool0" reason="Never"/>
     <disable_collisions link1="table_1" link2="vertical_back_dx_1" reason="Never"/>
     <disable_collisions link1="table_1" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="table_1" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="table_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="table_1" link2="world" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="table_support_sx_back_1" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="table_support_dx_front_1" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="table_support_dx_front_1" link2="tool0" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="upper_arm_link" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="ur_to_robotiq_link" reason="Never"/>
@@ -500,15 +304,11 @@
     <disable_collisions link1="table_support_dx_front_1" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="vertical_front_dx_1" reason="Adjacent"/>
     <disable_collisions link1="table_support_dx_front_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="table_support_dx_front_1" link2="world" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="table_support_dx_front_1" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="table_support_dx_front_1" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="table_support_dx_front_1" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="table_support_dx_front_1" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="table_support_sx_front_1" reason="Never"/>
-    <disable_collisions link1="table_support_sx_back_1" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="table_support_sx_back_1" link2="tool0" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="upper_arm_link" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="ur_to_robotiq_link" reason="Never"/>
@@ -516,12 +316,10 @@
     <disable_collisions link1="table_support_sx_back_1" link2="vertical_back_sx_1" reason="Adjacent"/>
     <disable_collisions link1="table_support_sx_back_1" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="table_support_sx_back_1" link2="world" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="table_support_sx_back_1" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="table_support_sx_front_1" link2="tcp_link" reason="Never"/>
-    <disable_collisions link1="table_support_sx_front_1" link2="tool0" reason="Never"/>
+    <disable_collisions link1="table_support_sx_back_1" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="upper_arm_link" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="upper_block_gripper" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="ur_to_robotiq_link" reason="Never"/>
@@ -529,92 +327,44 @@
     <disable_collisions link1="table_support_sx_front_1" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="vertical_front_sx_1" reason="Adjacent"/>
-    <disable_collisions link1="table_support_sx_front_1" link2="world" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="table_support_sx_front_1" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="table_support_sx_front_1" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="table_support_sx_front_1" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="tool0" reason="Adjacent"/>
-    <disable_collisions link1="tcp_link" link2="upper_arm_link" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="upper_block_gripper" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="ur_to_robotiq_link" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="vertical_back_dx_1" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="vertical_back_sx_1" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="vertical_front_dx_1" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="world" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="tcp_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="tool0" link2="upper_block_gripper" reason="Never"/>
-    <disable_collisions link1="tool0" link2="ur_to_robotiq_link" reason="Adjacent"/>
-    <disable_collisions link1="tool0" link2="vertical_back_dx_1" reason="Never"/>
-    <disable_collisions link1="tool0" link2="vertical_back_sx_1" reason="Never"/>
-    <disable_collisions link1="tool0" link2="vertical_front_dx_1" reason="Never"/>
-    <disable_collisions link1="tool0" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="tool0" link2="world" reason="Never"/>
-    <disable_collisions link1="tool0" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="tool0" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="tool0" link2="wrist_3_link" reason="Adjacent"/>
-    <disable_collisions link1="tool0" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="tool0" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="table_support_sx_front_1" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="upper_arm_link" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="upper_arm_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="upper_arm_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="upper_arm_link" link2="world" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="ur_to_robotiq_link" reason="Default"/>
     <disable_collisions link1="upper_block_gripper" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="upper_block_gripper" link2="world" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="upper_block_gripper" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="upper_block_gripper" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Adjacent"/>
+    <disable_collisions link1="upper_block_gripper" link2="zed_mini_camera_center" reason="Adjacent"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="ur_to_robotiq_link" link2="world" reason="Never"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="ur_to_robotiq_link" link2="wrist_3_link" reason="Default"/>
-    <disable_collisions link1="ur_to_robotiq_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="ur_to_robotiq_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="ur_to_robotiq_link" link2="wrist_3_link" reason="Adjacent"/>
+    <disable_collisions link1="ur_to_robotiq_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="vertical_back_dx_1" link2="vertical_back_sx_1" reason="Never"/>
     <disable_collisions link1="vertical_back_dx_1" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="vertical_back_dx_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="vertical_back_dx_1" link2="world" reason="Never"/>
     <disable_collisions link1="vertical_back_sx_1" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="vertical_back_sx_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="vertical_back_sx_1" link2="world" reason="Never"/>
     <disable_collisions link1="vertical_front_dx_1" link2="vertical_front_sx_1" reason="Never"/>
-    <disable_collisions link1="vertical_front_dx_1" link2="world" reason="Never"/>
     <disable_collisions link1="vertical_front_dx_1" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="vertical_front_dx_1" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="vertical_front_dx_1" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="vertical_front_dx_1" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="vertical_front_dx_1" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="vertical_front_sx_1" link2="world" reason="Never"/>
+    <disable_collisions link1="vertical_front_dx_1" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="vertical_front_sx_1" link2="wrist_1_link" reason="Never"/>
     <disable_collisions link1="vertical_front_sx_1" link2="wrist_2_link" reason="Never"/>
     <disable_collisions link1="vertical_front_sx_1" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="vertical_front_sx_1" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="vertical_front_sx_1" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="world" link2="wrist_1_link" reason="Never"/>
-    <disable_collisions link1="world" link2="wrist_2_link" reason="Never"/>
-    <disable_collisions link1="world" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="world" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="world" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="vertical_front_sx_1" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="wrist_1_link" link2="wrist_2_link" reason="Adjacent"/>
     <disable_collisions link1="wrist_1_link" link2="wrist_3_link" reason="Never"/>
-    <disable_collisions link1="wrist_1_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="wrist_1_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
+    <disable_collisions link1="wrist_1_link" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="wrist_2_link" link2="wrist_3_link" reason="Adjacent"/>
-    <disable_collisions link1="wrist_2_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="wrist_2_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="wrist_3_link" link2="zed_camera" reason="Never"/>
-    <disable_collisions link1="wrist_3_link" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Never"/>
-    <disable_collisions link1="zed_camera" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Adjacent"/>
+    <disable_collisions link1="wrist_2_link" link2="zed_mini_camera_center" reason="Never"/>
+    <disable_collisions link1="wrist_3_link" link2="zed_mini_camera_center" reason="Never"/>
 </robot>

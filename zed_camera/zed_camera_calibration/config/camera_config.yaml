@@ -15,10 +15,12 @@
             brightness: 4 # [DYNAMIC] Image brightness. Range: 0-8
             contrast: 4 # [DYNAMIC] Image contrast. Range: 0-8
             hue: 0 # [DYNAMIC] Image hue. Range: 0 to 11
-            publish_left_right: true # Publish both left and right images
+            publish_rgb: true # Publish Left Image
+            publish_left_right: false # Publish both left and right images
 
         depth:
             depth_mode: "ULTRA" # Depth computation mode. Options: 'PERFORMANCE', 'QUALITY', 'ULTRA'
+            publish_point_cloud: false # Avoid publishing point cloud
             min_depth: 0.01 # Min: 0.01, Max: 3.0
             max_depth: 10.0 # Min: 0.5, Max: 15.0
         

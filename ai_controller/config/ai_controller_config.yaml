@@ -1,0 +1,17 @@
+ai_controller_node:
+  ros__parameters:
+    ai_controller_target: "cod_controller"
+    model_config_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-Batch24/config.yaml"
+    
+    frame_id: "base_link"
+
+    set_home_service: "set_robot_to_home"
+    set_pose_service: "set_robot_to_pose"
+    gripper_action_topic: "/robotiq_gripper_controller/gripper_cmd"
+
+    camera_topics:
+      - "zed_front/rgb/color/rect/image"
+      - "zed_left/rgb/color/rect/image"
+      - "zed_right/rgb/color/rect/image"
+
+    
