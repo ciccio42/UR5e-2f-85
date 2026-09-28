@@ -327,6 +327,24 @@ class SeeDoController(AIController):
         )
 
         self.keyframe_selector = KeyframeSelector(
+            mode=str(
+                keyframe_config.get(
+                    "mode",
+                    "hand_velocity",
+                )
+            ),
+            sample_stride=int(
+                keyframe_config.get(
+                    "sample_stride",
+                    5,
+                )
+            ),
+            model=str(
+                keyframe_config.get(
+                    "model",
+                    "gpt-4o-2024-08-06",
+                )
+            ),
             gaussian_sigma=float(
                 keyframe_config.get(
                     "gaussian_sigma",

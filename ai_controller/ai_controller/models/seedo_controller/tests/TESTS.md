@@ -18,8 +18,8 @@ Runs the keyframe selection module and saves the extracted keyframes.
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage keyframe \
-  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
-  --artifacts-dir /seedo_tests/keyframe_selection
+  --video /dataset_nut/task_03/traj_000_camera_front.mp4 \
+  --artifacts-dir /seedo_tests/keyframe_selection_nut
 ```
 
 Outputs:
@@ -153,8 +153,8 @@ Nut version:
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage lmp_generator \
-  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
-  --expected-keyframes 25 59 \
+  --video /dataset_nut/task_03/traj_000_camera_front_modified.mp4 \
+  --expected-keyframes 45 70 \
   --scene-dir /scene_capture \
   --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
@@ -365,11 +365,11 @@ Providing `--artifacts-dir` stores and preserves all generated artifacts.
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage seedo_controller \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
-  --scene-dir /scene_capture \
-  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_15/traj000/converted/traj000-h264-30fps.mp4 \
+  --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
+  --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
-  --artifacts-dir /seedo_tests/seedo_controller
+  --artifacts-dir /seedo_tests/Test_15
 ```
 
 The resulting artifact structure is:

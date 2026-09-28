@@ -4,6 +4,14 @@
 perception_mode: generalized
 
 keyframe_selector:
+
+  # Keyframe selection strategy:
+  # - hand_velocity: original SeeDo implementation
+  # - vlm: semantic pick/place selection using a VLM
+  mode: vlm
+  sample_stride: 5
+  model: gpt-4o-2024-08-06
+
   gaussian_sigma: 5.0
   prominence: 0.8
   expected_keyframes: 2
