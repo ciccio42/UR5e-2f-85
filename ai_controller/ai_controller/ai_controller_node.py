@@ -141,10 +141,11 @@ class AIControllerNode(Node):
             from ai_controller.models.mimic_video_controller.mimic_video_controller import MimicVideoController
             self.controller = MimicVideoController(self.model_config_path, self.task_name)
         elif self.ai_controller_target == 'interleave_pi0_controller':
-            from ai_controller.models.interleave_pi0_controller.interleave_pi0_controller import (
-                InterleavePi0Controller,
+            from ai_controller.models.interleave_pi0_controller.interleave_pi0_client import (
+                InterleavePi0ControllerClient,
             )
-            self.controller = InterleavePi0Controller(
+
+            self.controller = InterleavePi0ControllerClient(
                 self.model_config_path,
                 self.task_name,
             )

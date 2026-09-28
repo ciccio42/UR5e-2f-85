@@ -1,0 +1,123 @@
+# =============================================================================
+# Interleave-Pi0 inference environment
+#
+# Target:
+#   - NVIDIA DGX Spark / GB10 / ARM64
+#   - Python 3.10
+#   - PyTorch 2.8.0 + CUDA 12.9
+#   - Triton 3.4.0
+#
+# Le versioni condivise con il training sono fissate alle versioni effettivamente
+# presenti nell'ambiente con cui è stato addestrato Interleave-Pi0.
+#
+# Il sorgente viene esposto a runtime tramite PYTHONPATH.
+# =============================================================================
+
+channels:
+  - nvidia/label/cuda-12.9.2
+  - defaults
+
+dependencies:
+
+  # ---------------------------------------------------------------------------
+  # Python
+  # ---------------------------------------------------------------------------
+
+  - python=3.10
+  - pip
+
+  # ---------------------------------------------------------------------------
+  # CUDA compiler tools
+  #
+  # Il training utilizzava:
+  #
+  #   ptxas 12.9.86
+  #   nvcc   12.9.86
+  #
+  # Non installiamo l'intero cuda-toolkit.
+  # Questo package fornisce la toolchain compiler CUDA necessaria al runtime
+  # Triton / torch.compile.
+  # ---------------------------------------------------------------------------
+
+  - cuda-nvcc=12.9.86
+
+  # ---------------------------------------------------------------------------
+  # Python packages
+  # ---------------------------------------------------------------------------
+
+  - pip:
+
+      # -----------------------------------------------------------------------
+      # PyTorch repositories
+      # -----------------------------------------------------------------------
+
+      - --extra-index-url https://download.pytorch.org/whl/cu129
+      - --extra-index-url https://download.pytorch.org/whl
+
+      # -----------------------------------------------------------------------
+      # GPU stack
+      #
+      # Versioni identiche al training.
+      # -----------------------------------------------------------------------
+
+      - torch==2.8.0+cu129
+      - triton==3.4.0
+
+      # -----------------------------------------------------------------------
+      # Interleave / Transformers
+      #
+      # Versioni identiche al training.
+      # -----------------------------------------------------------------------
+
+      - transformers==4.47.1
+
+      - bitsandbytes==0.49.0
+
+      - hydra-core==1.3.6
+      - omegaconf==2.3.1
+
+      - einops==0.8.2
+      - sentencepiece==0.2.0
+      - safetensors==0.8.0
+
+      # -----------------------------------------------------------------------
+      # Numerical / image stack
+      #
+      # Versioni condivise col training.
+      # -----------------------------------------------------------------------
+
+      - numpy==1.26.4
+      - scipy==1.11.4
+      - pillow==12.3.0
+
+      # -----------------------------------------------------------------------
+      # Transformers / Torch transitive dependencies
+      #
+      # Fissate alle versioni effettivamente presenti durante il training,
+      # per evitare che una futura installazione risolva versioni differenti.
+      # -----------------------------------------------------------------------
+
+      - PyYAML==6.0.3
+      
+
+      # -----------------------------------------------------------------------
+      # HTTP inference server
+      #
+      # Queste dipendenze sono nuove: non appartengono al training.
+      # Flask espone il controller via localhost HTTP.
+      # -----------------------------------------------------------------------
+
+      - Flask==3.1.3
+
+      
+      # -----------------------------------------------------------------------
+      # Image transport
+      #
+      # server.py usa:
+      #   cv2.imdecode
+      #   cv2.cvtColor
+      #
+      # Headless è sufficiente: il server non apre finestre GUI.
+      # -----------------------------------------------------------------------
+
+      - opencv-python-headless==4.10.0.84

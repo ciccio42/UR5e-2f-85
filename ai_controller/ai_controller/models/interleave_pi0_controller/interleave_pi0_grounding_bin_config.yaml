@@ -4,6 +4,10 @@ pretrained_model_path: ${oc.env:INTERLEAVE_PI0_PALIGEMMA}
 
 dataset_statistics_path: "dataset_statistics_grounding_bin.json"
 
+# HTTP bridge
+server_host: "127.0.0.1"
+server_port: 8771
+
 
 use_torch_compile: true
 use_bf16: true
