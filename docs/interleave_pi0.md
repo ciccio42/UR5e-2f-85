@@ -1,6 +1,9 @@
 # primo terminale
 export ROBOT_IP=192.168.1.100
 export UR5e_2f_85_PATH="/home/asus-mivia/Desktop/Alex/UR5e-2f-85"
+export WORKSPACE="/home/asus-mivia/Desktop/Alex/Train_workspace/interleave/interleave_pi_zero_workspace"
+
+
 ## UR-Container 
 ```bash
 xhost +local:docker
@@ -31,6 +34,7 @@ docker run -it --rm \
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
   -v /home/asus-mivia/Desktop/saved_trajectories:/home/saved_trajectories \
   -v /home/asus-mivia/Desktop/dataset:/dataset \
+  -v "${WORKSPACE}:/workspace:ro" \
   --name ur_robotiq_teleoperation_container \
   ur_robotiq_teleoperation
 
@@ -116,22 +120,28 @@ ros2 run moveit_controller moveit_controller_node
 
 
 # Quinto terminale
-cd Alex/UR5e-2f-85
-export UR5e_2f_85_PATH="$PWD"
+docker exec -it ur_robotiq_teleoperation_container bash
 
 # Per singolo crop sul box
-INTERLEAVE_PI0_CONFIG_NAME=interleave_pi0_config.yaml \
-INTERLEAVE_PI0_CHECKPOINT_HOST=/home/asus-mivia/Desktop/Alex/UR5e-2f-85/interleave_pi_zero_workspace/checkpoints/posttraining/box_only/step66240.pt  \
-bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh --no-full-preflight
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/interleave_pi0_controller
+./run_server.sh \
+  --config interleave_pi0_config.yaml
 
 # Per due crop
-INTERLEAVE_PI0_CONFIG_NAME=interleave_pi0_grounding_bin_config.yaml \
-INTERLEAVE_PI0_CHECKPOINT_HOST=/home/asus-mivia/Desktop/Alex/UR5e-2f-85/interleave_pi_zero_workspace/checkpoints/posttraining/bin_grounding/step66240.pt \
-bash ai_controller/ai_controller/models/interleave_pi0_controller/interleave_pi0_controller.sh --no-full-preflight
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/interleave_pi0_controller
+./run_server.sh 
+
+
+
+# Sesto terminale
+docker exec -it ur_robotiq_teleoperation_container bash
+
+source /home/ros2_ws/install/setup.bash
+source /tmp/interleave_pi0_runtime.env
 
 ros2 run ai_controller ai_controller_node --ros-args \
   -p move_robot:=True \
   -p ai_controller_target:=interleave_pi0_controller \
-  -p model_config_path:="$INTERLEAVE_PI0_CONTROLLER_CONFIG" \
+  -p model_config_path:="${INTERLEAVE_PI0_CONTROLLER_CONFIG}" \
   -p task_name:=pick_place \
   -p "camera_topic:=['/zed_front/zed_node/rgb/color/rect/image']"

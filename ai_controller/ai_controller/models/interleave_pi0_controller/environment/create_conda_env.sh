@@ -26,7 +26,7 @@ THIS_DIR="$(
     pwd
 )"
 
-ENV_FILE="${THIS_DIR}/environment.yml"
+ENV_FILE="${THIS_DIR}/environment.yaml"
 ENV_PREFIX="${THIS_DIR}/.conda_env"
 
 CONDA_PKGS_DIR="${THIS_DIR}/.conda_pkgs"
@@ -116,7 +116,7 @@ fi
 # -----------------------------------------------------------------------------
 
 if [[ ! -f "${ENV_FILE}" ]]; then
-    die "environment.yml not found: ${ENV_FILE}"
+    die "environment.yaml not found: ${ENV_FILE}"
 fi
 
 

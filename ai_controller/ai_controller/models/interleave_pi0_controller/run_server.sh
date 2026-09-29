@@ -26,13 +26,18 @@ set -Eeuo pipefail
 #       --config interleave_pi0_config.yaml
 # =============================================================================
 
+# =============================================================================
+# Interleave workspace
+# =============================================================================
 
-OPEN_PI_ZERO="${OPEN_PI_ZERO:-/path/default/open-pi-zero}"
-INTERLEAVE_PI0_CHECKPOINT="${INTERLEAVE_PI0_CHECKPOINT:-/path/default/checkpoint.pt}"
-INTERLEAVE_PI0_PALIGEMMA="${INTERLEAVE_PI0_PALIGEMMA:-/path/default/paligemma-3b-pt-224}"
+INTERLEAVE_WORKSPACE="${INTERLEAVE_WORKSPACE:-/workspace}"
 
+OPEN_PI_ZERO="${OPEN_PI_ZERO:-${INTERLEAVE_WORKSPACE}/external/Interleave-VLA/open-pi-zero}"
+
+INTERLEAVE_PI0_PALIGEMMA="${INTERLEAVE_PI0_PALIGEMMA:-${INTERLEAVE_WORKSPACE}/checkpoints/paligemma/paligemma-3b-pt-224}"
+
+export INTERLEAVE_WORKSPACE
 export OPEN_PI_ZERO
-export INTERLEAVE_PI0_CHECKPOINT
 export INTERLEAVE_PI0_PALIGEMMA
 
 THIS_DIR="$(
@@ -43,10 +48,7 @@ THIS_DIR="$(
 ENV_PREFIX="${THIS_DIR}/environment/.conda_env"
 PYTHON="${ENV_PREFIX}/bin/python"
 
-DEFAULT_CONFIG_NAME="${
-    INTERLEAVE_PI0_CONFIG_NAME:-
-    interleave_pi0_grounding_bin_config.yaml
-}"
+DEFAULT_CONFIG_NAME="${INTERLEAVE_PI0_CONFIG_NAME:-interleave_pi0_grounding_bin_config.yaml}"
 
 CONFIG_VALUE="${DEFAULT_CONFIG_NAME}"
 
@@ -180,6 +182,57 @@ CONFIG_PATH="$(
 
 
 # =============================================================================
+# Persist selected runtime config for the ROS client
+# =============================================================================
+
+INTERLEAVE_PI0_CONTROLLER_CONFIG="${CONFIG_PATH}"
+export INTERLEAVE_PI0_CONTROLLER_CONFIG
+
+RUNTIME_ENV_FILE="/tmp/interleave_pi0_runtime.env"
+
+printf 'export INTERLEAVE_PI0_CONTROLLER_CONFIG=%q\n' \
+    "${INTERLEAVE_PI0_CONTROLLER_CONFIG}" \
+    > "${RUNTIME_ENV_FILE}"
+
+# =============================================================================
+# Checkpoint selection
+#
+# Il checkpoint di default viene scelto in base al config.
+#
+# È comunque possibile sovrascriverlo esplicitamente:
+#
+#   INTERLEAVE_PI0_CHECKPOINT=/path/custom.pt ./run_server.sh ...
+# =============================================================================
+
+CONFIG_BASENAME="$(basename "${CONFIG_PATH}")"
+
+
+if [[ -z "${INTERLEAVE_PI0_CHECKPOINT:-}" ]]; then
+
+    case "${CONFIG_BASENAME}" in
+
+        interleave_pi0_grounding_bin_config.yaml)
+            INTERLEAVE_PI0_CHECKPOINT="${INTERLEAVE_WORKSPACE}/checkpoints/posttraining/bin_grounding/step66240.pt"
+            ;;
+
+        interleave_pi0_config.yaml)
+            INTERLEAVE_PI0_CHECKPOINT="${INTERLEAVE_WORKSPACE}/checkpoints/posttraining/box_only/step66240.pt"
+            ;;
+
+        *)
+            die \
+                "No default checkpoint is defined for config '${CONFIG_BASENAME}'. " \
+                "Set INTERLEAVE_PI0_CHECKPOINT explicitly."
+            ;;
+
+    esac
+
+fi
+
+
+export INTERLEAVE_PI0_CHECKPOINT
+
+# =============================================================================
 # Required runtime assets
 #
 # Their exact container paths are deliberately NOT hard-coded here.
@@ -190,22 +243,18 @@ CONFIG_PATH="$(
 #   - PaliGemma
 # =============================================================================
 
+# =============================================================================
+# Required runtime assets
+# =============================================================================
 
-: "${
-    OPEN_PI_ZERO:?
-Set OPEN_PI_ZERO to the open-pi-zero source directory inside the container.
-}"
+[[ -n "${OPEN_PI_ZERO:-}" ]] || \
+    die "OPEN_PI_ZERO is not set."
 
-: "${
-    INTERLEAVE_PI0_CHECKPOINT:?
-Set INTERLEAVE_PI0_CHECKPOINT to the UR5e checkpoint inside the container.
-}"
+[[ -n "${INTERLEAVE_PI0_CHECKPOINT:-}" ]] || \
+    die "INTERLEAVE_PI0_CHECKPOINT is not set."
 
-: "${
-    INTERLEAVE_PI0_PALIGEMMA:?
-Set INTERLEAVE_PI0_PALIGEMMA to the PaliGemma directory inside the container.
-}"
-
+[[ -n "${INTERLEAVE_PI0_PALIGEMMA:-}" ]] || \
+    die "INTERLEAVE_PI0_PALIGEMMA is not set."
 
 [[ -d "${OPEN_PI_ZERO}" ]] || \
     die "OPEN_PI_ZERO not found: ${OPEN_PI_ZERO}"
@@ -234,15 +283,7 @@ AI_CONTROLLER_ROOT="$(
 )"
 
 
-export PYTHONPATH="${
-    OPEN_PI_ZERO
-}:${
-    AI_CONTROLLER_ROOT
-}:${
-    THIS_DIR
-}${
-    PYTHONPATH:+:${PYTHONPATH}
-}"
+export PYTHONPATH="${OPEN_PI_ZERO}:${AI_CONTROLLER_ROOT}:${THIS_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 
 # =============================================================================
@@ -314,11 +355,7 @@ CUDA_ROOT="$(
 export CUDA_HOME="${CUDA_ROOT}"
 export CUDA_PATH="${CUDA_ROOT}"
 
-export PATH="${
-    CUDA_BIN
-}:${
-    PATH
-}"
+export PATH="${CUDA_BIN}:${PATH}"
 
 
 export TRITON_PTXAS_PATH="${PTXAS}"
