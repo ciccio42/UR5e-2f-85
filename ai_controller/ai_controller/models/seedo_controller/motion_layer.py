@@ -40,6 +40,8 @@ class SeeDoMotionLayer:
         gripper_open_position: float,
         gripper_closed_position: float,
         object_y_offset: float = -0.06,
+        assembly_alignment_z_offset: float = 0.135,
+        assembly_insertion_z_offset: float = -0.11,
     ) -> None:
         self.grasp_orientation = np.asarray(
             grasp_orientation,
@@ -68,6 +70,14 @@ class SeeDoMotionLayer:
         )
 
         self.object_y_offset = float(object_y_offset)
+
+        self.assembly_alignment_z_offset = float(
+            assembly_alignment_z_offset
+        )
+
+        self.assembly_insertion_z_offset = float(
+            assembly_insertion_z_offset
+        )
 
         self.current_pose: GripperPose | None = None
         self.current_gripper_position = (
@@ -193,6 +203,18 @@ class SeeDoMotionLayer:
 
         elif primitive_name == "placing":
             actions = self._placing(
+                primitive_step,
+                scene_state,
+            )
+
+        elif primitive_name == "aligning":
+            actions = self._aligning(
+                primitive_step,
+                scene_state,
+            )
+
+        elif primitive_name == "inserting":
+            actions = self._inserting(
                 primitive_step,
                 scene_state,
             )
@@ -347,6 +369,76 @@ class SeeDoMotionLayer:
                 (
                     target.position_base[2]
                     + self.release_height_offset
+                ),
+            ],
+            dtype=np.float64,
+        )
+
+        actions = self._move_linear(
+            target_position=target_position,
+            target_orientation=self.grasp_orientation,
+        )
+
+        self.current_gripper_position = (
+            self.gripper_open_position
+        )
+
+        actions.append(
+            self._build_action(
+                position=self.current_pose.position,
+                orientation=self.current_pose.orientation,
+                gripper_position=(
+                    self.current_gripper_position
+                ),
+            )
+        )
+
+        return actions
+
+    def _aligning(
+        self,
+        primitive_step: PrimitiveStep,
+        scene_state: SceneState,
+    ) -> list[np.ndarray]:
+        target = self._resolve_target(
+            primitive_step,
+            scene_state,
+        )
+
+        target_position = np.array(
+            [
+                target.position_base[0],
+                target.position_base[1],
+                (
+                    target.position_base[2]
+                    + self.assembly_alignment_z_offset
+                ),
+            ],
+            dtype=np.float64,
+        )
+
+        return self._move_linear(
+            target_position=target_position,
+            target_orientation=self.grasp_orientation,
+        )
+
+    def _inserting(
+        self,
+        primitive_step: PrimitiveStep,
+        scene_state: SceneState,
+    ) -> list[np.ndarray]:
+        target = self._resolve_target(
+            primitive_step,
+            scene_state,
+        )
+
+        target_position = np.array(
+            [
+                target.position_base[0],
+                target.position_base[1],
+                (
+                    target.position_base[2]
+                    + self.assembly_insertion_z_offset
                 ),
             ],
             dtype=np.float64,

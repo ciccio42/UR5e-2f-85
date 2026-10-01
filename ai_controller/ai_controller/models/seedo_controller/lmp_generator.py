@@ -28,7 +28,12 @@ from VLM_CaP.src.configs import (
 )
 from ai_controller.models.seedo_controller.lmp_prompts import (
     prompt_parse_obj_name_ros,
-    prompt_tabletop_ui_ros,
+    prompt_tabletop_ui_pick_and_place_ros,
+    prompt_tabletop_ui_nut_assembly_ros,
+)
+
+from ai_controller.models.seedo_controller.task_types import (
+    TaskType,
 )
 
 class LMPSceneWrapper:
@@ -476,6 +481,24 @@ class LMPSceneWrapper:
             target=target,
         )
 
+    def aligning(
+        self,
+        target: str,
+    ) -> None:
+        self._record_primitive(
+            "aligning",
+            target=target,
+        )
+
+    def inserting(
+        self,
+        target: str,
+    ) -> None:
+        self._record_primitive(
+            "inserting",
+            target=target,
+        )
+
 class LMPGenerator:
     """Adapter between SeeDo's CAP implementation and the ROS2 controller.
 
@@ -518,6 +541,14 @@ class LMPGenerator:
                 "CAP can only run on a completed SeeDo action plan."
             )
 
+        try:
+            task_type = TaskType(action_plan.task_type)
+        except (ValueError, TypeError) as error:
+            raise ValueError(
+                "CAP received an unsupported task type: "
+                f"{action_plan.task_type!r}"
+            ) from error
+
         if not action_plan.natural_language_plan.strip():
             raise ValueError(
                 "The SeeDo natural-language plan is empty."
@@ -532,6 +563,7 @@ class LMPGenerator:
         lmp = self._setup_lmp(
             wrapper=wrapper,
             scene_state=scene_state,
+            task_type=task_type,
         )
 
         context = (
@@ -548,10 +580,24 @@ class LMPGenerator:
                     wrapper.resolve_action_step(step)
                 )
 
-                resolved_actions.append(
-                    f"Pick {picked_id!r} and place it "
-                    f"{step.relation} {destination_id!r}."
-                )
+                if task_type == TaskType.PICK_AND_PLACE:
+                    resolved_action = (
+                        f"Pick {picked_id!r} and place it "
+                        f"{step.relation} {destination_id!r}."
+                    )
+
+                elif task_type == TaskType.NUT_ASSEMBLY:
+                    resolved_action = (
+                        f"Pick {picked_id!r} and assemble it "
+                        f"onto {destination_id!r}."
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Unsupported task type: {task_type!r}"
+                    )
+
+                resolved_actions.append(resolved_action)
 
             lmp_instruction = " and then ".join(
                 resolved_actions
@@ -623,13 +669,27 @@ class LMPGenerator:
         self,
         wrapper: LMPSceneWrapper,
         scene_state: SceneState,
+        task_type: TaskType,
     ) -> LMP:
         config = copy.deepcopy(
             cfg_tabletop
         )
 
+        if task_type == TaskType.PICK_AND_PLACE:
+            tabletop_prompt = prompt_tabletop_ui_pick_and_place_ros
+
+        elif task_type == TaskType.NUT_ASSEMBLY:
+            tabletop_prompt = (
+                prompt_tabletop_ui_nut_assembly_ros
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported task type: {task_type!r}"
+            )
+
         config["lmps"]["tabletop_ui"]["prompt_text"] = (
-            prompt_tabletop_ui_ros
+            tabletop_prompt
         )
 
         config["lmps"]["parse_obj_name"]["prompt_text"] = (
@@ -673,15 +733,34 @@ class LMPGenerator:
             "get_side_positions": wrapper.get_side_positions,
             "get_corner_name": wrapper.get_corner_name,
             "get_side_name": wrapper.get_side_name,
+        }
 
-            # Robot primitive APIs.
+        common_primitives = {
             "reach": wrapper.reach,
             "approaching": wrapper.approaching,
             "pick": wrapper.pick,
             "lift_up": wrapper.lift_up,
             "moving": wrapper.moving,
-            "placing": wrapper.placing,
         }
+
+        if task_type == TaskType.PICK_AND_PLACE:
+            task_primitives = {
+                "placing": wrapper.placing,
+            }
+
+        elif task_type == TaskType.NUT_ASSEMBLY:
+            task_primitives = {
+                "aligning": wrapper.aligning,
+                "inserting": wrapper.inserting,
+            }
+
+        else:
+            raise ValueError(
+                f"Unsupported task type: {task_type!r}"
+            )
+
+        variable_vars.update(common_primitives)
+        variable_vars.update(task_primitives)
 
         variable_vars["say"] = (
             lambda msg: print(

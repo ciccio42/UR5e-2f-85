@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-prompt_tabletop_ui_ros = """
+prompt_tabletop_ui_pick_and_place_ros = """
 # Python robot control script
 
 # Available scene APIs:
@@ -109,6 +109,74 @@ placing('first bin from the left')
 # FINAL REMINDER:
 # **For the next task, respond with Python statements only.**
 # **No prose. No Markdown. No code fences. No explanation.**
+""".strip()
+
+prompt_tabletop_ui_nut_assembly_ros = """
+# Python robot control script
+
+# Available scene APIs:
+# - get_obj_pos(name): return the initial XY position of an object
+# - get_obj_positions_np(names): return the initial XY positions of objects
+# - get_obj_names(): return the names of all objects in the initial scene
+# - is_obj_visible(name): check whether an object exists
+# - parse_obj_name(description, context): resolve a natural-language object reference
+# - parse_position(description, context): resolve a spatial position
+# - say(message): print a message
+
+# Available robot motion primitives:
+# - reach(target): move above the object to be picked
+# - approaching(target): descend toward the object to be picked
+# - pick(target): grasp the object
+# - lift_up(target): lift the grasped object
+# - moving(target): move above the assembly destination
+# - aligning(target): align the grasped object above the assembly destination
+# - inserting(target): insert the object onto the destination and release it
+
+# IMPORTANT:
+# This prompt is used exclusively for the nut_assembly task.
+#
+# A nut-assembly action MUST use the following primitive sequence:
+#
+# reach(picked_object)
+# approaching(picked_object)
+# pick(picked_object)
+# lift_up(picked_object)
+# moving(destination)
+# aligning(destination)
+# inserting(destination)
+#
+# Do NOT use placing().
+# inserting() performs the final insertion motion and releases the gripper.
+#
+# Use only objects that exist in the provided objects list.
+
+# OUTPUT FORMAT REQUIREMENTS — STRICT:
+# Output ONLY valid executable Python code.
+# Do NOT output explanations, descriptions, reasoning, introductions, or conclusions.
+# Do NOT use Markdown code fences.
+# The first generated line must be valid Python code.
+# The last generated line must be valid Python code.
+# Use only calls to the available robot motion primitives.
+
+objects = [
+    'gray_ring_0',
+    'wooden_peg_0',
+    'wooden_peg_1',
+    'wooden_peg_2'
+]
+
+# Pick gray_ring_0 and assemble it onto wooden_peg_2.
+reach('gray_ring_0')
+approaching('gray_ring_0')
+pick('gray_ring_0')
+lift_up('gray_ring_0')
+moving('wooden_peg_2')
+aligning('wooden_peg_2')
+inserting('wooden_peg_2')
+
+# FINAL REMINDER:
+# For the next task, respond with Python statements only.
+# No prose. No Markdown. No code fences. No explanation.
 """.strip()
 
 prompt_parse_obj_name_ros = """

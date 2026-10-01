@@ -70,16 +70,16 @@ python -m ai_controller.models.seedo_controller.tests \
   --stage action_planning \
   --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
   --expected-keyframes 25 51 \
-  --artifacts-dir /seedo_tests/action_planning
+  --artifacts-dir /seedo_tests/action_planning_pick_and_place
 ```
 
 Nut version:
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
   --stage action_planning \
-  --video /dataset_nut/traj_000_camera_front_modified.mp4 \
+  --video /dataset_nut/task_00/traj_000_camera_front_modified.mp4 \
   --expected-keyframes 25 59 \
-  --artifacts-dir /seedo_tests/action_planning
+  --artifacts-dir /seedo_tests/action_planning_nut_assembly
 ```
 
 Outputs:
@@ -155,10 +155,10 @@ python -m ai_controller.models.seedo_controller.tests \
   --stage lmp_generator \
   --video /dataset_nut/task_03/traj_000_camera_front_modified.mp4 \
   --expected-keyframes 45 70 \
-  --scene-dir /scene_capture \
-  --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
+  --scene-dir /scene_capture/nut/scene_1 \
+  --base-to-table-transform /scene_capture/nut/scene_1/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
-  --artifacts-dir /seedo_tests/lmp_generator
+  --artifacts-dir /seedo_tests/lmp_generator_nut_assembly
 ```
 
 Pipeline:
@@ -369,7 +369,7 @@ python -m ai_controller.models.seedo_controller.tests \
   --scene-dir /scene_capture/nut/scena_1 \
   --base-to-table-transform /scene_capture/nut/scena_1/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
-  --artifacts-dir /seedo_tests/Test_4
+  --artifacts-dir /seedo_tests/test_nut_assembly
 
 python -m ai_controller.models.seedo_controller.tests \
   --stage seedo_controller \
@@ -377,7 +377,7 @@ python -m ai_controller.models.seedo_controller.tests \
   --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
   --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
-  --artifacts-dir /seedo_tests/Test_5
+  --artifacts-dir /seedo_tests/test_pick_and_place
 ```
 
 The resulting artifact structure is:
