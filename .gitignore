@@ -32,3 +32,4 @@ ai_controller/ai_controller/models/vla_jepa_controller/huggingface/
 ai_controller/ai_controller/models/vla_jepa_controller/test/render
 ai_controller/ai_controller/models/vla_jepa_controller/test/*.csv
 ai_controller/ai_controller/models/interleave_pi0_controller/environment/.conda_env/
+ai_controller/ai_controller/models/vla_jepa_controller/venv/

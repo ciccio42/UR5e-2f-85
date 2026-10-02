@@ -1,9 +1,16 @@
 # primo terminale
 export ROBOT_IP=192.168.1.100
 export UR5e_2f_85_PATH="/home/asus-mivia/Desktop/Alex/UR5e-2f-85"
+
+export VLA_JEPA_VENV_HOST="/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/vla_jepa_controller/venv/vla_jepa_venv"
+
+export VLA_JEPA_CHECKPOINT_HOST="/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/checkpoint_folder/lerobot/vla-jepa/016000/pretrained_model"
+
+export VLA_JEPA_HF_CACHE_HOST="/home/asus-mivia/Desktop/Alex/UR5e-2f-85/ai_controller/ai_controller/models/vla_jepa_controller/huggingface"
 ## UR-Container 
 ```bash
 xhost +local:docker
+
 docker run -it --rm \
   --gpus all \
   --privileged \
@@ -14,7 +21,7 @@ docker run -it --rm \
   --pid=host \
   --ulimit memlock=-1:-1 \
   --ulimit rtprio=99 \
-  --shm-size=1g \
+  --shm-size=4g \
   --security-opt seccomp=unconfined \
   -e DISPLAY=$DISPLAY \
   -e ROBOT_IP=${ROBOT_IP} \
@@ -26,6 +33,9 @@ docker run -it --rm \
   -v ${UR5e_2f_85_PATH}/ur5e_2f_85:/home/ros2_ws/src/ur5e_2f_85 \
   -v ${UR5e_2f_85_PATH}/dataset_collector:/home/ros2_ws/src/dataset_collector \
   -v ${UR5e_2f_85_PATH}/ai_controller:/home/ros2_ws/src/ai_controller \
+  -v ${VLA_JEPA_VENV_HOST}:/home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller/venv/vla_jepa_venv \
+  -v ${VLA_JEPA_CHECKPOINT_HOST}:/opt/vla_jepa/checkpoint:ro \
+  -v ${VLA_JEPA_HF_CACHE_HOST}:/opt/vla_jepa/huggingface \
   -v ${UR5e_2f_85_PATH}/moveit_controller:/home/ros2_ws/src/moveit_controller \
   -v ${UR5e_2f_85_PATH}/zed_camera/zed_camera_calibration:/home/ros2_ws/src/zed_camera/zed_camera_calibration:ro \
   -v ${UR5e_2f_85_PATH}/traj_tmp:/traj_tmp \
@@ -116,14 +126,20 @@ ros2 run moveit_controller moveit_controller_node
 
 
 # Quinto terminale
-cd Alex/UR5e-2f-85
-export UR5e_2f_85_PATH="$PWD"
+docker exec -it ur_robotiq_teleoperation_container bash
 
-bash ai_controller/ai_controller/models/vla_jepa_controller/vla_jepa_controller.sh --no-full-preflight
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller
+./run_server.sh
 
+
+# Sesto terminale
+docker exec -it ur_robotiq_teleoperation_container bash
+
+cd /home/ros2_ws
+source install/setup.bash
 
 ros2 run ai_controller ai_controller_node --ros-args \
   -p move_robot:=true \
   -p ai_controller_target:=vla_jepa_controller \
-  -p model_config_path:="$VLA_JEPA_CONTROLLER_CONFIG" \
+  -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller/vla_jepa_config.yaml" \
   -p task_name:=pick_place

@@ -44,9 +44,11 @@
 #   policy_postprocessor.json
 #   relativi *.safetensors dei processor
 #
-checkpoint_path: /workspace/checkpoints/vla-jepa/016000
 
+checkpoint_path: /opt/vla_jepa/checkpoint
 
+server_host: "127.0.0.1"
+server_port: 8770
 # -----------------------------------------------------------------------------
 # DEVICE
 # -----------------------------------------------------------------------------

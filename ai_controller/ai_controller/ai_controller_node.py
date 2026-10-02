@@ -150,10 +150,11 @@ class AIControllerNode(Node):
                 self.task_name,
             )
         elif self.ai_controller_target == 'vla_jepa_controller':
-            from ai_controller.models.vla_jepa_controller.vla_jepa_controller import (
-                VLAJEPAController,
+            from ai_controller.models.vla_jepa_controller.vla_jepa_client import (
+                VLAJEPAControllerClient,
             )
-            self.controller = VLAJEPAController(
+
+            self.controller = VLAJEPAControllerClient(
                 self.model_config_path,
                 self.task_name,
             )
