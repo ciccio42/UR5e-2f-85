@@ -9,7 +9,6 @@ import cv2
 from typing import Any
 from openai import OpenAI
 from pathlib import Path
-from collections import Counter
 from results import (
     RawSceneState,
     ScenePerceptionResult,
@@ -259,54 +258,19 @@ class SceneInterpreter:
 
         return scene_state
 
-    @staticmethod
-    def _ordinal(index: int) -> str:
-        """Convert a positive integer to an English ordinal."""
-
-        ordinal_words = {
-            1: "first",
-            2: "second",
-            3: "third",
-            4: "fourth",
-            5: "fifth",
-            6: "sixth",
-            7: "seventh",
-            8: "eighth",
-            9: "ninth",
-            10: "tenth",
-        }
-
-        if index in ordinal_words:
-            return ordinal_words[index]
-
-        if 10 <= index % 100 <= 20:
-            suffix = "th"
-        else:
-            suffix = {
-                1: "st",
-                2: "nd",
-                3: "rd",
-            }.get(index % 10, "th")
-
-        return f"{index}{suffix}"
 
     def _assign_generalized_semantic_names(
         self,
         raw_scene: RawSceneState,
     ) -> dict[str, str]:
+        """Use neutral runtime object IDs as semantic identifiers.
+
+        In generalized mode, object identity must not encode spatial
+        ordering. Spatial relationships are handled separately by the
+        structured-scene representation and structural matcher.
         """
-        Generate unique semantic identifiers using the
-        authoritative object-discovery metadata.
 
-        No additional VLM classification is performed.
-        """
-
-        label_counts = Counter(
-            obj.label
-            for obj in raw_scene.objects
-        )
-
-        objects_by_label = {}
+        semantic_names: dict[str, str] = {}
 
         for obj in raw_scene.objects:
 
@@ -322,58 +286,17 @@ class SceneInterpreter:
                     f"{obj.object_id!r}"
                 )
 
-            objects_by_label.setdefault(
-                obj.label,
-                [],
-            ).append(obj)
-
-        semantic_names = {}
-
-        for label, objects in objects_by_label.items():
-
-            # A unique detector label is already an
-            # unambiguous semantic identifier.
-            if label_counts[label] == 1:
-
-                obj = objects[0]
-
-                semantic_names[obj.object_id] = label
-
-                continue
-
-            # Repeated instances require distinct identifiers.
-            # Ordinals are based on image coordinates,
-            # never on detection order or raw object IDs.
-            ordered_objects = sorted(
-                objects,
-                key=lambda obj: (
-                    obj.pixel_coordinates[0],
-                    obj.pixel_coordinates[1],
-                    obj.object_id,
-                ),
-            )
-
-            for index, obj in enumerate(
-                ordered_objects,
-                start=1,
-            ):
-
-                semantic_names[obj.object_id] = (
-                    f"{self._ordinal(index)} "
-                    f"{label} from the left"
+            if obj.object_id in semantic_names:
+                raise RuntimeError(
+                    "Generalized scene contains duplicate object ID: "
+                    f"{obj.object_id!r}"
                 )
+
+            semantic_names[obj.object_id] = obj.object_id
 
         if len(semantic_names) != len(raw_scene.objects):
             raise RuntimeError(
                 "Generalized scene interpretation lost objects."
-            )
-
-        if len(set(semantic_names.values())) != len(
-            semantic_names
-        ):
-            raise RuntimeError(
-                "Generalized scene interpretation produced "
-                "duplicate semantic names."
             )
 
         return semantic_names

@@ -13,11 +13,11 @@ from shapely.geometry import *
 from shapely.affinity import *
 
 from results import (
-    ActionStep,
     ActionPlanningResult,
     PrimitivePlan,
     PrimitiveStep,
     SceneState,
+    ReplicabilityResult,
 )
 from VLM_CaP.src.LMP import (
     LMP,
@@ -309,111 +309,6 @@ class LMPSceneWrapper:
 
         return self._objects_by_id[obj_name]
 
-    def resolve_action_step(
-        self,
-        step: ActionStep,
-    ) -> tuple[str, str]:
-        """
-        Resolve an ActionStep against the runtime SceneState.
-
-        Returns:
-            (picked_object_id, destination_object_id)
-        """
-
-        def normalize(value) -> str:
-            return str(
-                value if value is not None else ""
-            ).strip().casefold()
-
-        picked_label = normalize(
-            step.picked_detector_label
-        )
-
-        destination_category = normalize(
-            step.destination_category
-        )
-
-        if not picked_label:
-            raise ValueError(
-                "ActionStep is missing picked_detector_label. "
-                "Regenerate the legacy action plan."
-            )
-
-        if not destination_category:
-            raise ValueError(
-                "ActionStep is missing destination_category."
-            )
-
-        # --------------------------------------------------
-        # Resolve the object to pick using its detector label.
-        # --------------------------------------------------
-
-        pick_candidates = [
-            obj
-            for obj in self.scene_state.objects
-            if normalize(obj.label) == picked_label
-        ]
-
-        if len(pick_candidates) != 1:
-            raise ValueError(
-                "Cannot uniquely resolve picked object: "
-                f"label={picked_label!r}, "
-                f"matches={[obj.object_id for obj in pick_candidates]}"
-            )
-
-        picked_object = pick_candidates[0]
-
-        # --------------------------------------------------
-        # Resolve the destination
-        # --------------------------------------------------
-
-        destination_candidates = [
-            obj
-            for obj in self.scene_state.objects
-            if normalize(obj.category) == destination_category
-        ]
-
-        ordinal = step.destination_ordinal_from_left
-
-        if not 1 <= ordinal <= len(destination_candidates):
-            raise ValueError(
-                "Invalid destination ordinal: "
-                f"category={destination_category!r}, "
-                f"ordinal={ordinal}, "
-                f"available={len(destination_candidates)}"
-            )
-
-        # Canonical front-view ordering: image X, not base_link X.
-        ordered_destinations = sorted(
-            destination_candidates,
-            key=lambda obj: obj.pixel_coordinates[0],
-        )
-
-        x_coordinates = [
-            obj.pixel_coordinates[0]
-            for obj in ordered_destinations
-        ]
-
-        if len(x_coordinates) != len(set(x_coordinates)):
-            raise ValueError(
-                "Ambiguous destination ordering: "
-                "multiple objects share the same image X coordinate."
-            )
-
-        destination_object = ordered_destinations[
-            ordinal - 1
-        ]
-
-        if picked_object.object_id == destination_object.object_id:
-            raise ValueError(
-                "Picked object and destination resolve "
-                "to the same SceneObject."
-            )
-
-        return (
-            picked_object.object_id,
-            destination_object.object_id,
-        )
 
     def _record_primitive(
         self,
@@ -534,6 +429,7 @@ class LMPGenerator:
         scene_state: SceneState,
         workspace_bottom_left: tuple[float, float],
         workspace_top_right: tuple[float, float],
+        replicability_result: ReplicabilityResult | None = None,
         artifacts_dir: Path | None = None,
     ) -> PrimitivePlan:
         if action_plan.status != "completed":
@@ -572,12 +468,49 @@ class LMPGenerator:
 
         if self.perception_mode == "generalized":
 
+            if replicability_result is None:
+                raise ValueError(
+                    "Generalized LMP generation requires a "
+                    "ReplicabilityResult."
+                )
+
+            if not replicability_result.replicable:
+                raise ValueError(
+                    "LMP generation cannot run for a "
+                    "non-replicable task."
+                )
+
+            resolved_targets_by_step = {
+                target.action_step_index: target
+                for target in replicability_result.resolved_targets
+            }
+
+            if len(resolved_targets_by_step) != len(
+                action_plan.steps
+            ):
+                raise ValueError(
+                    "ReplicabilityResult does not contain exactly one "
+                    "resolved target pair for every action step."
+                )
+
             resolved_actions = []
 
-            for step in action_plan.steps:
+            for step_index, step in enumerate(
+                action_plan.steps
+            ):
+                targets = resolved_targets_by_step.get(
+                    step_index
+                )
 
-                picked_id, destination_id = (
-                    wrapper.resolve_action_step(step)
+                if targets is None:
+                    raise ValueError(
+                        "Missing resolved runtime targets for "
+                        f"action step {step_index}."
+                    )
+
+                picked_id = targets.runtime_pick_object_id
+                destination_id = (
+                    targets.runtime_place_object_id
                 )
 
                 if task_type == TaskType.PICK_AND_PLACE:
@@ -597,7 +530,9 @@ class LMPGenerator:
                         f"Unsupported task type: {task_type!r}"
                     )
 
-                resolved_actions.append(resolved_action)
+                resolved_actions.append(
+                    resolved_action
+                )
 
             lmp_instruction = " and then ".join(
                 resolved_actions

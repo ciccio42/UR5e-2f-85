@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import threading
 import time
 from pathlib import Path
@@ -45,6 +46,44 @@ INITIAL_EEF_ORIENTATION = np.array(
     ],
     dtype=np.float64,
 )
+
+
+EXPECTED_VIDEO = Path(
+    "/test_dataset/pick_place/human_rgb_pick_place/"
+    "task_00/traj000/converted/traj000-h264-30fps.mp4"
+)
+
+EXPECTED_SCENE_DIR = Path(
+    "/scene_capture/without_distractors/"
+    "scene_1_no_distractors"
+)
+
+EXPECTED_STRUCTURAL_MAPPING = {
+    "0": "storage_bin_0",
+    "1": "storage_bin_1",
+    "2": "storage_bin_2",
+    "3": "storage_bin_3",
+}
+
+EXPECTED_PRIMITIVES = (
+    ("reach", "green_block_0"),
+    ("approaching", "green_block_0"),
+    ("pick", "green_block_0"),
+    ("lift_up", "green_block_0"),
+    ("moving", "storage_bin_0"),
+    ("placing", "storage_bin_0"),
+)
+
+EXPECTED_ROLLOUT_KEYS = {
+    "camera_front_image",
+    "camera_front_depth",
+    "camera_lateral_left_image",
+    "camera_lateral_left_depth",
+    "camera_lateral_right_image",
+    "camera_lateral_right_depth",
+    "eye_in_hand_image",
+    "eye_in_hand_depth",
+}
 
 
 def _rotation_matrix_to_quaternion(
@@ -183,6 +222,7 @@ class SeeDoInteractiveRuntimePublisher(Node):
         seedo_depth_topic: str,
         seedo_camera_info_topic: str,
         camera_topics: list[str],
+        depth_topics: list[str],
         joint_states_topic: str,
         joint_robot_names: list[str],
         gripper_robot_names: list[str],
@@ -274,6 +314,16 @@ class SeeDoInteractiveRuntimePublisher(Node):
             gripper_robot_names
         )
 
+        if len(camera_topics) != 4:
+            raise ValueError(
+                "Interactive test expects exactly four RGB camera topics."
+            )
+
+        if len(depth_topics) != 4:
+            raise ValueError(
+                "Interactive test expects exactly four depth camera topics."
+            )
+
         #
         # SeeDo RGB-D publishers.
         #
@@ -314,6 +364,20 @@ class SeeDoInteractiveRuntimePublisher(Node):
                 continue
 
             self.additional_camera_publishers.append(
+                self.create_publisher(
+                    RosImage,
+                    topic,
+                    10,
+                )
+            )
+
+        self.additional_depth_publishers = []
+
+        for topic in depth_topics:
+            if topic == seedo_depth_topic:
+                continue
+
+            self.additional_depth_publishers.append(
                 self.create_publisher(
                     RosImage,
                     topic,
@@ -568,6 +632,22 @@ class SeeDoInteractiveRuntimePublisher(Node):
             depth_msg
         )
 
+        for publisher in (
+            self.additional_depth_publishers
+        ):
+            additional_depth_msg = (
+                self.bridge.cv2_to_imgmsg(
+                    self.depth,
+                    encoding="passthrough",
+                )
+            )
+
+            additional_depth_msg.header.stamp = stamp
+
+            publisher.publish(
+                additional_depth_msg
+            )
+
         #
         # CameraInfo.
         #
@@ -663,6 +743,25 @@ def _wait_for_runtime_ready(
             is not None
         )
 
+        with controller_node.seedo_record_lock:
+            expected_camera_names = set(
+                controller_node.seedo_record_camera_names
+            )
+
+            rollout_rgb_ready = (
+                expected_camera_names
+                <= set(
+                    controller_node.seedo_record_rgb_msgs
+                )
+            )
+
+            rollout_depth_ready = (
+                expected_camera_names
+                <= set(
+                    controller_node.seedo_record_depth_msgs
+                )
+            )
+
         table_tf_ready = False
         eef_tf_ready = False
 
@@ -692,6 +791,8 @@ def _wait_for_runtime_ready(
 
         if (
             seedo_ready
+            and rollout_rgb_ready
+            and rollout_depth_ready
             and joint_state_ready
             and table_tf_ready
             and eef_tf_ready
@@ -700,14 +801,85 @@ def _wait_for_runtime_ready(
 
     raise TimeoutError(
         "Timed out waiting for the complete simulated ROS "
-        "runtime: RGB-D, CameraInfo, /joint_states, "
-        "base->table TF and base->EEF TF."
+        "runtime: front RGB-D, all four rollout RGB-D cameras, "
+        "CameraInfo, /joint_states, base->table TF and base->EEF TF."
     )
 
 
-def run_test(
+def _validate_inputs(
     args: argparse.Namespace,
-) -> int:
+) -> tuple[Path, Path, Path, Path, Path]:
+    video_path = (
+        Path(args.video)
+        .expanduser()
+        .resolve()
+    )
+
+    expected_video = (
+        EXPECTED_VIDEO
+        .expanduser()
+        .resolve()
+    )
+
+    if video_path != expected_video:
+        raise ValueError(
+            "This interactive dry-run is pinned to the canonical "
+            "pick-and-place demonstration. "
+            f"Expected {expected_video}, received {video_path}."
+        )
+
+    if not video_path.is_file():
+        raise FileNotFoundError(
+            f"Canonical demonstration video does not exist: {video_path}"
+        )
+
+    scene_dir = (
+        Path(args.scene_dir)
+        .expanduser()
+        .resolve()
+    )
+
+    expected_scene_dir = (
+        EXPECTED_SCENE_DIR
+        .expanduser()
+        .resolve()
+    )
+
+    if scene_dir != expected_scene_dir:
+        raise ValueError(
+            "This interactive dry-run is pinned to the canonical "
+            "no-distractors runtime scene. "
+            f"Expected {expected_scene_dir}, received {scene_dir}."
+        )
+
+    transform_path = (
+        Path(args.base_to_table_transform)
+        .expanduser()
+        .resolve()
+    )
+
+    expected_transform = (
+        expected_scene_dir
+        / "base_to_table_transform.yaml"
+    ).resolve()
+
+    if transform_path != expected_transform:
+        raise ValueError(
+            "Unexpected base-to-table transform. "
+            f"Expected {expected_transform}, received {transform_path}."
+        )
+
+    model_config_path = (
+        Path(args.model_config)
+        .expanduser()
+        .resolve()
+    )
+
+    if not model_config_path.is_file():
+        raise FileNotFoundError(
+            f"Model configuration does not exist: {model_config_path}"
+        )
+
     artifacts_dir = (
         Path(args.artifacts_dir)
         .expanduser()
@@ -730,6 +902,246 @@ def run_test(
         exist_ok=True,
     )
 
+    return (
+        video_path,
+        scene_dir,
+        transform_path,
+        artifacts_dir,
+        rollout_base_dir,
+    )
+
+
+def _validate_generalized_state(
+    controller_node: AIControllerNode,
+) -> None:
+    controller = controller_node.controller
+
+    if controller.perception_mode != "generalized":
+        raise AssertionError(
+            "Interactive dry-run requires generalized perception mode."
+        )
+
+    required_state = {
+        "action_plan": controller.action_plan,
+        "demo_structured_scene": controller.demo_structured_scene,
+        "scene_state": controller.scene_state,
+        "runtime_structured_scene": controller.runtime_structured_scene,
+        "structural_matching_result": controller.structural_matching_result,
+        "replicability_result": controller.replicability_result,
+        "primitive_plan": controller.primitive_plan,
+    }
+
+    missing = [
+        name
+        for name, value
+        in required_state.items()
+        if value is None
+    ]
+
+    if missing:
+        raise AssertionError(
+            "Interactive control loop did not populate the complete "
+            f"generalized pipeline state: {missing}"
+        )
+
+    action_plan = controller.action_plan
+
+    task_type = getattr(
+        action_plan.task_type,
+        "value",
+        action_plan.task_type,
+    )
+
+    if str(task_type).strip().lower() != "pick_and_place":
+        raise AssertionError(
+            f"Unexpected action-plan task type: {action_plan.task_type!r}"
+        )
+
+    if len(action_plan.steps) != 1:
+        raise AssertionError(
+            f"Expected one demonstration action, got {len(action_plan.steps)}."
+        )
+
+    action_step = action_plan.steps[0]
+
+    if action_step.picked_detector_label != "green block":
+        raise AssertionError(
+            "Unexpected demonstrated pick label: "
+            f"{action_step.picked_detector_label!r}"
+        )
+
+    if action_step.destination_track_id != 0:
+        raise AssertionError(
+            "Unexpected demonstrated destination track ID: "
+            f"{action_step.destination_track_id}"
+        )
+
+    matching_result = controller.structural_matching_result
+
+    if (
+        not matching_result.is_valid
+        or not matching_result.is_unique
+        or len(matching_result.valid_mappings) != 1
+    ):
+        raise AssertionError(
+            "Canonical interactive scene did not produce one unique "
+            "structural mapping."
+        )
+
+    mapping = {
+        match.demo_object_id: match.runtime_object_id
+        for match
+        in matching_result.valid_mappings[0].matches
+    }
+
+    if mapping != EXPECTED_STRUCTURAL_MAPPING:
+        raise AssertionError(
+            "Unexpected structural mapping: "
+            f"expected={EXPECTED_STRUCTURAL_MAPPING}, received={mapping}"
+        )
+
+    replicability_result = controller.replicability_result
+
+    if (
+        not replicability_result.replicable
+        or replicability_result.failure_reasons
+        or len(replicability_result.resolved_targets) != 1
+    ):
+        raise AssertionError(
+            "Canonical interactive task did not resolve as replicable: "
+            f"{replicability_result.failure_reasons}"
+        )
+
+    resolved = replicability_result.resolved_targets[0]
+
+    if (
+        resolved.runtime_pick_object_id != "green_block_0"
+        or resolved.runtime_place_object_id != "storage_bin_0"
+    ):
+        raise AssertionError(
+            "Unexpected resolved runtime targets: "
+            f"pick={resolved.runtime_pick_object_id}, "
+            f"place={resolved.runtime_place_object_id}"
+        )
+
+    primitive_plan = controller.primitive_plan
+
+    if len(primitive_plan.steps) != len(EXPECTED_PRIMITIVES):
+        raise AssertionError(
+            "Unexpected number of primitives: "
+            f"{len(primitive_plan.steps)}"
+        )
+
+    for primitive_step, (expected_name, expected_target) in zip(
+        primitive_plan.steps,
+        EXPECTED_PRIMITIVES,
+        strict=True,
+    ):
+        if (
+            primitive_step.name != expected_name
+            or primitive_step.arguments
+            != {"target": expected_target}
+        ):
+            raise AssertionError(
+                f"Unexpected PrimitivePlan step: {primitive_step}"
+            )
+
+
+def _validate_artifacts(
+    artifacts_dir: Path,
+) -> None:
+    required_paths = (
+        artifacts_dir
+        / "demo_structured_scene"
+        / "demo_structured_scene.json",
+        artifacts_dir
+        / "action_planning"
+        / "action_plan.json",
+        artifacts_dir
+        / "scene_perceiver"
+        / "raw_scene_state.json",
+        artifacts_dir
+        / "scene_interpreter"
+        / "scene_state.json",
+        artifacts_dir
+        / "runtime_structured_scene"
+        / "runtime_structured_scene.json",
+        artifacts_dir
+        / "structural_matching"
+        / "structural_matching_result.json",
+        artifacts_dir
+        / "replicability_check"
+        / "replicability_result.json",
+        artifacts_dir
+        / "lmp_generator"
+        / "primitive_plan.json",
+        artifacts_dir
+        / "motion_layer"
+        / "motion_plan.json",
+        artifacts_dir
+        / "timings.json",
+    )
+
+    for path in required_paths:
+        if not path.is_file():
+            raise AssertionError(
+                f"Expected artifact was not generated: {path}"
+            )
+
+        if path.stat().st_size == 0:
+            raise AssertionError(
+                f"Expected artifact is empty: {path}"
+            )
+
+
+def _validate_outcome_json(
+    path: Path,
+) -> None:
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        payload = json.load(stream)
+
+    if payload.get("program_status") != "completed":
+        raise AssertionError(
+            "Interactive rollout outcome metadata does not report "
+            f"program_status='completed': {payload}"
+        )
+
+    required_keys = {
+        "object_reached",
+        "object_picked",
+        "object_placed",
+        "reached_wrong",
+        "picked_wrong",
+        "place_wrong_correct_bin",
+        "place_wrong_wrong_bin",
+    }
+
+    missing = required_keys - set(payload)
+
+    if missing:
+        raise AssertionError(
+            "Interactive rollout outcome metadata is incomplete: "
+            f"missing={sorted(missing)}"
+        )
+
+
+
+def run_test(
+    args: argparse.Namespace,
+) -> int:
+    (
+        video_path,
+        scene_dir,
+        transform_path,
+        artifacts_dir,
+        rollout_base_dir,
+    ) = _validate_inputs(
+        args
+    )
+
     rclpy.init(
         args=[
             "--ros-args",
@@ -738,9 +1150,11 @@ def run_test(
             "-p",
             f"model_config_path:={args.model_config}",
             "-p",
-            f"demo_path:={args.video}",
+            f"demo_path:={video_path}",
             "-p",
             "move_robot:=False",
+            "-p",
+            "seedo_execute_gripper:=False",
             "-p",
             f"seedo_artifacts_dir:={artifacts_dir}",
             "-p",
@@ -775,6 +1189,27 @@ def run_test(
                 "move_robot=False."
             )
 
+        if controller_node.seedo_execute_gripper:
+            raise AssertionError(
+                "Interactive dry-run must use "
+                "seedo_execute_gripper=False."
+            )
+
+        if (
+            controller_node.controller.perception_mode
+            != "generalized"
+        ):
+            raise AssertionError(
+                "Interactive dry-run requires generalized mode."
+            )
+
+        controller_node.demo_path = str(
+            video_path
+        )
+
+        controller_node.seedo_precomputed_action_plan_path = ""
+        controller_node.seedo_precomputed_demo_structured_scene_path = ""
+
         print(
             "AIControllerNode initialized successfully"
         )
@@ -785,9 +1220,9 @@ def run_test(
 
         publisher_node = (
             SeeDoInteractiveRuntimePublisher(
-                scene_dir=args.scene_dir,
+                scene_dir=scene_dir,
                 transform_path=(
-                    args.base_to_table_transform
+                    transform_path
                 ),
                 seedo_rgb_topic=(
                     controller_node.seedo_rgb_topic
@@ -801,6 +1236,9 @@ def run_test(
                 ),
                 camera_topics=list(
                     controller_node.camera_topic
+                ),
+                depth_topics=list(
+                    controller_node.seedo_record_depth_topics
                 ),
                 joint_states_topic=(
                     controller_node
@@ -861,8 +1299,26 @@ def run_test(
         )
 
         print(
-            "RGB-D, CameraInfo, JointState and TF "
-            "runtime received successfully"
+            "RGB-D, four-camera recording data, CameraInfo, "
+            "JointState and TF runtime received successfully"
+        )
+
+        record_camera_data = (
+            controller_node
+            ._get_seedo_record_camera_data(
+                timeout_sec=10.0
+            )
+        )
+
+        if set(record_camera_data) != EXPECTED_ROLLOUT_KEYS:
+            raise AssertionError(
+                "Interactive ROS simulator did not provide the "
+                "complete four-camera rollout data: "
+                f"{sorted(record_camera_data)}"
+            )
+
+        print(
+            "[PASS] four-camera RGB/depth recording callbacks"
         )
 
         print(
@@ -945,8 +1401,8 @@ def run_test(
         )
 
         print(
-            "move_robot=False: no GoToPose or gripper "
-            "command will be sent."
+            "move_robot=False and seedo_execute_gripper=False: "
+            "no physical robot or gripper command will be sent."
         )
 
         print()
@@ -1055,25 +1511,53 @@ def run_test(
             f"{new_json[0]}"
         )
 
+        if new_pkl[0].stat().st_size == 0:
+            raise AssertionError(
+                f"Saved trajectory is empty: {new_pkl[0]}"
+            )
+
+        _validate_outcome_json(
+            new_json[0]
+        )
+
+        print(
+            "[PASS] outcome metadata schema/program_status"
+        )
+
+        print(
+            "\n=== VALIDATING GENERALIZED PIPELINE STATE ==="
+        )
+
+        _validate_generalized_state(
+            controller_node
+        )
+
+        resolved = (
+            controller_node
+            .controller
+            .replicability_result
+            .resolved_targets[0]
+        )
+
+        print(
+            "Resolved runtime targets: "
+            f"pick={resolved.runtime_pick_object_id}, "
+            f"place={resolved.runtime_place_object_id}"
+        )
+
         print(
             "\n=== VALIDATING SEEDO ARTIFACTS ==="
         )
 
-        motion_artifact_path = (
+        _validate_artifacts(
             artifacts_dir
-            / "motion_layer"
-            / "motion_plan.json"
         )
 
-        if not motion_artifact_path.is_file():
-            raise AssertionError(
-                "Motion Layer artifact was not "
-                f"generated: {motion_artifact_path}"
-            )
-
         print(
-            "[PASS] Motion Layer artifact: "
-            f"{motion_artifact_path}"
+            "[PASS] complete generalized artifact tree"
+        )
+        print(
+            "[PASS] timings.json"
         )
 
         if (

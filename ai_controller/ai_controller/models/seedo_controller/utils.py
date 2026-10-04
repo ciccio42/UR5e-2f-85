@@ -1,5 +1,13 @@
+import math
+from typing import Literal
+
 import yaml
 import numpy as np
+
+from results import (
+    StructuredSceneObject,
+    StructuredSceneRelation,
+)
 
 def load_camera_calibration(calibration_path):
     """Load estimated_camera_positions.yaml: {camera_name: {position, orientation_matrix}}.
@@ -64,3 +72,146 @@ def aruco_point_to_table0(point_aruco):
     """Apply the fixed ArUco-origin -> table_0 transform (see
     ARUCO_TO_TABLE0_ROTATION above)."""
     return ARUCO_TO_TABLE0_ROTATION @ point_aruco + ARUCO_TO_TABLE0_TRANSLATION
+
+DirectionMode = Literal[4, 8]
+
+SpatialRelation = Literal[
+    "LEFT",
+    "RIGHT",
+    "UP",
+    "DOWN",
+    "UP_LEFT",
+    "UP_RIGHT",
+    "DOWN_LEFT",
+    "DOWN_RIGHT",
+]
+
+
+def spatial_relation(
+    center_a: tuple[float, float],
+    center_b: tuple[float, float],
+    directions: DirectionMode = 8,
+) -> SpatialRelation:
+    """Return the qualitative spatial relation of A relative to B.
+
+    The relation is obtained from the angle of the vector connecting
+    the center of B to the center of A.
+
+    Image coordinates follow the standard convention:
+    x increases to the right and y increases downward.
+
+    Args:
+        center_a: SAM centroid of object A in image pixel coordinates.
+        center_b: SAM centroid of object B in image pixel coordinates.
+        directions: Number of qualitative directions to use.
+            4 -> LEFT, RIGHT, UP, DOWN
+            8 -> also includes the four diagonal directions.
+
+    Returns:
+        The qualitative spatial relation of A relative to B.
+    """
+    if directions not in (4, 8):
+        raise ValueError(
+            f"Unsupported number of directions: {directions}. "
+            "Expected 4 or 8."
+        )
+
+    a_x, a_y = center_a
+    b_x, b_y = center_b
+
+    dx = a_x - b_x
+    dy = a_y - b_y
+
+    if dx == 0.0 and dy == 0.0:
+        raise ValueError(
+            "Cannot determine a spatial relation between "
+            "objects with identical centers."
+        )
+
+    angle = (
+        math.degrees(
+            math.atan2(dy, dx)
+        )
+        + 360.0
+    ) % 360.0
+
+    if directions == 4:
+        if angle < 45.0 or angle >= 315.0:
+            return "RIGHT"
+
+        if angle < 135.0:
+            return "DOWN"
+
+        if angle < 225.0:
+            return "LEFT"
+
+        return "UP"
+
+    # 8-direction representation.
+    if angle < 22.5 or angle >= 337.5:
+        return "RIGHT"
+
+    if angle < 67.5:
+        return "DOWN_RIGHT"
+
+    if angle < 112.5:
+        return "DOWN"
+
+    if angle < 157.5:
+        return "DOWN_LEFT"
+
+    if angle < 202.5:
+        return "LEFT"
+
+    if angle < 247.5:
+        return "UP_LEFT"
+
+    if angle < 292.5:
+        return "UP"
+
+    return "UP_RIGHT"
+
+def build_spatial_relations(
+    objects: tuple[StructuredSceneObject, ...],
+    directions: DirectionMode = 8,
+) -> tuple[StructuredSceneRelation, ...]:
+    """Build all directed pairwise spatial relations between scene objects."""
+
+    if directions not in (4, 8):
+        raise ValueError(
+            f"Unsupported number of directions: {directions}. "
+            "Expected 4 or 8."
+        )
+
+    object_ids = [
+        obj.object_id
+        for obj in objects
+    ]
+
+    if len(object_ids) != len(set(object_ids)):
+        raise ValueError(
+            "Structured scene objects must have unique object IDs."
+        )
+
+    relations: list[StructuredSceneRelation] = []
+
+    for subject in objects:
+        for reference in objects:
+            if subject.object_id == reference.object_id:
+                continue
+
+            relation = spatial_relation(
+                center_a=subject.center,
+                center_b=reference.center,
+                directions=directions,
+            )
+
+            relations.append(
+                StructuredSceneRelation(
+                    subject_object_id=subject.object_id,
+                    reference_object_id=reference.object_id,
+                    relation=relation,
+                )
+            )
+
+    return tuple(relations)

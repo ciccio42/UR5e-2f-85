@@ -149,6 +149,10 @@ class AIControllerNode(Node):
             'seedo_precomputed_action_plan_path',
             '',
         )
+        self.declare_parameter(
+            'seedo_precomputed_demo_structured_scene_path',
+            '',
+        )
 
         # get parameters
         self.ai_controller_target = self.get_parameter('ai_controller_target').get_parameter_value().string_value
@@ -203,6 +207,9 @@ class AIControllerNode(Node):
 
         self.seedo_precomputed_action_plan_path = self.get_parameter(
             'seedo_precomputed_action_plan_path'
+        ).get_parameter_value().string_value
+        self.seedo_precomputed_demo_structured_scene_path = self.get_parameter(
+            'seedo_precomputed_demo_structured_scene_path'
         ).get_parameter_value().string_value
 
         self.seedo_record_camera_names = (
@@ -1302,11 +1309,14 @@ class AIControllerNode(Node):
                             self.controller.load_command(
                                 demo_path=self.demo_path,
                                 task_id=enter_task_id,
-                                artifacts_dir = get_seedo_artifacts_dir(
+                                artifacts_dir=get_seedo_artifacts_dir(
                                     self.seedo_artifacts_dir
                                 ),
                                 precomputed_action_plan_path=(
                                     self.seedo_precomputed_action_plan_path
+                                ),
+                                precomputed_demo_structured_scene_path=(
+                                    self.seedo_precomputed_demo_structured_scene_path
                                 ),
                             )
                         finally:

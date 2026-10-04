@@ -34,6 +34,14 @@ action_planner:
   # the canonical front-view ordinal.
   demonstration_bin_order: left_to_right
 
+structured_scene:
+  # Number of qualitative spatial directions used to describe
+  # relations between possible place destinations.
+  # Supported values:
+  # - 4: LEFT, RIGHT, UP, DOWN
+  # - 8: also includes the four diagonal directions
+  directions: 8
+
 scene_perceiver:
   camera_calibration_path: /home/ros2_ws/src/UR5e-2f-85/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml
   camera_name: zed_front
