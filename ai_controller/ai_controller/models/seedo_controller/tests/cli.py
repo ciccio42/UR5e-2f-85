@@ -22,6 +22,9 @@ from .integration.test_scene_interpreter import run_scene_interpreter_test
 from .integration.test_scene_perceiver import run_scene_perceiver_test
 from .integration.test_seedo_controller import run_seedo_controller_test
 from .integration.test_visual_prompting import run_visual_prompting_test
+from .integration.test_seedo_controller_prior_guided import (
+    run_seedo_controller_prior_guided_test,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,6 +81,7 @@ def parse_args() -> argparse.Namespace:
             "replicability_checker",
             "lmp_generator",
             "seedo_controller",
+            "seedo_controller_prior_guided",
         ],
         default="keyframe",
         help="Pipeline stage to test.",
@@ -196,6 +200,9 @@ def main() -> int:
 
     if args.stage == "seedo_controller":
         return run_seedo_controller_test(args)
+
+    if args.stage == "seedo_controller_prior_guided":
+        return run_seedo_controller_prior_guided_test(args)
 
     raise ValueError(
         f"Unsupported stage: {args.stage}"

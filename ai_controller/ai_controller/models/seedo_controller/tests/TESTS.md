@@ -60,11 +60,12 @@ The **unit test suite and the generalized integration/end-to-end suite are compl
   - [15.12 LMP Generator integration](#1512-lmp-generator-integration)
   - [15.13 Motion Layer integration](#1513-motion-layer-integration)
   - [15.14 SeeDoController end-to-end integration](#1514-seedocontroller-end-to-end-integration)
-  - [15.15 AIControllerNode offline end-to-end](#1515-aicontrollernode-offline-end-to-end)
-  - [15.16 AIControllerNode ROS end-to-end](#1516-aicontrollernode-ros-end-to-end)
-  - [15.17 AIControllerNode interactive ROS dry-run](#1517-aicontrollernode-interactive-ros-dry-run)
-  - [15.18 Recommended execution order](#1518-recommended-execution-order)
-  - [15.19 Current validated integration status](#1519-current-validated-integration-status)
+  - [15.15 SeeDoController prior-guided end-to-end integration](#1515-seedocontroller-prior-guided-end-to-end-integration)
+  - [15.16 AIControllerNode offline end-to-end](#1515-aicontrollernode-offline-end-to-end)
+  - [15.17 AIControllerNode ROS end-to-end](#1516-aicontrollernode-ros-end-to-end)
+  - [15.18 AIControllerNode interactive ROS dry-run](#1517-aicontrollernode-interactive-ros-dry-run)
+  - [15.19 Recommended execution order](#1518-recommended-execution-order)
+  - [15.20 Current validated integration status](#1519-current-validated-integration-status)
 
 ---
 
@@ -107,6 +108,7 @@ ai_controller/ai_controller/models/seedo_controller/tests/
     ├── test_lmp_generator.py
     ├── test_motion_layer.py
     ├── test_seedo_controller.py
+    ├── test_seedo_controller_prior_guided.py
     ├── test_seedo_node_offline.py
     ├── test_seedo_node_ros.py
     └── test_seedo_node_interactive.py
@@ -1528,6 +1530,7 @@ Tests that perform real OpenAI calls require the API configuration to be availab
 | `test_lmp_generator.py` | `action_plan.json` + `scene_state.json` + `replicability_result.json` | `/seedo_tests/lmp_generator/generated_program.py`, `primitive_plan.json` |
 | `test_motion_layer.py` | `primitive_plan.json` + `scene_state.json` | `/seedo_tests/motion_layer/motion_plan.json` |
 | `test_seedo_controller.py` | None | Regenerates the complete controller artifact tree |
+| `test_seedo_controller_prior_guided.py` | None | Regenerates the complete prior-guided controller artifact tree |
 | `test_seedo_node_offline.py` | None | Regenerates the complete node/controller artifact tree |
 | `test_seedo_node_ros.py` | None | Regenerates the complete node/controller artifact tree through ROS scene messages |
 | `test_seedo_node_interactive.py` | None | Regenerates the full artifact tree and saves a rollout `.pkl` + outcome `.json` |
@@ -2225,7 +2228,111 @@ It regenerates its own artifact tree under:
 
 ---
 
-## 15.15 AIControllerNode offline end-to-end
+## 15.15 SeeDoController prior-guided end-to-end integration
+
+File:
+
+```text
+integration/test_seedo_controller_prior_guided.py
+```
+
+Run:
+
+```bash
+PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests --stage seedo_controller_prior_guided --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 --scene-dir /scene_capture/without_distractors/scene_1_no_distractors --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml --artifacts-dir /seedo_tests/seedo_controller_prior_guided
+```
+
+Required upstream integration artifacts:
+
+```text
+None
+```
+
+This test independently reruns the complete legacy prior-guided SeeDo pipeline using the canonical demonstration video and runtime scene.
+
+The test derives a temporary prior-guided configuration from the normal SeeDo model configuration, without requiring the repository configuration to be changed manually.
+
+The validated demonstration path is:
+
+```text
+KeyframeSelector
+        |
+        v
+VisualPrompter
+[prior_guided]
+        |
+        v
+ActionPlanner
+[prior_guided]
+        |
+        v
+ActionPlanningResult
+```
+
+The validated runtime path is:
+
+```text
+ScenePerceiver
+[prior_guided]
+        |
+        v
+SceneInterpreter
+[prior_guided]
+        |
+        v
+LMPGenerator
+[prior_guided]
+        |
+        v
+PrimitivePlan
+        |
+        v
+MotionLayer
+        |
+        v
+Low-level robot actions
+```
+
+The test explicitly verifies that the generalized structural pipeline is not used:
+
+```text
+demo_structured_scene        = None
+runtime_structured_scene     = None
+structural_matching_result   = None
+replicability_result         = None
+```
+
+The prior-guided ActionPlanner must preserve the legacy destination representation, including a non-null:
+
+```text
+destination_ordinal_from_left
+```
+
+and a non-empty natural-language action plan.
+
+The runtime SceneInterpreter must preserve the legacy semantic naming scheme used by CAP, including semantic object names such as coloured cubes and ordinal storage-bin descriptions.
+
+The LMPGenerator must execute the prior-guided path based on:
+
+```text
+action_plan.natural_language_plan
+```
+
+rather than the generalized runtime targets produced by structural matching.
+
+The generated primitive targets must correspond to valid objects in the runtime `SceneState`, and every primitive must be successfully translated by the Motion Layer into finite low-level robot actions.
+
+The test finally verifies that the complete primitive plan is consumed and that the controller reaches:
+
+```text
+execution_status = completed
+```
+
+This integration test exists specifically to demonstrate that the original prior-guided execution path remains functional after the introduction of the generalized structural-matching pipeline.
+
+---
+
+## 15.16 AIControllerNode offline end-to-end
 
 File:
 
@@ -2268,7 +2375,7 @@ It validates:
 
 ---
 
-## 15.16 AIControllerNode ROS end-to-end
+## 15.17 AIControllerNode ROS end-to-end
 
 File:
 
@@ -2310,7 +2417,7 @@ The real `AIControllerNode` callbacks must populate the runtime input and record
 
 ---
 
-## 15.17 AIControllerNode interactive ROS dry-run
+## 15.18 AIControllerNode interactive ROS dry-run
 
 File:
 
@@ -2398,7 +2505,7 @@ It also validates the outcome metadata schema, complete generalized artifact tre
 
 ---
 
-## 15.18 Recommended execution order
+## 15.19 Recommended execution order
 
 Run modular integration tests in this order:
 
@@ -2431,7 +2538,7 @@ The four end-to-end tests above are intentionally independent of the modular han
 
 ---
 
-## 15.19 Current validated integration status
+## 15.20 Current validated integration status
 
 ```text
 KeyframeSelector                                 PASS
