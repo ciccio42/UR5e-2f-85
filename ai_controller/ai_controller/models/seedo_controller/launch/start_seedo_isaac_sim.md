@@ -78,7 +78,7 @@ Start the SeeDo container:
 
 ```bash
 docker run --rm -it \
-  --name seedo_ros2_container \
+  --name seedo_ros2_container_2 \
   --gpus all \
   --network host \
   --ipc=host \

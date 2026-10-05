@@ -368,6 +368,36 @@ class SeeDoController(AIController):
             "visual_prompter",
             {},
         )
+        grounding_dino_config = config.get(
+            "grounding_dino",
+            {},
+        )
+
+        grounding_dino_crop_config = (
+            grounding_dino_config.get(
+                "crop",
+                {},
+            )
+        )
+
+        self.grounding_dino_crop = {
+            "top_px": grounding_dino_crop_config.get(
+                "top_px",
+                80,
+            ),
+            "bottom_px": grounding_dino_crop_config.get(
+                "bottom_px",
+                0,
+            ),
+            "left_px": grounding_dino_crop_config.get(
+                "left_px",
+                0,
+            ),
+            "right_px": grounding_dino_crop_config.get(
+                "right_px",
+                0,
+            ),
+        }
         action_config = config.get(
             "action_planner",
             {},
@@ -498,6 +528,7 @@ class SeeDoController(AIController):
                 )
             ),
             perception_mode=self.perception_mode,
+            grounding_dino_crop=self.grounding_dino_crop,
         )
 
         self.lmp_generator = LMPGenerator(
@@ -589,6 +620,7 @@ class SeeDoController(AIController):
                 "objects"
             ),
             perception_mode=self.perception_mode,
+            grounding_dino_crop=self.grounding_dino_crop,
         )
 
         self.demo_structured_scene_builder = (

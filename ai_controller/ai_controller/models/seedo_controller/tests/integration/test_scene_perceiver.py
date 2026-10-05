@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import yaml
 from pathlib import Path
 
 import cv2
@@ -520,6 +521,94 @@ def run_scene_perceiver_test(
         .expanduser()
         .resolve()
     )
+
+    dino_input_path = (
+        artifacts_dir
+        / "groundingdino_input.png"
+    )
+
+    if not dino_input_path.is_file():
+        raise AssertionError(
+            "ScenePerceiver did not persist the cropped "
+            "GroundingDINO input image: "
+            f"{dino_input_path}"
+        )
+
+    dino_input = cv2.imread(
+        str(dino_input_path),
+        cv2.IMREAD_COLOR,
+    )
+
+    if dino_input is None:
+        raise AssertionError(
+            "GroundingDINO input artifact is not readable: "
+            f"{dino_input_path}"
+        )
+
+    with Path(
+        args.model_config
+    ).expanduser().resolve().open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        model_config = (
+            yaml.safe_load(stream)
+            or {}
+        )
+
+    crop_config = (
+        model_config
+        .get(
+            "grounding_dino",
+            {},
+        )
+        .get(
+            "crop",
+            {},
+        )
+    )
+
+    crop_top = int(
+        crop_config.get(
+            "top_px",
+            80,
+        )
+    )
+    crop_bottom = int(
+        crop_config.get(
+            "bottom_px",
+            0,
+        )
+    )
+    crop_left = int(
+        crop_config.get(
+            "left_px",
+            0,
+        )
+    )
+    crop_right = int(
+        crop_config.get(
+            "right_px",
+            0,
+        )
+    )
+
+    expected_dino_shape = (
+        height
+        - crop_top
+        - crop_bottom,
+        width
+        - crop_left
+        - crop_right,
+    )
+
+    if dino_input.shape[:2] != expected_dino_shape:
+        raise AssertionError(
+            "GroundingDINO runtime input does not match the "
+            "configured crop: "
+            f"expected={expected_dino_shape}, "
+            f"received={dino_input.shape[:2]}"
+        )
 
     overlay_path = (
         perception_result

@@ -20,6 +20,8 @@ from ai_controller.models.seedo_controller.utils import (
     deproject_pixel,
     camera_point_to_aruco,
     aruco_point_to_table0,
+    crop_image_for_grounding_dino,
+    remap_grounding_dino_boxes_to_full_frame,
 )
 from results import (
     DetectedObject,
@@ -70,6 +72,7 @@ class ScenePerceiver:
         translation_noise_std_mm: float = 0.0,
         rotation_noise_std_deg: float = 0.0,
         perception_mode: str = "generalized",
+        grounding_dino_crop: dict[str, int] | None = None,
     ) -> None:
         self.camera_calibration_path = (
             Path(camera_calibration_path)
@@ -97,6 +100,27 @@ class ScenePerceiver:
                 "Invalid perception_mode: "
                 f"{self.perception_mode!r}"
             )
+
+        crop_config = grounding_dino_crop or {}
+
+        self.grounding_dino_crop = {
+            "top_px": crop_config.get(
+                "top_px",
+                80,
+            ),
+            "bottom_px": crop_config.get(
+                "bottom_px",
+                0,
+            ),
+            "left_px": crop_config.get(
+                "left_px",
+                0,
+            ),
+            "right_px": crop_config.get(
+                "right_px",
+                0,
+            ),
+        }
         
         self.camera_calibration = load_camera_calibration(
             str(self.camera_calibration_path)
@@ -719,13 +743,88 @@ class ScenePerceiver:
     def _detect_objects(
         self,
         rgb_image: np.ndarray,
+        artifacts_dir: str | Path | None = None,
     ) -> list[DetectedObject]:
         """Detect and segment configured object categories in one RGB frame."""
         
         self._ensure_models_loaded()
 
-        image_source, image = load_image_from_array(
-            rgb_image
+        # Keep the complete RGB frame for VLM discovery, SAM,
+        # depth lookup and all downstream geometry.
+        image_source = rgb_image
+
+        # GroundingDINO sees only the configured ROI.
+        (
+            dino_image_source,
+            dino_crop_info,
+        ) = crop_image_for_grounding_dino(
+            image_source,
+            top_px=self.grounding_dino_crop[
+                "top_px"
+            ],
+            bottom_px=self.grounding_dino_crop[
+                "bottom_px"
+            ],
+            left_px=self.grounding_dino_crop[
+                "left_px"
+            ],
+            right_px=self.grounding_dino_crop[
+                "right_px"
+            ],
+        )
+
+        if artifacts_dir is not None:
+            dino_artifacts_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            dino_artifacts_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            dino_input_path = (
+                dino_artifacts_dir
+                / "groundingdino_input.png"
+            )
+
+            saved = cv2.imwrite(
+                str(dino_input_path),
+                cv2.cvtColor(
+                    dino_image_source,
+                    cv2.COLOR_RGB2BGR,
+                ),
+            )
+
+            if not saved:
+                raise RuntimeError(
+                    "Could not save GroundingDINO input image: "
+                    f"{dino_input_path}"
+                )
+
+            print(
+                "[ScenePerceiver] GroundingDINO input saved to: "
+                f"{dino_input_path}"
+            )
+
+        # GroundingDINO preprocessing is performed only on the cropped
+        # image. The returned image_source is intentionally ignored.
+        _, image = load_image_from_array(
+            dino_image_source
+        )
+
+        print(
+            "[ScenePerceiver] GroundingDINO crop: "
+            f"top={dino_crop_info['top_px']}px | "
+            f"bottom={dino_crop_info['bottom_px']}px | "
+            f"left={dino_crop_info['left_px']}px | "
+            f"right={dino_crop_info['right_px']}px | "
+            f"full={dino_crop_info['full_width']}x"
+            f"{dino_crop_info['full_height']} | "
+            f"dino={dino_crop_info['crop_width']}x"
+            f"{dino_crop_info['crop_height']}"
         )
 
         (
@@ -1333,6 +1432,14 @@ class ScenePerceiver:
             dim=0,
         )
 
+        # GroundingDINO boxes are normalized with respect to the
+        # cropped detector image. Convert them back to full-frame
+        # normalized coordinates before SAM uses them.
+        boxes = remap_grounding_dino_boxes_to_full_frame(
+            boxes,
+            crop_info=dino_crop_info,
+        )
+
         height, width, _ = image_source.shape
 
         boxes_xyxy = (
@@ -1671,7 +1778,8 @@ class ScenePerceiver:
         )
 
         detections = self._detect_objects(
-            rgb_image
+            rgb_image,
+            artifacts_dir=artifacts_dir,
         )
 
         if not detections:

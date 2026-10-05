@@ -30,7 +30,7 @@ fi
 
 TASK_ID="$(printf '%02d' "$((10#${TASK_ID_INPUT}))")"
 
-DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps_modified.mp4"
+DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
 DEMO_PATH_NUT="/dataset_nut/task_${TASK_ID}/traj_000_camera_front_modified.mp4"
 
 if [[ ! -f "${DEMO_PATH}" ]]; then

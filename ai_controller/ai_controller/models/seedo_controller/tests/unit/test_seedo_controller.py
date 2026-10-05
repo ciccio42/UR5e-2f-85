@@ -463,6 +463,12 @@ def test_load_model_builds_pipeline_and_propagates_mode(
     config_path.write_text(
         """
 perception_mode: GENERALIZED
+grounding_dino:
+  crop:
+    top_px: 80
+    bottom_px: 0
+    left_px: 0
+    right_px: 0
 structured_scene:
   directions: 4
 scene_interpreter:
@@ -546,6 +552,27 @@ motion_layer:
             "kwargs"
         ]["perception_mode"]
         == "generalized"
+    )
+
+    expected_grounding_dino_crop = {
+        "top_px": 80,
+        "bottom_px": 0,
+        "left_px": 0,
+        "right_px": 0,
+    }
+
+    assert (
+        calls["ScenePerceiver"][0][
+            "kwargs"
+        ]["grounding_dino_crop"]
+        == expected_grounding_dino_crop
+    )
+
+    assert (
+        calls["VisualPrompter"][0][
+            "kwargs"
+        ]["grounding_dino_crop"]
+        == expected_grounding_dino_crop
     )
 
     assert (

@@ -1,5 +1,5 @@
 import math
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 import numpy as np
@@ -8,6 +8,246 @@ from results import (
     StructuredSceneObject,
     StructuredSceneRelation,
 )
+
+def crop_image_for_grounding_dino(
+    image: np.ndarray,
+    *,
+    top_px: int = 0,
+    bottom_px: int = 0,
+    left_px: int = 0,
+    right_px: int = 0,
+) -> tuple[np.ndarray, dict[str, int]]:
+    """Crop only the image passed to GroundingDINO.
+
+    The returned metadata can later be used to map normalized
+    GroundingDINO bounding boxes back to the coordinate system of
+    the complete image.
+    """
+
+    if not isinstance(image, np.ndarray):
+        raise TypeError(
+            "GroundingDINO input image must be a numpy array."
+        )
+
+    if image.ndim < 2:
+        raise ValueError(
+            "GroundingDINO input image must have at least two dimensions."
+        )
+
+    margins = {
+        "top_px": top_px,
+        "bottom_px": bottom_px,
+        "left_px": left_px,
+        "right_px": right_px,
+    }
+
+    normalized_margins: dict[str, int] = {}
+
+    for name, value in margins.items():
+        if (
+            not isinstance(value, (int, np.integer))
+            or isinstance(value, bool)
+        ):
+            raise TypeError(
+                f"{name} must be an integer."
+            )
+
+        value = int(value)
+
+        if value < 0:
+            raise ValueError(
+                f"{name} cannot be negative."
+            )
+
+        normalized_margins[name] = value
+
+    top = normalized_margins["top_px"]
+    bottom = normalized_margins["bottom_px"]
+    left = normalized_margins["left_px"]
+    right = normalized_margins["right_px"]
+
+    full_height, full_width = image.shape[:2]
+
+    if top + bottom >= full_height:
+        raise ValueError(
+            "Invalid vertical GroundingDINO crop: "
+            f"top={top}, bottom={bottom}, "
+            f"image_height={full_height}."
+        )
+
+    if left + right >= full_width:
+        raise ValueError(
+            "Invalid horizontal GroundingDINO crop: "
+            f"left={left}, right={right}, "
+            f"image_width={full_width}."
+        )
+
+    y_end = (
+        full_height - bottom
+        if bottom > 0
+        else full_height
+    )
+
+    x_end = (
+        full_width - right
+        if right > 0
+        else full_width
+    )
+
+    cropped_image = np.ascontiguousarray(
+        image[
+            top:y_end,
+            left:x_end,
+        ]
+    )
+
+    crop_height, crop_width = cropped_image.shape[:2]
+
+    crop_info = {
+        "top_px": top,
+        "bottom_px": bottom,
+        "left_px": left,
+        "right_px": right,
+        "full_height": full_height,
+        "full_width": full_width,
+        "crop_height": crop_height,
+        "crop_width": crop_width,
+    }
+
+    return cropped_image, crop_info
+
+
+def remap_grounding_dino_boxes_to_full_frame(
+    boxes: Any,
+    *,
+    crop_info: dict[str, int],
+) -> Any:
+    """Map normalized GroundingDINO cxcywh boxes to the full image.
+
+    GroundingDINO returns boxes normalized with respect to the image
+    it receives. When detection is performed on a crop, the centers
+    and dimensions therefore have to be converted back to normalized
+    coordinates of the original complete frame before SAM or other
+    full-frame processing uses them.
+    """
+
+    if not hasattr(boxes, "clone"):
+        raise TypeError(
+            "GroundingDINO boxes must provide a clone() method."
+        )
+
+    if (
+        getattr(boxes, "ndim", None) != 2
+        or boxes.shape[1] != 4
+    ):
+        raise ValueError(
+            "GroundingDINO boxes must have shape (N, 4) "
+            "using normalized cxcywh coordinates."
+        )
+
+    required_keys = {
+        "top_px",
+        "left_px",
+        "full_height",
+        "full_width",
+        "crop_height",
+        "crop_width",
+    }
+
+    missing_keys = (
+        required_keys
+        - set(crop_info)
+    )
+
+    if missing_keys:
+        raise ValueError(
+            "GroundingDINO crop metadata is missing keys: "
+            f"{sorted(missing_keys)}"
+        )
+
+    top = int(
+        crop_info["top_px"]
+    )
+
+    left = int(
+        crop_info["left_px"]
+    )
+
+    full_height = int(
+        crop_info["full_height"]
+    )
+
+    full_width = int(
+        crop_info["full_width"]
+    )
+
+    crop_height = int(
+        crop_info["crop_height"]
+    )
+
+    crop_width = int(
+        crop_info["crop_width"]
+    )
+
+    if (
+        full_height <= 0
+        or full_width <= 0
+        or crop_height <= 0
+        or crop_width <= 0
+    ):
+        raise ValueError(
+            "GroundingDINO crop dimensions must be positive."
+        )
+
+    # No crop means the normalized GroundingDINO coordinates
+    # are already expressed in the full-frame reference system.
+    # Return a clone directly to preserve exact values and avoid
+    # unnecessary floating-point arithmetic.
+    if (
+        top == 0
+        and left == 0
+        and crop_height == full_height
+        and crop_width == full_width
+    ):
+        return boxes.clone()
+
+    remapped_boxes = boxes.clone()
+
+    # Remap the horizontal coordinates only when the crop actually
+    # changes the horizontal reference system.
+    if (
+        left != 0
+        or crop_width != full_width
+    ):
+        remapped_boxes[:, 0] = (
+            remapped_boxes[:, 0] * crop_width
+            + left
+        ) / full_width
+
+        remapped_boxes[:, 2] = (
+            remapped_boxes[:, 2]
+            * crop_width
+            / full_width
+        )
+
+    # Remap the vertical coordinates only when the crop actually
+    # changes the vertical reference system.
+    if (
+        top != 0
+        or crop_height != full_height
+    ):
+        remapped_boxes[:, 1] = (
+            remapped_boxes[:, 1] * crop_height
+            + top
+        ) / full_height
+
+        remapped_boxes[:, 3] = (
+            remapped_boxes[:, 3]
+            * crop_height
+            / full_height
+        )
+
+    return remapped_boxes
 
 def load_camera_calibration(calibration_path):
     """Load estimated_camera_positions.yaml: {camera_name: {position, orientation_matrix}}.

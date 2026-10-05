@@ -21,7 +21,9 @@ The **unit test suite and the generalized integration/end-to-end suite are compl
   - [2.3 Run a single unit test file](#23-run-a-single-unit-test-file)
   - [2.4 Run a single test function](#24-run-a-single-test-function)
 - [3. Unit Test Summary](#3-unit-test-summary)
-- [4. Spatial Utilities](#4-spatial-utilities)
+- [4. Utility Tests](#4-utility-tests)
+  - [4.1 Spatial Utilities](#41-spatial-utilities)
+  - [4.2 GroundingDINO Preprocessing Utilities](#42-groundingdino-preprocessing-utilities)
 - [5. Demonstration Structured Scene Builder](#5-demonstration-structured-scene-builder)
 - [6. Runtime Structured Scene Builder](#6-runtime-structured-scene-builder)
 - [7. Structural Matcher](#7-structural-matcher)
@@ -81,6 +83,7 @@ ai_controller/ai_controller/models/seedo_controller/tests/
 ├── unit/
 │   ├── __init__.py
 │   ├── test_spatial_utils.py
+│   ├── test_grounding_dino_utils.py
 │   ├── test_demo_structured_scene_builder.py
 │   ├── test_runtime_structured_scene_builder.py
 │   ├── test_structural_matcher.py
@@ -128,9 +131,7 @@ No additional `PYTHONPATH` configuration is required.
 Recommended command:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit -v
 ```
 
 This command:
@@ -144,15 +145,13 @@ This command:
 The current expected result is:
 
 ```text
-363 passed
+389 passed
 ```
 
 ## 2.2 Run all unit tests without suppressing warnings
 
 ```bash
-python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit \\
--v
+python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit -v
 ```
 
 Warnings currently originate from external dependencies such as protobuf, Matplotlib, PyTorch, timm, and GroundingDINO. They are not failures in the SeeDo unit test suite.
@@ -162,17 +161,13 @@ Warnings currently originate from external dependencies such as protobuf, Matplo
 General form:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/<test_file>.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/<test_file>.py -v
 ```
 
 Example:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_structural_matcher.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_structural_matcher.py -v
 ```
 
 ## 2.4 Run a single test function
@@ -180,17 +175,13 @@ PYTHONWARNINGS=ignore python3 -m pytest \\
 General form:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/<test_file>.py::<test_name> \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/<test_file>.py::<test_name> -v
 ```
 
 Example:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_scene_interpreter.py::test_prior_guided_vlm_returns_valid_mapping \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_scene_interpreter.py::test_prior_guided_vlm_returns_valid_mapping -v
 ```
 
 ---
@@ -202,6 +193,7 @@ Current validated unit suite:
 | Test file | Tests | Main component |
 |---|---:|---|
 | `test_spatial_utils.py` | 35 | Spatial relation utilities |
+| `test_grounding_dino_utils.py` | 26 | GroundingDINO crop and bounding-box remapping utilities |
 | `test_demo_structured_scene_builder.py` | 28 | Demonstration structured-scene construction |
 | `test_runtime_structured_scene_builder.py` | 24 | Runtime structured-scene construction |
 | `test_structural_matcher.py` | 16 | Structural graph matching |
@@ -211,11 +203,13 @@ Current validated unit suite:
 | `test_lmp_generator.py` | 51 | CAP/LMP generation and scene wrapper |
 | `test_motion_layer.py` | 49 | Symbolic-to-low-level motion translation |
 | `test_seedo_controller.py` | 64 | Complete controller orchestration |
-| **Total** | **363** | |
+| **Total** | **389** | |
 
 ---
 
-# 4. Spatial Utilities
+# 4. Utility Tests
+
+## 4.1 Spatial Utilities
 
 File:
 
@@ -226,9 +220,7 @@ unit/test_spatial_utils.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_spatial_utils.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_spatial_utils.py -v
 ```
 
 Expected result:
@@ -291,6 +283,95 @@ The structured-scene representation uses object centers only. Bounding boxes are
 
 ---
 
+
+## 4.2 GroundingDINO Preprocessing Utilities
+
+File:
+
+```text
+unit/test_grounding_dino_utils.py
+```
+
+Run:
+
+```bash
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_grounding_dino_utils.py -v
+```
+
+Expected result:
+
+```text
+26 passed
+```
+
+This test file validates the shared GroundingDINO preprocessing utilities used by both demonstration and runtime perception.
+
+The tested utilities are:
+
+```text
+crop_image_for_grounding_dino()
+remap_grounding_dino_boxes_to_full_frame()
+```
+
+`crop_image_for_grounding_dino()` validates and applies a configurable image crop before GroundingDINO inference while preserving the complete image for the rest of the perception pipeline.
+
+The tests cover:
+
+- top, bottom, left, and right crop margins;
+
+- zero-crop behavior;
+
+- invalid and negative margins;
+
+- crops that would produce an empty image;
+
+- preservation of contiguous NumPy image data.
+
+`remap_grounding_dino_boxes_to_full_frame()` converts normalized GroundingDINO `cxcywh` bounding boxes from cropped-image coordinates back to normalized full-frame coordinates before SAM and downstream processing use them.
+
+For the current canonical configuration:
+
+```text
+full image = 672 x 376
+
+crop:
+top    = 80 px
+bottom = 0 px
+left   = 0 px
+right  = 0 px
+
+GroundingDINO input = 672 x 296
+```
+
+Only the vertical reference system changes. Therefore:
+
+```text
+cx     -> unchanged
+cy     -> remapped to full-frame coordinates
+width  -> unchanged
+height -> remapped to full-frame coordinates
+```
+
+The implementation also supports future cropping on all four image sides.
+
+The tests additionally validate:
+
+- preservation of the original GroundingDINO tensor;
+
+- exact identity behavior when no crop is applied;
+
+- empty `(0, 4)` detection tensors;
+
+- rejection of invalid bounding-box shapes;
+
+- rejection of incomplete crop metadata;
+
+- rejection of non-positive image dimensions.
+
+The same shared crop/remapping logic is used by both the demonstration `VisualPrompter` and the runtime `ScenePerceiver`.
+
+---
+
 # 5. Demonstration Structured Scene Builder
 
 File:
@@ -302,9 +383,7 @@ unit/test_demo_structured_scene_builder.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_demo_structured_scene_builder.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_demo_structured_scene_builder.py -v
 ```
 
 Expected result:
@@ -370,9 +449,7 @@ unit/test_runtime_structured_scene_builder.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_runtime_structured_scene_builder.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_runtime_structured_scene_builder.py -v
 ```
 
 Expected result:
@@ -436,9 +513,7 @@ unit/test_structural_matcher.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_structural_matcher.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_structural_matcher.py -v
 ```
 
 Expected result:
@@ -520,9 +595,7 @@ unit/test_replicability_checker.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_replicability_checker.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_replicability_checker.py -v
 ```
 
 Expected result:
@@ -617,9 +690,7 @@ unit/test_action_planner.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_action_planner.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_action_planner.py -v
 ```
 
 Expected result:
@@ -683,9 +754,7 @@ unit/test_scene_interpreter.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_scene_interpreter.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_scene_interpreter.py -v
 ```
 
 Expected result:
@@ -796,9 +865,7 @@ unit/test_lmp_generator.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_lmp_generator.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_lmp_generator.py -v
 ```
 
 Expected result:
@@ -949,9 +1016,7 @@ unit/test_motion_layer.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_motion_layer.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_motion_layer.py -v
 ```
 
 Expected result:
@@ -1078,9 +1143,7 @@ unit/test_seedo_controller.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_seedo_controller.py \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit/test_seedo_controller.py -v
 ```
 
 Expected result:
@@ -1343,19 +1406,20 @@ The tests validate:
 The current full unit suite contains:
 
 ```text
-363 tests
+389 tests
 ```
 
 All unit tests currently pass:
 
 ```text
-363 passed
+389 passed
 ```
 
 Breakdown:
 
 ```text
 Spatial utilities                     35
+GroundingDINO preprocessing utilities  26
 Demo structured-scene builder         28
 Runtime structured-scene builder      24
 Structural matcher                    16
@@ -1366,15 +1430,13 @@ LMP generator                         51
 Motion layer                          49
 SeeDo controller                      64
 ----------------------------------------
-TOTAL                                363
+TOTAL                                389
 ```
 
 The full suite should be executed before moving to integration testing:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m pytest \\
-/home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit \\
--v
+PYTHONWARNINGS=ignore python3 -m pytest /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/tests/unit -v
 ```
 
 ---
@@ -2392,7 +2454,7 @@ AIControllerNode interactive ROS dry-run         PASS
 Together with the unit suite:
 
 ```text
-Unit tests: 363 passed
+Unit tests: 389 passed
 Integration/end-to-end stages: all validated PASS
 ```
 

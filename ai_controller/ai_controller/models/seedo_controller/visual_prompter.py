@@ -31,6 +31,7 @@ class VisualPrompter:
         ),
         objects: str | None = None,
         perception_mode: str = "generalized",
+        grounding_dino_crop: dict[str, int] | None = None,
     ) -> None:
         self.grounding_config = Path(grounding_config)
         self.grounding_checkpoint = Path(grounding_checkpoint)
@@ -39,6 +40,26 @@ class VisualPrompter:
         self.sam2_checkpoint = Path(sam2_checkpoint)
         self.objects = objects
         self.perception_mode = perception_mode
+        crop_config = grounding_dino_crop or {}
+
+        self.grounding_dino_crop = {
+            "top_px": crop_config.get(
+                "top_px",
+                80,
+            ),
+            "bottom_px": crop_config.get(
+                "bottom_px",
+                0,
+            ),
+            "left_px": crop_config.get(
+                "left_px",
+                0,
+            ),
+            "right_px": crop_config.get(
+                "right_px",
+                0,
+            ),
+        }
 
     def run(
         self,
@@ -71,6 +92,10 @@ class VisualPrompter:
         print(f"BERT model: {self.bert_model}")
         print(f"SAM checkpoint: {self.sam_checkpoint}")
         print(f"SAM2 checkpoint: {self.sam2_checkpoint}")
+        print(
+            "GroundingDINO crop: "
+            f"{self.grounding_dino_crop}"
+        )
         print("====================================")
 
         core_result = run_visual_prompting(
@@ -85,6 +110,7 @@ class VisualPrompter:
             sam_checkpoint=str(self.sam_checkpoint),
             sam2_checkpoint=str(self.sam2_checkpoint),
             perception_mode=self.perception_mode,
+            grounding_dino_crop=self.grounding_dino_crop,
         )
 
         if core_result is None:

@@ -259,6 +259,35 @@ def build_scene_perception_result(
         "scene_perceiver"
     ]
 
+    grounding_dino_crop_config = (
+        config.get(
+            "grounding_dino",
+            {},
+        ).get(
+            "crop",
+            {},
+        )
+    )
+
+    grounding_dino_crop = {
+        "top_px": grounding_dino_crop_config.get(
+            "top_px",
+            80,
+        ),
+        "bottom_px": grounding_dino_crop_config.get(
+            "bottom_px",
+            0,
+        ),
+        "left_px": grounding_dino_crop_config.get(
+            "left_px",
+            0,
+        ),
+        "right_px": grounding_dino_crop_config.get(
+            "right_px",
+            0,
+        ),
+    }
+
     camera_pose_noise_config = perception_config.get(
         "camera_pose_noise",
         {},
@@ -324,6 +353,7 @@ def build_scene_perception_result(
                 0.0,
             )
         ),
+        grounding_dino_crop=grounding_dino_crop,
     )
 
     artifacts_dir = None

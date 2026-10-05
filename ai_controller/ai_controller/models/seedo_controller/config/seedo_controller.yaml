@@ -3,6 +3,16 @@
 # - prior_guided: use prior knowledge about expected objects
 perception_mode: generalized
 
+grounding_dino:
+  # Crop applied only to the image passed to GroundingDINO.
+  # VLM discovery, SAM, SAM2, depth and camera geometry keep
+  # using the complete image.
+  crop:
+    top_px: 80
+    bottom_px: 0
+    left_px: 0
+    right_px: 0
+
 keyframe_selector:
 
   # Keyframe selection strategy:
@@ -40,7 +50,7 @@ structured_scene:
   # Supported values:
   # - 4: LEFT, RIGHT, UP, DOWN
   # - 8: also includes the four diagonal directions
-  directions: 8
+  directions: 4
 
 scene_perceiver:
   camera_calibration_path: /home/ros2_ws/src/UR5e-2f-85/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml
