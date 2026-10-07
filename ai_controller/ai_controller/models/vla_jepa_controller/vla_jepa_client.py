@@ -78,19 +78,21 @@ class VLAJEPAControllerClient:
                 "traj_cnt": int(kwargs.get("traj_cnt", 0)),
                 "save_path": kwargs.get("save_path"),
             },
-            timeout=30.0,
+            timeout=300.0,
         )
         resp.raise_for_status()
         self.command = resp.json()["command"]
         return self.command
 
-    def caption_task_with_cosmos(self, demo_path, task_id, timeout: float = 180.0):
+    def caption_task_with_cosmos(self, demo_path, task_id, save_dir=None, timeout: float = 180.0):
         """Overrides the static per-task prompt (already set by load_command)
         with a Cosmos-Reason2 caption of this task's human demo, for the rest
-        of the episode - see server.py's /caption_task handler."""
+        of the episode - see server.py's /caption_task handler. If save_dir is
+        given, the server writes its intermediate results there (same
+        filesystem - both processes run in the same container)."""
         resp = requests.post(
             f"{self.base_url}/caption_task",
-            json={"demo_path": demo_path, "task_id": task_id},
+            json={"demo_path": demo_path, "task_id": task_id, "save_dir": save_dir},
             timeout=timeout,
         )
         resp.raise_for_status()

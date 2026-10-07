@@ -20,7 +20,17 @@ loopback instead of a Slurm-allocated node.
 Run (inside the venv that has torch/lerobot/transformers installed, see
 docs/ai_controller_models/video_captioning.md):
     /opt/vla_jepa_venv/bin/python3 server.py \\
-        --config vla_jepa_config.yaml [--host 127.0.0.1] [--port 8770]
+        --config vla_jepa_config.yaml [--host 127.0.0.1] [--port 8770] \\
+        [--use-cosmos-task-description]
+
+--use-cosmos-task-description loads Cosmos-Reason2 up front, right after
+VLAJEPAController, instead of lazily on the first /caption_task request -
+pass it whenever the node will be run with use_cosmos_task_description:=true
+(match the two flags). Cosmos-Reason2-2B's from_pretrained() alone takes well
+over vla_jepa_client.py's /caption_task timeout (180s) on a cold HF cache, so
+lazy-loading it inside the first request was timing that request out; loading
+during server startup (before /health responds, so the client's connect
+retries simply wait longer instead) avoids that entirely.
 """
 import argparse
 import base64
@@ -64,7 +74,7 @@ def _decode_images(images_b64):
     return images
 
 
-def create_app(config_path: str, task_name: str = "pick_place"):
+def create_app(config_path: str, task_name: str = "pick_place", preload_cosmos: bool = False):
     app = Flask(__name__)
 
     print(f"[vla_jepa_server] Loading VLAJEPAController from {config_path} ...")
@@ -72,7 +82,24 @@ def create_app(config_path: str, task_name: str = "pick_place"):
     controller.reset()
     print("[vla_jepa_server] Controller ready.")
 
+    with open(config_path, "r", encoding="utf-8") as stream:
+        cfg = yaml.safe_load(stream) or {}
+    # Same shared vla_jepa_config.yaml used for the checkpoint itself -
+    # see its "cosmos_prompt_yaml" comment for why fixed_prompt.yaml is the
+    # default (matches this deployment's fixed color/bin-numbering scheme).
+    cosmos_prompt_yaml = cfg.get("cosmos_prompt_yaml")
+
     state = {"cosmos_captioner": None}
+    if preload_cosmos:
+        # Loaded here (still before app.run(), so before /health responds)
+        # rather than lazily on the first /caption_task call - see the
+        # --use-cosmos-task-description flag's docstring above for why.
+        from ai_controller.models.video_captioning.cosmos_captioner import CosmosCaptioner, DEFAULT_MODEL_NAME
+        print(f"[vla_jepa_server] Preloading {DEFAULT_MODEL_NAME} for task captioning...")
+        state["cosmos_captioner"] = CosmosCaptioner()
+        print(f"[vla_jepa_server] Warming up Cosmos-Reason2 {DEFAULT_MODEL_NAME}...")
+        state["cosmos_captioner"].warmup()
+        print(f"[vla_jepa_server] {DEFAULT_MODEL_NAME} ready.")
 
     @app.route("/health", methods=["GET"])
     def health():
@@ -101,15 +128,20 @@ def create_app(config_path: str, task_name: str = "pick_place"):
 
         body = request.get_json(force=True)
         demo_path, task_id = body["demo_path"], body["task_id"]
+        save_dir = body.get("save_dir")
+        clip_dir = Path(save_dir) if save_dir else Path("/tmp/cosmos_captioner")
 
         if state["cosmos_captioner"] is None:
             print("[vla_jepa_server] Loading Cosmos-Reason2 for task captioning...")
             state["cosmos_captioner"] = CosmosCaptioner()
 
         clip_path, demo_file = render_demo_clip(
-            demo_path, task_id, f"/tmp/cosmos_captioner/task_{task_id}_demo.mp4")
+            demo_path, task_id, clip_dir / f"task_{task_id}_demo.mp4")
         print(f"[vla_jepa_server] Rendered Cosmos input clip from {demo_file}: {clip_path}")
-        caption = state["cosmos_captioner"].caption_video(clip_path)
+
+        caption = state["cosmos_captioner"].caption_video(
+            clip_path, prompt_yaml=cosmos_prompt_yaml, save_dir=save_dir,
+            extra_metadata={"task_id": task_id, "demo_file": str(demo_file)})
         print(f"[vla_jepa_server] Cosmos task description: {caption!r}")
         controller.command = caption
         return jsonify({"command": caption, "demo_file": str(demo_file)})
@@ -134,6 +166,10 @@ def main():
     parser.add_argument("--task-name", default="pick_place")
     parser.add_argument("--host", default=None)
     parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--use-cosmos-task-description", action="store_true",
+                         help="Preload Cosmos-Reason2 at startup instead of on the first "
+                              "/caption_task request - pass whenever the node will run with "
+                              "use_cosmos_task_description:=true.")
     args = parser.parse_args()
 
     with open(args.config, "r", encoding="utf-8") as stream:
@@ -141,7 +177,8 @@ def main():
     host = args.host or cfg.get("server_host", "127.0.0.1")
     port = args.port or int(cfg.get("server_port", 8770))
 
-    app = create_app(args.config, task_name=args.task_name)
+    app = create_app(args.config, task_name=args.task_name,
+                      preload_cosmos=args.use_cosmos_task_description)
     print(f"[vla_jepa_server] Listening on {host}:{port}")
     app.run(host=host, port=port, threaded=False)
 

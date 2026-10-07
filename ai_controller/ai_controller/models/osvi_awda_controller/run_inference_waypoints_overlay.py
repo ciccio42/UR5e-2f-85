@@ -128,12 +128,31 @@ def load_first_frame_from_pkl(pkl_path: Path, savers_dir: Path):
         raise ValueError(f"{pkl_path} has an empty trajectory.")
 
     obs0 = traj.get(0)["obs"]
-    # ai_controller_node.py stores camera_front_image as BGR
-    # (cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR) before traj.append()).
-    # The controller expects RGB, matching get_synced_images()'s rgb8 decode.
-    frame_bgr = obs0["camera_front_image"]
+
+    # Support both rollout formats.
+    if "camera_front_image" in obs0:
+        frame_bgr = obs0["camera_front_image"]
+        camera_key = "camera_front_image"
+
+    elif "front_camera_image" in obs0:
+        frame_bgr = obs0["front_camera_image"]
+        camera_key = "front_camera_image"
+
+    else:
+        raise KeyError(
+            "No front-camera image found. "
+            f"Available observation keys: {list(obs0.keys())}"
+        )
+
+    print(f"[run_inference] Using camera key: {camera_key}")
+
     frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-    eef_pos = np.asarray(obs0.get("eef_pos", [0.0, 0.35, 0.20]), dtype=np.float64)
+
+    eef_pos = np.asarray(
+        obs0.get("eef_pos", [0.0, 0.35, 0.20]),
+        dtype=np.float64
+    )
+
     return frame_rgb, eef_pos, data
 
 

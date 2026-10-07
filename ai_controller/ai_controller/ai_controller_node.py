@@ -75,6 +75,11 @@ class AIControllerNode(Node):
         # also fed to osvi_awda_controller's grasp-refinement (via input_data,
         # see the control loop below) so that controller needs no ROS of its
         # own - mirrors how CODController receives current_eef_pos/quat.
+        self.declare_parameter(
+            'camera_front_depth_topic',
+            '/zed_front/zed_node/depth/depth_registered'
+        )
+
         self.declare_parameter('camera_lateral_left_depth_topic',
                                                     '/zed_left/zed_node/depth/depth_registered')
         self.declare_parameter('camera_lateral_right_depth_topic',
@@ -111,6 +116,7 @@ class AIControllerNode(Node):
         self.declare_parameter('eef_frame_name', 'tcp_link')
         self.declare_parameter('move_robot', False)
         self.declare_parameter('manual_step_waypoints', False)
+        self.declare_parameter('osvi_awda_max_cartesian_step_m', 0.02)
 
 
         # get parameters
@@ -121,7 +127,7 @@ class AIControllerNode(Node):
         self.set_pose_service = self.get_parameter('set_pose_service').get_parameter_value().string_value
         self.gripper_action_topic = self.get_parameter('gripper_action_topic').get_parameter_value().string_value
         self.camera_topic = self.get_parameter('camera_topic').get_parameter_value().string_array_value
-        self.extra_depth_topics = {
+        self.extra_depth_topics = {'camera_front_depth': self.get_parameter('camera_front_depth_topic').get_parameter_value().string_value,
             'camera_lateral_left_depth': self.get_parameter('camera_lateral_left_depth_topic').get_parameter_value().string_value,
             'camera_lateral_right_depth': self.get_parameter('camera_lateral_right_depth_topic').get_parameter_value().string_value,
             'camera_gripper_depth': self.get_parameter('camera_gripper_depth_topic').get_parameter_value().string_value,
@@ -147,6 +153,11 @@ class AIControllerNode(Node):
         self.eef_frame_name = self.get_parameter('eef_frame_name').get_parameter_value().string_value
         self.move_robot = self.get_parameter('move_robot').get_parameter_value().bool_value
         self.manual_step_waypoints = self.get_parameter('manual_step_waypoints').get_parameter_value().bool_value
+        self.osvi_awda_max_cartesian_step_m = self.get_parameter('osvi_awda_max_cartesian_step_m').get_parameter_value().double_value
+        if self.osvi_awda_max_cartesian_step_m <= 0.0:
+            raise ValueError(
+                'osvi_awda_max_cartesian_step_m must be > 0.'
+            )
         self.debug_steps = None
         self.debug_step_index = 0
         self.latest_joint_state = None
@@ -191,6 +202,12 @@ class AIControllerNode(Node):
             epoch = getattr(self.controller, 'epoch', 'unknown')
             wrist_dir = 'wrist' if getattr(self.controller, 'use_wrist_img', False) else 'no_wrist'
             self.save_rollout_path = os.path.join(self.save_rollout_path, f'epoch_{epoch}', wrist_dir)
+        elif self.ai_controller_target == 'vla_jepa_controller':
+            # further split rollouts by whether the task instruction came from
+            # Cosmos (captioned demo) or the static per-task prompt in
+            # vla_jepa_config.yaml, so the two are never mixed together on disk.
+            cosmos_dir = 'cosmos' if self.use_cosmos_task_description else 'static_prompt'
+            self.save_rollout_path = os.path.join(self.save_rollout_path, cosmos_dir)
         os.makedirs(self.save_rollout_path, exist_ok=True)
         
         # 2. Set up ROS2 interfaces (publishers, subscribers, services)
@@ -280,6 +297,8 @@ class AIControllerNode(Node):
         self.previous_gripper_position = 0.0
         self.initial_gripper_pose = None
         self.abort_window_name = 'AI Controller Abort'
+        self.camera_preview_window_name = 'AI Controller: gripper | third view'
+        self._camera_preview_failed = False
 
         self.get_logger().info('AI Controller Node initialization complete. Ready to start control loop.')
         self.control_loop()
@@ -293,6 +312,46 @@ class AIControllerNode(Node):
     def _esc_pressed(self):
         self._show_abort_window()
         return cv2.waitKey(1) & 0xFF == 27
+
+    def _show_camera_preview(self, images):
+        """Live gripper + third-view preview, one cv2 window updated every
+        step - same pattern script_controller_node.py's _show_camera_preview
+        already uses for teleoperation (front | gripper). The "third view"
+        pane is self.camera_topic[0] (front camera), not camera_topic[2] -
+        matches the two cameras VLA-JEPA's own front_camera_index/
+        gripper_camera_index actually consume (see vla_jepa_config.yaml), so
+        this preview shows exactly what the model sees. Best-effort: some
+        environments' cv2 build/DISPLAY can't open windows (see
+        cosmos_captioner.py's INPUT_VIDEO_WINDOW_NAME for the same failure
+        mode) - caught and logged once rather than crashing the control loop.
+        """
+        if self._camera_preview_failed or images is None or len(images) < 4:
+            return
+        try:
+            third_view = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR).copy()
+            gripper = cv2.cvtColor(images[3], cv2.COLOR_RGB2BGR).copy()
+
+            height = min(third_view.shape[0], gripper.shape[0])
+
+            def _resize_to_height(img):
+                if img.shape[0] == height:
+                    return img
+                scale = height / img.shape[0]
+                return cv2.resize(img, (int(img.shape[1] * scale), height))
+
+            third_view = _resize_to_height(third_view)
+            gripper = _resize_to_height(gripper)
+            cv2.putText(third_view, 'third view', (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 255, 0), 2, cv2.LINE_AA)
+            cv2.putText(gripper, 'gripper', (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 255, 0), 2, cv2.LINE_AA)
+
+            combined = np.hstack([third_view, gripper])
+            cv2.imshow(self.camera_preview_window_name, combined)
+            cv2.waitKey(1)
+        except cv2.error as exc:
+            print(f'[ai_controller_node] Camera preview window disabled: {exc}')
+            self._camera_preview_failed = True
 
     def _raise_if_esc_pressed(self):
         if self._esc_pressed():
@@ -493,6 +552,126 @@ class AIControllerNode(Node):
                 f'Could not look up EEF pose via TF ({self.frame_id} -> {self.eef_frame_name}): {exc}')
 
         return state
+
+    def _densify_osvi_awda_actions(self, actions, start_xyz):
+        """
+        Densify the Cartesian path generated by OSVI-AWDA.
+
+        The maximum Euclidean XYZ displacement between two consecutive
+        execution targets is `osvi_awda_max_cartesian_step_m`.
+
+        Full 2 cm steps are kept whenever possible and the final residual
+        displacement is always executed.
+
+        Examples with max_step = 0.02 m:
+
+            0.01 m -> 0.01
+            0.02 m -> 0.02
+            0.03 m -> 0.02 + 0.01
+            0.05 m -> 0.02 + 0.02 + 0.01
+            0.10 m -> 0.02 + 0.02 + 0.02 + 0.02 + 0.02
+
+        The original target action is always preserved.
+
+        Zero-displacement actions are also preserved because they may
+        represent gripper open/close commands.
+        """
+
+        max_step_m = float(self.osvi_awda_max_cartesian_step_m)
+        previous_xyz = np.asarray(start_xyz, dtype=np.float64,).reshape(-1)
+        if previous_xyz.shape != (3,):
+            raise ValueError('OSVI-AWDA start_xyz must have shape (3,), 'f'got {previous_xyz.shape}.')
+        if not np.isfinite(previous_xyz).all():
+            raise ValueError('OSVI-AWDA start_xyz contains non-finite values: 'f'{previous_xyz}.')
+
+        dense_actions = []
+        eps = 1e-9
+        for action_index, action in enumerate(actions):
+
+            target_action = np.asarray(action, dtype=np.float64,).reshape(-1).copy()
+
+            if target_action.shape != (8,):
+                raise ValueError('OSVI-AWDA action must have shape (8,) '
+                    '[x, y, z, qx, qy, qz, qw, gripper], '
+                    f'got {target_action.shape} '
+                    f'at action {action_index}.'
+                )
+
+            if not np.isfinite(target_action).all():
+                raise ValueError(
+                    f'OSVI-AWDA action {action_index} '
+                    'contains non-finite values.'
+                )
+
+            target_xyz = target_action[:3].copy()
+            delta_xyz = target_xyz - previous_xyz
+            distance = float(
+                np.linalg.norm(delta_xyz)
+            )
+
+            # --------------------------------------------------------
+            # No Cartesian displacement.
+            #
+            # DO NOT remove the action: it can be a close/open
+            # gripper primitive occurring at the same XYZ position.
+            # --------------------------------------------------------
+            if distance <= eps:
+                dense_actions.append(target_action)
+
+                previous_xyz = target_xyz
+                continue
+
+            direction = delta_xyz / distance
+
+            # --------------------------------------------------------
+            # Insert all complete max_step_m movements.
+            #
+            # Example:
+            #
+            # distance = 0.05
+            #
+            # inserted:
+            #   0.02
+            #   0.04
+            #
+            # then the original target at:
+            #   0.05
+            #
+            # giving:
+            #   2 cm + 2 cm + 1 cm
+            # --------------------------------------------------------
+            travelled = max_step_m
+
+            while travelled < distance - eps:
+
+                micro_action = target_action.copy()
+
+                micro_action[:3] = (
+                    previous_xyz
+                    + direction * travelled
+                )
+
+                dense_actions.append(
+                    micro_action
+                )
+
+                travelled += max_step_m
+
+            # --------------------------------------------------------
+            # Always append the REAL original action.
+            #
+            # This automatically handles:
+            #   distance < 2 cm
+            #   residual < 2 cm
+            #   exact multiples of 2 cm
+            # --------------------------------------------------------
+            dense_actions.append(
+                target_action
+            )
+
+            previous_xyz = target_xyz
+
+        return dense_actions
 
     def _build_openvla_state(self, robot_state):
         """Build the 8-dim proprio vector [eef_x, eef_y, eef_z, roll, pitch, yaw,
@@ -726,9 +905,6 @@ class AIControllerNode(Node):
         """Main control loop for the AI controller."""
         
         self.get_logger().info('Starting control loop...')
-        # create a directory to save the images
-        save_path = f'/home/ros2_ws/src/ai_controller/saved_images/task_{self.task_name}'
-        os.makedirs(save_path, exist_ok=True)
 
         Trajectory = _get_trajectory_cls(self)
         
@@ -743,6 +919,13 @@ class AIControllerNode(Node):
             self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
+
+            # intermediate results (per-step camera images, controller debug
+            # outputs, Cosmos clip/caption) live next to save_rollout()'s
+            # task_<id>/traj_<cnt>.pkl/.json, in a task_<id>/traj_<cnt>/ folder
+            save_path = os.path.join(self.save_rollout_path, f'task_{enter_task_id}',
+                                     'traj_{:03d}'.format(self.traj_cnt))
+            os.makedirs(save_path, exist_ok=True)
 
             # create a new trajectory
             traj = Trajectory()
@@ -789,7 +972,9 @@ class AIControllerNode(Node):
                             # caption of this task's human demo, for the whole episode.
                             # Runs server-side (see server.py's /caption_task) - Cosmos
                             # needs the same numpy>=2 stack as VLAJEPAController itself.
-                            caption = self.controller.caption_task_with_cosmos(self.demo_path, enter_task_id)
+                            caption = self.controller.caption_task_with_cosmos(
+                                self.demo_path, enter_task_id,
+                                save_dir=os.path.join(save_path, 'cosmos'))
                             self.get_logger().info(f'Cosmos task description: {caption!r}')
 
 
@@ -799,12 +984,13 @@ class AIControllerNode(Node):
                     if images is None:
                         self.get_logger().error('Skipping step: failed to get synchronized camera images.')
                         continue
+                    self._show_camera_preview(images)
+                    step_save_path = f'{save_path}/step_{step}'
+                    os.makedirs(step_save_path, exist_ok=True)
                     # images is a list of cv2/numpy arrays in the same order as self.camera_topic
                     # save the images with PIL format for debugging
                     for i, image in enumerate(images):
-                        print(f'Saving image {i} for step {step} to {save_path}/camera_image_{i}.png')
-                        img = Image.fromarray(image)
-                        img.save(f'{save_path}/camera_image_{i}.png')
+                        Image.fromarray(image).save(f'{step_save_path}/camera_image_{i}.png')
 
                     # capture the robot state (eef pose, joint pos/vel, gripper qpos/qvel) paired
                     # with the observation image used for this step's inference
@@ -845,7 +1031,6 @@ class AIControllerNode(Node):
                         }
 
                     # 3. Perform inference using the AI controller
-                    step_save_path = f'{save_path}/step_{step}'
                     if self.ai_controller_target == 'vla_jepa_controller':
                         # VLAJEPAController.pre_process() requires exactly
                         # [images, robot_state] (no depth_data slot, unlike every
@@ -884,6 +1069,56 @@ class AIControllerNode(Node):
                         'osvi_awda_controller',
                     )
 
+                    # ------------------------------------------------------------
+                    # OSVI-AWDA dense Cartesian execution
+                    # ------------------------------------------------------------
+                    #
+                    # OSVI-AWDA has already generated/expanded its motion primitives.
+                    # Here we ONLY densify the resulting execution path.
+                    #
+                    # The original waypoints/primitives are preserved, but any
+                    # Cartesian displacement greater than 2 cm is split into
+                    # multiple targets whose Euclidean XYZ displacement is <= 2 cm.
+                    #
+                    # Example:
+                    #
+                    #     5 cm segment
+                    #
+                    # becomes:
+                    #
+                    #     2 cm -> 2 cm -> 1 cm
+                    #
+                    # Every resulting micro-action will go through the normal loop
+                    # below, therefore receiving a fresh RGB/depth observation and
+                    # fresh robot state before execution.
+                    # ------------------------------------------------------------
+                    if is_osvi and self.move_robot:
+
+                        current_eef_xyz = robot_state.get(
+                            EEF_POS_NAME
+                        )
+
+                        if current_eef_xyz is None:
+                            raise RuntimeError(
+                                'Cannot densify OSVI-AWDA path: '
+                                'EEF position is missing from robot_state.'
+                            )
+
+                        original_action_count = len(actions)
+
+                        actions = self._densify_osvi_awda_actions(
+                            actions=actions,
+                            start_xyz=current_eef_xyz,
+                        )
+
+                        self.get_logger().info(
+                            '[OSVI-AWDA] Dense Cartesian execution: '
+                            f'{original_action_count} original targets -> '
+                            f'{len(actions)} execution targets; '
+                            f'max XYZ step = '
+                            f'{self.osvi_awda_max_cartesian_step_m * 100.0:.1f} cm.'
+                        )
+
                     # Keep the execution logic unchanged. For OSVI/OSVI-AWDA only,
                     # record one observation/action pair for every action returned by
                     # the same inference. The first action uses the observation that
@@ -899,6 +1134,7 @@ class AIControllerNode(Node):
                                 raise RuntimeError(
                                     'Failed to get synchronized camera images between OSVI actions.'
                                 )
+                            self._show_camera_preview(images)
                             robot_state = self._capture_robot_state()
 
                         # For OSVI/OSVI-AWDA the observation must be captured before

@@ -653,6 +653,68 @@ class OSVIAWDAController(AIController):
         action[-1] = float(self.cfg.control.get("gripper_open_position", 0.0))
         return action
 
+    def build_direct_grasp_actions(self, coarse_action):
+        """
+        Grasp directly at the AWDA-predicted waypoint.
+
+        No hover, no approach and no eye-in-hand refinement.
+        """
+        coarse_action = self._validated_robot_action(coarse_action)
+
+        target = self._apply_workspace_safety(
+            coarse_action[:3].copy()
+        )
+
+        quaternion = coarse_action[3:7]
+
+        open_position = float(
+            self.cfg.control.get(
+                "gripper_open_position",
+                0.0,
+            )
+        )
+
+        closed_position = float(
+            self.cfg.control.get(
+                "gripper_closed_position",
+                255.0,
+            )
+        )
+
+        lift_height = float(
+            self.cfg.grasp_refinement.get(
+                "lift_height_m",
+                0.15,
+            )
+        )
+
+        lift = target.copy()
+        lift[2] += lift_height
+        lift = self._apply_workspace_safety(lift)
+
+        return [
+            # 1. Move directly to AWDA grasp waypoint with gripper open
+            self._make_robot_action(
+                target,
+                quaternion,
+                open_position,
+            ),
+
+            # 2. Close at exactly the same position
+            self._make_robot_action(
+                target,
+                quaternion,
+                closed_position,
+            ),
+
+            # 3. Lift while holding the object
+            self._make_robot_action(
+                lift,
+                quaternion,
+                closed_position,
+            ),
+        ]
+
     def build_post_hover_grasp_actions(self, coarse_action):
         """Localize after hover, then return approach/descend/close/lift actions.
 
@@ -749,14 +811,18 @@ class OSVIAWDAController(AIController):
             elif primitive == "drop":
                 primitive_actions = self.build_drop_actions(coarse_action)
             elif primitive == "grasp":
-                hover_action = self.build_grasp_hover_action(coarse_action)
-                execution_actions.append(hover_action)
-                current_xyz = hover_action[:3]
 
                 if bool(self.cfg.grasp_refinement.get("enabled", False)):
-                    # Stop the returned plan here. The unchanged ROS node executes
-                    # the hover normally; its next control-loop iteration supplies
-                    # the observation from the new eye-in-hand pose.
+                    # Refinement ON:
+                    # first move to the hover pose, then wait for a new
+                    # eye-in-hand observation before completing the grasp.
+                    hover_action = self.build_grasp_hover_action(
+                        coarse_action
+                    )
+
+                    execution_actions.append(hover_action)
+                    current_xyz = hover_action[:3]
+
                     self._pending_grasp_plan = {
                         "grasp_action": coarse_action.copy(),
                         "remaining_actions": [
@@ -764,14 +830,19 @@ class OSVIAWDAController(AIController):
                             for action in coarse_actions[index + 1 :]
                         ],
                         "remaining_decisions": [
-                            dict(item) for item in decisions[index + 1 :]
+                            dict(item)
+                            for item in decisions[index + 1 :]
                         ],
                     }
+
                     return execution_actions
 
-                primitive_actions = self.build_post_hover_grasp_actions(
-                    coarse_action
-                )
+                else:
+                    # Refinement OFF:
+                    # directly execute the AWDA-predicted grasp waypoint.
+                    primitive_actions = self.build_direct_grasp_actions(
+                        coarse_action
+                    )
             else:
                 primitive_actions = [coarse_action]
 

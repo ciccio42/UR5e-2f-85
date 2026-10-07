@@ -46,7 +46,7 @@ source install/setup.bash
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True  \
     -p ai_controller_target:="cod_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-Batch24/config.yaml"
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/checkpoint_folder/Real-1Task-pick_place-Simulated-Agent-Human-Demonstration-UR5e-Agent-MOSAIC-COD-SKIP-0-5-10-15-EYE-IN-HAND--Batch24/config.yaml"
 ```
 
 To replay a previously saved rollout instead of running the live policy, see

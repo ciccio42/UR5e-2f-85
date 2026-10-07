@@ -221,7 +221,7 @@ class VLAJEPAController(AIController):
         self.grasp_z_offset_m = float(
             self.cfg.get(
                 "grasp_z_offset_m",
-                -0.02,
+                -0.03,
             )
         )
 

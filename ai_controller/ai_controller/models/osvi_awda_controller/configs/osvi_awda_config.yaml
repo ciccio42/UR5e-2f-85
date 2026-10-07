@@ -1,8 +1,11 @@
 # OSVI-AWDA runtime configuration.
 # Model and trajectory sources are bundled beside this file. checkpoint_dir is
 # resolved relative to this YAML and must contain config.yaml plus the checkpoint.
-checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_ckpt-1788896991"
-checkpoint_step: 70000
+#checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_ckpt-1788896991"
+#checkpoint_step: 70000
+
+checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_finetune_step24000"
+checkpoint_step: 25000
 
 # Use the calibration shipped with the real-data AWDA adaptation.
 projection_matrix_path: "ur5e_zed_front_projection.yaml"
@@ -53,7 +56,8 @@ control:
 grasp_refinement:
   # Implements mtlfd_adaptation/test_mtlfd_rollout.py::localize_grasp_target
   # after the robot reaches grasp_hint + hover_height_m.
-  enabled: true
+  #enabled: true
+  enabled: false
   use_gripper_depth: true
   depth_camera_name: "zed_gripper"
   depth_camera_node_name: "zed_node"

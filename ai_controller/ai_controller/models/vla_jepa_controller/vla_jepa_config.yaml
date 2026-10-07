@@ -69,6 +69,15 @@ device: cuda
 server_host: "127.0.0.1"
 server_port: 8770
 
+# Prompt YAML usato da CosmosCaptioner.caption_video() (system_prompt +
+# user_prompt) quando use_cosmos_task_description:=true. Default a
+# fixed_prompt.yaml perche' il suo schema (4 box colorati, 4 bin numerati)
+# combacia esattamente con la convenzione dei task VLA-JEPA sopra ("Pick the
+# <color> box and place it into the <ordinal> bin"), a differenza del piu'
+# generico generalist_task_description.yaml. Path relativo a
+# video_captioning/Video-Captioning-Human-Demo/prompts/, oppure assoluto.
+cosmos_prompt_yaml: "Video-Captioning-Human-Demo/prompts/fixed_prompt.yaml"
+
 
 # -----------------------------------------------------------------------------
 # RANDOM SEED
@@ -165,7 +174,7 @@ gripper_closed_position: 255.0
 #
 #
 trace_action_conversions: true
-grasp_z_offset_m: -0.02
+grasp_z_offset_m: -0.03
 
 
 # =============================================================================

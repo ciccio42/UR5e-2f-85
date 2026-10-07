@@ -49,7 +49,7 @@ source install/setup.bash
 ros2 run ai_controller ai_controller_node --ros-args \
     -p move_robot:=True \
     -p ai_controller_target:="osvi_awda_controller" \
-    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_awda_controller/osvi_awda_config.yaml"
+    -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/osvi_awda_controller/configs/osvi_awda_config.yaml"
 ```
 
 ## Debug / offline tools

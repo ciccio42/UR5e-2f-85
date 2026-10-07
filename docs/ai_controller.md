@@ -20,6 +20,7 @@ docker run -it --rm \
   --security-opt seccomp=unconfined \
   -e DISPLAY=$DISPLAY \
   -e ROBOT_IP=${ROBOT_IP} \
+  -e HF_TOKEN=${HF_TOKEN} \
   -e NVIDIA_VISIBLE_DEVICES=all \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
@@ -73,6 +74,16 @@ docker run -it --rm \
 **Docker-1: Launch UR-Driver**
 ```bash
 # Launch external-controller [REAL - With Gripper]
+colcon build --packages-select ur5e_2f_85_description \
+                                ur5e_2f_85_moveit_config \
+                                ur5e_2f_85_teleoperation_msg \
+                                ur5e_2f_85_teleoperation \
+                                dataset_collector_pkg \
+                                moveit_controller \
+                                moveit_controller_srvs \
+                                ai_controller \
+                                zed_description
+source install/setup.bash
 ros2 launch ur_robot_driver ur_control.launch.py \
   ur_type:=ur5e \
   robot_ip:=${ROBOT_IP} \

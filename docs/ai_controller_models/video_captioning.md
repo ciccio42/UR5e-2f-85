@@ -56,16 +56,20 @@ All of this goes in a dedicated venv inside the container (`docker exec -it
 ur_robotiq_teleoperation_container bash`), not the system python:
 
 ```bash
-apt-get install -y python3.12-venv ffmpeg
-python3 -m venv /opt/vla_jepa_venv
+apt-get update && apt-get install -y python3.12-venv ffmpeg
+cd /home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller
+python3 -m venv ./venv/vla_jepa_venv
 
-/opt/vla_jepa_venv/bin/pip install --upgrade pip
-/opt/vla_jepa_venv/bin/pip install 'torch==2.11.0+cu130' 'torchvision==0.26.0+cu130' \
+# activate venv
+source ./venv/vla_jepa_venv/bin/activate
+pip install --upgrade pip
+pip install pyyaml typeguard
+pip install 'torch==2.11.0+cu130' 'torchvision==0.26.0+cu130' \
   --index-url https://download.pytorch.org/whl/cu130
 
-/opt/vla_jepa_venv/bin/pip install \
+pip install \
   'numpy>=2.0.0,<2.3.0' \
-  'opencv-python-headless>=4.9.0,<4.14.0' \
+  'opencv-python>=4.9.0,<4.14.0' \
   'Pillow>=10.0.0,<13.0.0' \
   'einops>=0.8.0,<0.9.0' \
   'draccus==0.10.0' \
@@ -88,7 +92,7 @@ python3 -m venv /opt/vla_jepa_venv
 # letting pip re-resolve here is what silently upgraded torch to a plain
 # (non-cu130) PyPI build earlier and broke CUDA; --no-deps avoids that.
 cd /home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller/external/lerobot
-/opt/vla_jepa_venv/bin/pip install -e . --no-deps
+pip install -e . --no-deps
 ```
 
 `vla_jepa_config.yaml`'s `checkpoint_path` already points at
@@ -104,16 +108,27 @@ by default, same convention as every other controller here).
 checkpoint - keep this running in its own terminal/session):
 ```bash
 docker exec -it ur_robotiq_teleoperation_container bash
-export HF_TOKEN="" # Insert Code
 export HF_HOME="/home/ros2_ws/src/ai_controller/ai_controller/models/video_captioning/Video-Captioning-Human-Demo"
 cd /home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller
-/opt/vla_jepa_venv/bin/python3 server.py --config vla_jepa_config.yaml
+python3 server.py --config vla_jepa_config.yaml
 # -> "[vla_jepa_server] Listening on 127.0.0.1:8770"
 ```
-Cosmos itself is loaded lazily, on the first `use_cosmos_task_description`
-request (or the first `test_cosmos_captioner.py`/`caption_task_with_cosmos`
-call) - not at server startup, so a run without Cosmos doesn't pay that
-extra load time/VRAM.
+Cosmos itself is loaded lazily here, on the first `/caption_task` request -
+not at server startup, so a run without Cosmos doesn't pay that extra load
+time/VRAM. If you *will* run with `use_cosmos_task_description:=true`, add
+`--use-cosmos-task-description` to preload it up front instead:
+```bash
+python3 server.py --config vla_jepa_config.yaml --use-cosmos-task-description
+# -> "[vla_jepa_server] Preloading Cosmos-Reason2 for task captioning..."
+# -> "[vla_jepa_server] Cosmos-Reason2 ready."
+# -> "[vla_jepa_server] Listening on 127.0.0.1:8770"
+```
+Do this - lazily loading Cosmos-Reason2-2B (`from_pretrained` alone, on a
+cold HF cache) can take longer than `vla_jepa_client.py`'s `/caption_task`
+timeout (180s), timing out the *first* Cosmos-generated-instruction request
+of a session. Preloading moves that cost to server startup (before `/health`
+responds - the node's connection retries just wait longer), so every
+`/caption_task` call afterwards only pays for actual inference.
 
 **2. Run `ai_controller_node`** (normal ROS system python, separate
 terminal) - static per-task prompt from `vla_jepa_config.yaml`'s `tasks:` map:
@@ -157,6 +172,113 @@ cd /home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller
 # (requires the server from step 1 above to already be running)
 python3 test_vla_jepa_client_server.py --task-id 10
 ```
+
+## Debug windows
+
+When `caption_task_with_cosmos`/`CosmosCaptioner.caption_video` runs, two
+`cv2` debug windows pop up on whatever `DISPLAY` the process inherits (the
+`ur_robotiq_teleoperation` container is already run with `-e DISPLAY` + the
+X11 socket mounted):
+
+1. **`Cosmos: input video`** - the rendered demo clip plays back live, frame
+   by frame, while `render_demo_clip()` is loading/preparing it (this is
+   also why the venv needs the GUI `opencv-python` build above, not
+   `opencv-python-headless` - the latter can never open a window, on any
+   `DISPLAY`).
+2. Once inference finishes, that window closes and **`Cosmos: computed
+   prompt`** opens instead: the clip's first and last frame side by side,
+   with the generated caption wrapped underneath - a quick sanity check that
+   the instruction actually matches what happened in the demo.
+
+Both are best-effort: if no `DISPLAY`/X server is reachable, `cv2.imshow`
+raises `cv2.error` (the "GTK+/Cocoa support" message), which is caught and
+logged once (same pattern as `osvi_awda_controller`'s waypoint-overlay debug
+window) rather than crashing the caption call.
+
+Separately, `ai_controller_node.py` itself (system python, any
+`ai_controller_target`) opens a third window, **`AI Controller: gripper |
+third view`**, updated every control-loop step: `self.camera_topic[3]`
+(gripper/wrist camera) side by side with `self.camera_topic[0]` (front
+camera) - the same two cameras `front_camera_index`/`gripper_camera_index`
+in `vla_jepa_config.yaml` select for VLA-JEPA's own inference input, so this
+preview shows exactly what the model sees, not an extra unused viewpoint.
+Same best-effort try/except-`cv2.error` pattern as the two windows above.
+
+## Saved intermediate results
+
+Everything is written next to the rollout itself, per task and trajectory
+count:
+
+```
+<save_rollout_path>/vla_jepa_controller/pick_place/{cosmos|static_prompt}/
+└── task_<id>/
+    ├── traj_<cnt>.pkl / traj_<cnt>.json   # rollout + outcome (save_rollout)
+    └── traj_<cnt>/                        # intermediate results
+        ├── step_<n>/camera_image_<i>.png  # every camera, every step
+        └── cosmos/                        # only with use_cosmos_task_description
+            ├── task_<id>_demo.mp4         # square-padded clip Cosmos saw
+            ├── caption_result.png         # first/last frame + caption
+            └── caption.json               # caption, raw_caption, prompts,
+                                           # demo_file, fps, token count, sampling params
+```
+
+This applies to every `ai_controller_target`, not just VLA-JEPA: per-step
+images used to go to a single `saved_images/task_<task_name>/` folder that
+was overwritten on every step and every trajectory.
+
+## Parity with VLA-Bench's Cosmos pipeline
+
+`cosmos_captioner.py` is meant to reproduce `Multi-Task-LFD/repo/VLA-Bench/
+robosuite_test/vllm_utils.py::run_vllm_server`'s Cosmos call as closely as
+the in-process `transformers` path allows (that script drives an external
+`cosmos-reason2-inference` CLI/vLLM server instead):
+
+- **Video preprocessing**: `render_demo_clip()` pads every frame to a black
+  square (`_pad_frames_to_square`) before encoding, matching
+  `vllm_utils.py::pad_video_to_square` - otherwise the vision processor's
+  own resize-to-token-budget step would distort a non-square frame's aspect
+  ratio.
+- **Sampling params**: `CosmosCaptioner.caption_video()`'s `model.generate()`
+  call uses `do_sample=True, temperature=0.7, top_p=0.8, top_k=20,
+  repetition_penalty=1.0` - the same defaults VLA-Bench gets from its
+  `--no-reasoning` CLI flag (`cosmos_reason2_utils.script.inference.
+  SamplingOverrides.get_defaults(reasoning=False)`). That default set also
+  has `presence_penalty=1.5`, which `transformers.generate()` has no
+  equivalent for, so it's omitted. `max_new_tokens=64` matches VLA-Bench's
+  `--max-tokens 64`; sampling fps deliberately differs (`fps=2` here vs.
+  VLA-Bench's `--fps 4`) to halve the number of video tokens and speed up
+  prefill.
+- **Caption post-processing**: `_postprocess_caption()` applies the exact
+  same normalization `run_vllm_server` does to Cosmos's raw text before
+  it's used as a task instruction - digits to ordinal words ("1"->"first",
+  ..., "4"->"fourth"), "three"/"four" -> "third"/"fourth", a redundant
+  "compartment box" -> "box", and stripped trailing periods. This matters
+  regardless of which `cosmos_prompt_yaml` is active, since it normalizes
+  whatever numeral/wording Cosmos happens to produce into the same
+  ordinal-word convention `vla_jepa_config.yaml`'s `tasks:` map uses.
+
+Not replicated: VLA-Bench's actual production prompt
+(`robosuite_test/prompt/human_task_description_prompt.yaml`) is a generic
+"What happened in the video?" prompt with no bin/color template - the
+post-processing above exists specifically to clean up *that* prompt's raw
+output. This deployment instead defaults to the more structured
+`fixed_prompt.yaml` (see below), which needs less normalization but still
+benefits from the same post-processing pass.
+
+## `cosmos_prompt_yaml`
+
+`vla_jepa_config.yaml`'s `cosmos_prompt_yaml` key selects which
+`system_prompt`/`user_prompt` pair (under `video_captioning/Video-Captioning-
+Human-Demo/prompts/`) `CosmosCaptioner.caption_video` uses when
+`use_cosmos_task_description:=true`. Defaults to `fixed_prompt.yaml`, whose
+"4 colored boxes, 4 numbered bins" template matches this deployment's actual
+task convention (`tasks:` map above) exactly - unlike the more open-ended
+`generalist_task_description.yaml` used by the standalone
+`cosmos-reason2/scripts/inference_sample.py`/`test_cosmos_captioner.py`
+smoke tests. Read server-side (`server.py`'s `/caption_task` handler, same
+config file as `checkpoint_path` - no client-side change needed); a relative
+path resolves against `video_captioning/`, matching `cosmos_captioner.py`'s
+`DEFAULT_PROMPT_YAML`.
 
 ## Files
 
