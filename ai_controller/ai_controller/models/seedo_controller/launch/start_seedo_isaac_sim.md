@@ -78,13 +78,18 @@ Start the SeeDo container:
 
 ```bash
 docker run --rm -it \
-  --name seedo_ros2_container_2 \
+  --name seedo_ros2_container \
   --gpus all \
   --network host \
   --ipc=host \
   -e DISPLAY="$DISPLAY" \
+  -e HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v "$(pwd)":/home/ros2_ws/src/UR5e-2f-85 \
+  -v "$(pwd)/.runtime/graspmolmo_venv":/opt/graspmolmo_venv \
+  -v "$(pwd)/external/GraspMolmo":/opt/GraspMolmo \
+  -v "$(pwd)/.runtime/m2t2_venv":/opt/m2t2_venv \
+  -v "$(pwd)/external/M2T2":/opt/M2T2 \
   -v "$(pwd)/../dataset_nut_assembly/video":/dataset_nut:ro \
   -v "$(pwd)/../test_dataset":/test_dataset:ro \
   -v "$(pwd)/../seedo_tests":/seedo_tests \

@@ -212,7 +212,6 @@ class ScenePerceiver:
                 "rotation_noise_std_deg cannot be negative."
             )
 
-        # Nondeterministic generator.
         # A new camera-pose perturbation is sampled once per ScenePerceiver.run().
         self._noise_rng = np.random.default_rng(42)
 

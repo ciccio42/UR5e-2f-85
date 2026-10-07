@@ -1,0 +1,5 @@
+server_host: "127.0.0.1"
+server_port: 8781
+
+checkpoint_path: "/home/ros2_ws/src/UR5e-2f-85/.runtime/m2t2_checkpoints/m2t2.pth"
+model_config_path: "/opt/M2T2/config.yaml"

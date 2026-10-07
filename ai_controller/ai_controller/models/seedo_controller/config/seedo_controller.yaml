@@ -63,7 +63,7 @@ scene_perceiver:
 
     levels:
       baseline:
-        translation4_std_mm: 0.0
+        translation_std_mm: 0.0
         rotation_std_deg: 0.0
 
       # Noise levels both translation and rotation are applied to the camera pose. 
