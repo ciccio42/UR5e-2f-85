@@ -144,7 +144,6 @@ class AIControllerNode(Node):
             from ai_controller.models.interleave_pi0_controller.interleave_pi0_client import (
                 InterleavePi0ControllerClient,
             )
-
             self.controller = InterleavePi0ControllerClient(
                 self.model_config_path,
                 self.task_name,
@@ -155,6 +154,15 @@ class AIControllerNode(Node):
             )
 
             self.controller = VLAJEPAControllerClient(
+                self.model_config_path,
+                self.task_name,
+            )
+        elif self.ai_controller_target == 'pi05_controller':
+            from ai_controller.models.pi05_controller.pi05_client import (
+                PI05ControllerClient,
+            )
+
+            self.controller = PI05ControllerClient(
                 self.model_config_path,
                 self.task_name,
             )
@@ -514,6 +522,125 @@ class AIControllerNode(Node):
             [1.0 if self.gripper_closed else 0.0],
         ])
 
+    def _build_pi05_state(self, robot_state):
+        """
+        Build the robot-side proprioceptive data required by PI0.5.
+
+        PI05Controller will later construct:
+
+            observation.state =
+            [
+                q1, q2, q3, q4, q5, q6,
+                gripper,
+                x, y, z, roll, pitch, yaw,
+            ]
+
+        The quaternion -> RPY conversion is deliberately left to
+        PI05Controller/pi05_utils.
+        """
+
+        joint_positions = robot_state.get(
+            JOINT_POS_NAME
+        )
+
+        gripper_qpos = robot_state.get(
+            GRIPPER_QPOS_NAME
+        )
+
+        eef_pos = robot_state.get(
+            EEF_POS_NAME
+        )
+
+        eef_quat = robot_state.get(
+            EEF_QUAT_NAME
+        )
+
+        missing = []
+
+        if joint_positions is None:
+            missing.append(JOINT_POS_NAME)
+
+        if gripper_qpos is None:
+            missing.append(GRIPPER_QPOS_NAME)
+
+        if eef_pos is None:
+            missing.append(EEF_POS_NAME)
+
+        if eef_quat is None:
+            missing.append(EEF_QUAT_NAME)
+
+        if missing:
+            self.get_logger().warning(
+                "Missing PI0.5 robot-state fields: "
+                f"{missing}"
+            )
+            return None
+
+        joint_positions = np.asarray(
+            joint_positions,
+            dtype=np.float64,
+        )
+
+        gripper_qpos = np.asarray(
+            gripper_qpos,
+            dtype=np.float64,
+        )
+
+        eef_pos = np.asarray(
+            eef_pos,
+            dtype=np.float64,
+        )
+
+        eef_quat = np.asarray(
+            eef_quat,
+            dtype=np.float64,
+        )
+
+        if joint_positions.shape != (6,):
+            self.get_logger().warning(
+                "PI0.5 joint_positions must have shape (6,), "
+                f"got {joint_positions.shape}."
+            )
+            return None
+
+        if gripper_qpos.shape != (1,):
+            self.get_logger().warning(
+                "PI0.5 gripper_qpos must have shape (1,), "
+                f"got {gripper_qpos.shape}."
+            )
+            return None
+
+        if eef_pos.shape != (3,):
+            self.get_logger().warning(
+                "PI0.5 eef_pos must have shape (3,), "
+                f"got {eef_pos.shape}."
+            )
+            return None
+
+        if eef_quat.shape != (4,):
+            self.get_logger().warning(
+                "PI0.5 eef_quat must have shape (4,), "
+                f"got {eef_quat.shape}."
+            )
+            return None
+
+        return {
+            "joint_positions":
+                joint_positions,
+
+            "gripper_qpos":
+                float(gripper_qpos[0]),
+
+            "eef_position":
+                eef_pos,
+
+            "eef_quaternion":
+                eef_quat,
+
+            "gripper_closed":
+                bool(self.gripper_closed),
+        }
+
     def _mimic_trace_enabled(self):
         return (
             self.ai_controller_target == 'mimic_video_controller'
@@ -758,6 +885,7 @@ class AIControllerNode(Node):
                         elif self.ai_controller_target in (
                             'interleave_pi0_controller',
                             'vla_jepa_controller',
+                            'pi05_controller',
                         ):
                             self.controller.load_command(
                                 self.demo_path,
@@ -800,6 +928,8 @@ class AIControllerNode(Node):
                         states = self._build_interleave_pi0_state(robot_state)
                     elif self.ai_controller_target == 'vla_jepa_controller':
                         states = self._build_vla_jepa_state(robot_state)
+                    elif self.ai_controller_target == 'pi05_controller':
+                        states = self._build_pi05_state(robot_state)
                     else:
                         states = None
 
@@ -843,6 +973,7 @@ class AIControllerNode(Node):
                         'mimic_video_controller',
                         'interleave_pi0_controller',
                         'vla_jepa_controller',
+                        'pi05_controller',
                     ):
                         # Mimic Video already returns absolute 8D targets with XYZW quaternion.
                         actions = out
@@ -931,7 +1062,10 @@ class AIControllerNode(Node):
                     # bounding boxes, computed action and robot state) into the rollout Trajectory
                     step_obs = dict(robot_state)
                     step_obs['camera_front_image'] = cv2.cvtColor(images[0], cv2.COLOR_RGB2BGR)
-                    if self.ai_controller_target == 'vla_jepa_controller':
+                    if self.ai_controller_target in (
+                        'vla_jepa_controller',
+                        'pi05_controller',
+                    ):
                         step_obs['camera_gripper_image'] = cv2.cvtColor(
                             images[3],
                             cv2.COLOR_RGB2BGR,
@@ -944,7 +1078,10 @@ class AIControllerNode(Node):
                         self.get_logger().warning(
                             f'No cropped model-input image found at {cropped_image_path}; skipping cropped_image field.')
 
-                    if self.ai_controller_target == 'vla_jepa_controller':
+                    if self.ai_controller_target in (
+                        'vla_jepa_controller',
+                        'pi05_controller',
+                    ):
 
                         gripper_processed_path = os.path.join(
                             step_save_path,
