@@ -230,7 +230,7 @@ class FrontSceneCapture(Node):
 
         # Near objects are brighter.
         preview_gray = (
-            (1.0 - normalized)
+            normalized
             * 255.0
         ).astype(np.uint8)
 

@@ -10,3 +10,4 @@ cameras:
 
   - camera_name: zed_gripper
     serial_number: 16702584
+    gravity_alignment: false

@@ -80,6 +80,10 @@ def launch_setup(context, *args, **kwargs):
     if not cameras:
         raise RuntimeError('No cameras defined in cameras YAML file')
 
+    default_gravity_alignment = (
+        gravity_alignment.perform(context).lower() == 'true'
+    )
+
     # =========================
     # RViz (once)
     # =========================
@@ -101,6 +105,11 @@ def launch_setup(context, *args, **kwargs):
 
         camera_name = cam['camera_name']
         serial_number = int(cam['serial_number'])
+
+        cam_gravity_alignment = cam.get(
+            'gravity_alignment',
+            default_gravity_alignment,
+        )
 
         # Robot State Publisher (can start immediately)
         rsp_node = Node(
@@ -137,7 +146,7 @@ def launch_setup(context, *args, **kwargs):
                     'pos_tracking.publish_tf': publish_tf,
                     'pos_tracking.publish_map_tf': publish_map_tf,
                     'sensors.publish_imu_tf': publish_imu_tf,
-                    'pos_tracking.set_gravity_as_origin': gravity_alignment,
+                    'pos_tracking.set_gravity_as_origin': cam_gravity_alignment,
 
                     # Optional but helpful
                     'general.grab_timeout': 10000

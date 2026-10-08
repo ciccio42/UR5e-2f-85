@@ -1123,6 +1123,156 @@ def get_grasp_points_numpy(
 
     return grasp_points
 
+def get_finger_collision_counts(
+    point_cloud: np.ndarray,
+    grasps: np.ndarray,
+    opening_m: float,
+    finger_thickness_m: float,
+    finger_width_m: float,
+    finger_z_min_m: float,
+    finger_z_max_m: float,
+    margin_m: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Count scene points intersecting the left and right finger volumes.
+
+    The point cloud and grasps must use the same coordinate frame.
+
+    Grasp local frame:
+        X -> gripper closing direction
+        Y -> finger width direction
+        Z -> approach direction
+
+    The free opening is centered around X=0.
+    """
+
+    point_cloud = np.asarray(
+        point_cloud,
+        dtype=np.float32,
+    )
+
+    grasps = np.asarray(
+        grasps,
+        dtype=np.float32,
+    )
+
+    left_counts = np.zeros(
+        len(grasps),
+        dtype=np.int32,
+    )
+
+    right_counts = np.zeros(
+        len(grasps),
+        dtype=np.int32,
+    )
+
+    half_opening = (
+        opening_m / 2.0
+    )
+
+    half_finger_width = (
+        finger_width_m / 2.0
+    )
+
+    # Left finger occupies the volume immediately
+    # outside the left inner jaw surface.
+    left_x_min = (
+        -half_opening
+        - finger_thickness_m
+        - margin_m
+    )
+
+    left_x_max = (
+        -half_opening
+        + margin_m
+    )
+
+    # Right finger.
+    right_x_min = (
+        half_opening
+        - margin_m
+    )
+
+    right_x_max = (
+        half_opening
+        + finger_thickness_m
+        + margin_m
+    )
+
+    y_limit = (
+        half_finger_width
+        + margin_m
+    )
+
+    z_min = (
+        finger_z_min_m
+        - margin_m
+    )
+
+    z_max = (
+        finger_z_max_m
+        + margin_m
+    )
+
+    for i, grasp in enumerate(
+        grasps
+    ):
+        rotation = grasp[
+            :3,
+            :3,
+        ]
+
+        translation = grasp[
+            :3,
+            3,
+        ]
+
+        # Same world/camera -> grasp-local convention already
+        # used by get_grasp_points_numpy().
+        local_points = (
+            point_cloud
+            - translation
+        ) @ rotation
+
+        x = local_points[:, 0]
+        y = local_points[:, 1]
+        z = local_points[:, 2]
+
+        common_mask = (
+            (np.abs(y) <= y_limit)
+            & (z >= z_min)
+            & (z <= z_max)
+        )
+
+        left_mask = (
+            common_mask
+            & (x >= left_x_min)
+            & (x <= left_x_max)
+        )
+
+        right_mask = (
+            common_mask
+            & (x >= right_x_min)
+            & (x <= right_x_max)
+        )
+
+        left_counts[i] = int(
+            np.count_nonzero(
+                left_mask
+            )
+        )
+
+        right_counts[i] = int(
+            np.count_nonzero(
+                right_mask
+            )
+        )
+
+    return (
+        left_counts,
+        right_counts,
+    )
+
 # =====================================================================
 # Combined visualization
 # =====================================================================
@@ -1297,9 +1447,29 @@ def main() -> None:
     parser.add_argument(
         "--pkl",
         type=Path,
-        default=Path(
-            "/scene_capture/traj_000.pkl"
-        ),
+        default=None,
+    )
+
+    parser.add_argument(
+        "--scene-dir",
+        type=Path,
+        default=None,
+    )
+
+    parser.add_argument(
+        "--eef-pos",
+        type=float,
+        nargs=3,
+        default=None,
+        metavar=("X", "Y", "Z"),
+    )
+
+    parser.add_argument(
+        "--eef-quat",
+        type=float,
+        nargs=4,
+        default=None,
+        metavar=("QX", "QY", "QZ", "QW"),
     )
     parser.add_argument(
         "--step",
@@ -1317,10 +1487,7 @@ def main() -> None:
     parser.add_argument(
         "--base-to-table",
         type=Path,
-        default=Path(
-            "/scene_capture/nut/scena_1/"
-            "base_to_table_transform.yaml"
-        ),
+        default=None,
     )
     parser.add_argument(
         "--camera-info",
@@ -1359,6 +1526,52 @@ def main() -> None:
         default=20.0,
     )
     parser.add_argument(
+        "--finger-collision-check",
+        action="store_true",
+    )
+
+    parser.add_argument(
+        "--gripper-opening-m",
+        type=float,
+        default=0.085,
+    )
+
+    parser.add_argument(
+        "--finger-thickness-m",
+        type=float,
+        default=0.031214,
+    )
+
+    parser.add_argument(
+        "--finger-width-m",
+        type=float,
+        default=0.027000,
+    )
+
+    parser.add_argument(
+        "--finger-z-min-m",
+        type=float,
+        default=0.0483,
+    )
+
+    parser.add_argument(
+        "--finger-z-max-m",
+        type=float,
+        default=0.1053,
+    )
+
+    parser.add_argument(
+        "--collision-margin-m",
+        type=float,
+        default=0.002,
+    )
+
+    parser.add_argument(
+        "--collision-min-points",
+        type=int,
+        default=3,
+    )
+    parser.add_argument(
         "--task",
         type=str,
         default=None,
@@ -1390,55 +1603,185 @@ def main() -> None:
     )
     args = parser.parse_args()
     # =============================================================
+    # Validate input source
+    # =============================================================
+    if args.scene_dir is not None and args.pkl is not None:
+        raise RuntimeError(
+            "Use either --scene-dir or --pkl, not both."
+        )
+
+    if args.scene_dir is None and args.pkl is None:
+        raise RuntimeError(
+            "Provide either --scene-dir or --pkl."
+        )
+
+    # =============================================================
     # Clean output directory
     # =============================================================
     if OUTPUT_DIR.exists():
         shutil.rmtree(
             OUTPUT_DIR
         )
+
     OUTPUT_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
+
     print(
         "=" * 78
     )
+
     print(
         "GENERAL EYE-IN-HAND GRASP TEST"
     )
+
     print(
         "=" * 78
     )
-    print(
-        "[TEST] PKL:",
-        args.pkl,
-    )
-    print(
-        "[TEST] Step:",
-        args.step,
-    )
+
     # =============================================================
-    # Load rollout
+    # Load input data
     # =============================================================
-    data = load_pickle(
-        args.pkl
-    )
-    trajectory = data[
-        "traj"
-    ]
-    print(
-        "[TEST] Trajectory length:",
-        len(
-            trajectory
-        ),
-    )
-    step = get_trajectory_step(
-        trajectory,
-        args.step,
-    )
-    obs = step[
-        "obs"
-    ]
+    if args.scene_dir is not None:
+
+        scene_dir = (
+            args.scene_dir
+            .expanduser()
+            .resolve()
+        )
+
+        print(
+            "[TEST] Scene directory:",
+            scene_dir,
+        )
+
+        rgb_path = (
+            scene_dir
+            / "rgb.png"
+        )
+
+        depth_path = (
+            scene_dir
+            / "depth.npy"
+        )
+
+        if not rgb_path.is_file():
+            raise FileNotFoundError(
+                f"RGB image not found: {rgb_path}"
+            )
+
+        if not depth_path.is_file():
+            raise FileNotFoundError(
+                f"Depth image not found: {depth_path}"
+            )
+
+        if args.eef_pos is None:
+            raise RuntimeError(
+                "--eef-pos is required when using --scene-dir."
+            )
+
+        if args.eef_quat is None:
+            raise RuntimeError(
+                "--eef-quat is required when using --scene-dir."
+            )
+
+        image_bgr = cv2.imread(
+            str(rgb_path),
+            cv2.IMREAD_COLOR,
+        )
+
+        if image_bgr is None:
+            raise RuntimeError(
+                f"Could not read RGB image: {rgb_path}"
+            )
+
+        depth = np.asarray(
+            np.load(
+                depth_path
+            ),
+            dtype=np.float32,
+        )
+
+        # Build an observation with the same fields expected
+        # by the rest of the existing test pipeline.
+        obs = {
+            "eye_in_hand_image": image_bgr,
+            "eye_in_hand_depth": depth,
+            "eef_pos": np.asarray(
+                args.eef_pos,
+                dtype=np.float64,
+            ),
+            "eef_quat": np.asarray(
+                args.eef_quat,
+                dtype=np.float64,
+            ),
+        }
+
+        # Automatically use calibration files inside the scene directory,
+        # unless explicitly overridden from the command line.
+        if args.camera_info is None:
+            args.camera_info = (
+                scene_dir
+                / "camera_info.yaml"
+            )
+
+        if args.base_to_table is None:
+            args.base_to_table = (
+                scene_dir
+                / "base_to_table_transform.yaml"
+            )
+
+        source_type = "scene_dir"
+        source_path = str(
+            scene_dir
+        )
+        source_step = None
+
+    else:
+
+        print(
+            "[TEST] PKL:",
+            args.pkl,
+        )
+
+        print(
+            "[TEST] Step:",
+            args.step,
+        )
+
+        data = load_pickle(
+            args.pkl
+        )
+
+        trajectory = data[
+            "traj"
+        ]
+
+        print(
+            "[TEST] Trajectory length:",
+            len(
+                trajectory
+            ),
+        )
+
+        step = get_trajectory_step(
+            trajectory,
+            args.step,
+        )
+
+        obs = step[
+            "obs"
+        ]
+
+        source_type = "pkl"
+        source_path = str(
+            args.pkl
+        )
+        source_step = int(
+            args.step
+        )
+
     # =============================================================
     # Load gripper RGB-D
     # =============================================================
@@ -1548,12 +1891,9 @@ def main() -> None:
     # Save basic metadata
     # =============================================================
     basic_metadata = {
-        "pkl": str(
-            args.pkl
-        ),
-        "step": int(
-            args.step
-        ),
+        "source_type": source_type,
+        "source_path": source_path,
+        "step": source_step,
         "rgb_key": image_key,
         "depth_key": depth_key,
         "rgb_shape": list(
@@ -2109,12 +2449,9 @@ def main() -> None:
     # Result storage
     # =============================================================
     result_data = {
-        "pkl": str(
-            args.pkl
-        ),
-        "step": int(
-            args.step
-        ),
+        "source_type": source_type,
+        "source_path": source_path,
+        "step": source_step,
         "rgb_key": image_key,
         "depth_key": depth_key,
         "table_z_offset_m": float(
@@ -2501,6 +2838,122 @@ def main() -> None:
             len(semantic_indices),
         )
 
+        # ---------------------------------------------------------
+        # Robotiq 2F-85 finger collision filtering
+        # ---------------------------------------------------------
+        finger_left_collision_counts = np.zeros(
+            len(candidate_indices),
+            dtype=np.int32,
+        )
+
+        finger_right_collision_counts = np.zeros(
+            len(candidate_indices),
+            dtype=np.int32,
+        )
+
+        collision_free_mask = np.zeros(
+            len(candidate_indices),
+            dtype=bool,
+        )
+
+        collision_free_indices = np.empty(
+            (0,),
+            dtype=np.int64,
+        )
+
+        if len(semantic_indices) > 0:
+
+            if args.finger_collision_check:
+
+                (
+                    semantic_left_counts,
+                    semantic_right_counts,
+                ) = get_finger_collision_counts(
+                    point_cloud=point_cloud_m2t2,
+                    grasps=filtered_grasps_aligned[
+                        semantic_indices
+                    ],
+                    opening_m=args.gripper_opening_m,
+                    finger_thickness_m=args.finger_thickness_m,
+                    finger_width_m=args.finger_width_m,
+                    finger_z_min_m=args.finger_z_min_m,
+                    finger_z_max_m=args.finger_z_max_m,
+                    margin_m=args.collision_margin_m,
+                )
+
+                finger_left_collision_counts[
+                    semantic_indices
+                ] = semantic_left_counts
+
+                finger_right_collision_counts[
+                    semantic_indices
+                ] = semantic_right_counts
+
+                semantic_collision_free = (
+                    (
+                        semantic_left_counts
+                        < args.collision_min_points
+                    )
+                    & (
+                        semantic_right_counts
+                        < args.collision_min_points
+                    )
+                )
+
+                collision_free_mask[
+                    semantic_indices
+                ] = semantic_collision_free
+
+                collision_free_indices = (
+                    semantic_indices[
+                        semantic_collision_free
+                    ]
+                )
+
+                print()
+                print(
+                    "[COLLISION] Gripper opening:",
+                    f"{args.gripper_opening_m * 1000.0:.1f} mm",
+                )
+
+                print(
+                    "[COLLISION] Safety margin:",
+                    f"{args.collision_margin_m * 1000.0:.1f} mm",
+                )
+
+                print(
+                    "[COLLISION] Min points for collision:",
+                    args.collision_min_points,
+                )
+
+                print(
+                    "[COLLISION] Semantic candidates:",
+                    len(semantic_indices),
+                )
+
+                print(
+                    "[COLLISION] Collision-free candidates:",
+                    len(collision_free_indices),
+                )
+
+                print(
+                    "[COLLISION] Rejected candidates:",
+                    (
+                        len(semantic_indices)
+                        - len(collision_free_indices)
+                    ),
+                )
+
+            else:
+
+                collision_free_mask[
+                    semantic_indices
+                ] = True
+
+                collision_free_indices = (
+                    semantic_indices.copy()
+                )
+
         result_data[
             "task"
         ] = args.task
@@ -2532,6 +2985,17 @@ def main() -> None:
         ] = float(
             representative_elapsed
         )
+        result_data[
+            "finger_collision_check"
+        ] = bool(
+            args.finger_collision_check
+        )
+
+        result_data[
+            "collision_free_candidates"
+        ] = int(
+            len(collision_free_indices)
+        )
 
         npz_data[
             "semantic_point"
@@ -2560,6 +3024,21 @@ def main() -> None:
         npz_data[
             "approach_tilts_deg"
         ] = approach_tilts
+        npz_data[
+            "finger_left_collision_counts"
+        ] = finger_left_collision_counts
+
+        npz_data[
+            "finger_right_collision_counts"
+        ] = finger_right_collision_counts
+
+        npz_data[
+            "collision_free_mask"
+        ] = collision_free_mask
+
+        npz_data[
+            "collision_free_indices"
+        ] = collision_free_indices
 
         if len(semantic_indices) == 0:
             finite_distances = distances[
@@ -2591,8 +3070,20 @@ def main() -> None:
             result_data[
                 "selected_grasp"
             ] = None
+        elif len(collision_free_indices) == 0:
+
+            print()
+            print(
+                "[RESULT] Semantic-compatible grasps found, "
+                "but all collide with the gripper fingers."
+            )
+
+            result_data[
+                "selected_grasp"
+            ] = None
+
         else:
-            viable_indices = semantic_indices
+            viable_indices = collision_free_indices
 
             print()
             print(

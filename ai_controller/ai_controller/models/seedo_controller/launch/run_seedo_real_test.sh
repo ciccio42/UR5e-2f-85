@@ -31,7 +31,7 @@ fi
 TASK_ID="$(printf '%02d' "$((10#${TASK_ID_INPUT}))")"
 
 DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
-DEMO_PATH_NUT="/dataset_nut/task_${TASK_ID}/traj_000_camera_front_modified.mp4"
+DEMO_PATH_NUT="/dataset_nut/task_${TASK_ID}/traj_000_camera_front.mp4"
 
 if [[ ! -f "${DEMO_PATH}" ]]; then
     echo "ERROR: demonstration video not found:"
@@ -107,29 +107,29 @@ set +e
 #     -p seedo_execute_gripper:=true \
 #     2>&1 | tee "${RUN_DIR}/console.log"
 
-ros2 run ai_controller ai_controller_node \
-    --ros-args \
-    -p ai_controller_target:=seedo_controller \
-    -p model_config_path:="${CONFIG_PATH}" \
-    -p task_name:=pick_place \
-    -p demo_path:="${DEMO_PATH}" \
-    -p seedo_artifacts_dir:="${RUN_DIR}" \
-    -p save_rollout_path:="${RUN_DIR}/rollouts" \
-    -p move_robot:=true \
-    -p seedo_execute_gripper:=true \
-    2>&1 | tee "${RUN_DIR}/console.log"
-
 # ros2 run ai_controller ai_controller_node \
 #     --ros-args \
 #     -p ai_controller_target:=seedo_controller \
 #     -p model_config_path:="${CONFIG_PATH}" \
 #     -p task_name:=pick_place \
-#     -p demo_path:="${DEMO_PATH_NUT}" \
+#     -p demo_path:="${DEMO_PATH}" \
 #     -p seedo_artifacts_dir:="${RUN_DIR}" \
 #     -p save_rollout_path:="${RUN_DIR}/rollouts" \
 #     -p move_robot:=true \
 #     -p seedo_execute_gripper:=true \
 #     2>&1 | tee "${RUN_DIR}/console.log"
+
+ros2 run ai_controller ai_controller_node \
+    --ros-args \
+    -p ai_controller_target:=seedo_controller \
+    -p model_config_path:="${CONFIG_PATH}" \
+    -p task_name:=pick_place \
+    -p demo_path:="${DEMO_PATH_NUT}" \
+    -p seedo_artifacts_dir:="${RUN_DIR}" \
+    -p save_rollout_path:="${RUN_DIR}/rollouts" \
+    -p move_robot:=true \
+    -p seedo_execute_gripper:=true \
+    2>&1 | tee "${RUN_DIR}/console.log"
 
 EXIT_CODE=${PIPESTATUS[0]}
 

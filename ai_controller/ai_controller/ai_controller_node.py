@@ -233,6 +233,8 @@ class AIControllerNode(Node):
         self.current_failure_step = None
         self.current_failure_action_index = None
 
+        self.current_traj = None
+
         # 1. Initialize the AI controller
         self.get_logger().info(f'Initializing AI Controller: {self.ai_controller_target}')
         if self.ai_controller_target == 'cod_controller':
@@ -438,36 +440,96 @@ class AIControllerNode(Node):
                     self.synced_images_callback
                 )
 
-            # SeeDo RGB-D subscribers
+            # SeeDo RGB-D subscribers.
+            #
+            # Each camera has its own RGB-depth synchronizer:
+            #
+            #   front   RGB + depth -> synchronized pair
+            #   left    RGB + depth -> synchronized pair
+            #   right   RGB + depth -> synchronized pair
+            #   gripper RGB + depth -> synchronized pair
+            #
+            # Cameras are intentionally NOT synchronized with each other.
             if self.ai_controller_target == 'seedo_controller':
-                self.seedo_rgb_sub = message_filters.Subscriber(
-                    self,
-                    RosImage,
+
+                # Keep references alive for the whole node lifetime.
+                self.seedo_rgbd_subscribers = []
+                self.seedo_rgbd_syncs = []
+
+                # Front uses the dedicated SeeDo parameters so existing parameter
+                # overrides keep working. The other cameras use camera_topic /
+                # seedo_record_depth_topics.
+                rgb_topics = [
                     self.seedo_rgb_topic,
-                    qos_profile=qos_profile_sensor_data,
-                )
+                    self.camera_topic[1],
+                    self.camera_topic[2],
+                    self.camera_topic[3],
+                ]
 
-                self.seedo_depth_sub = message_filters.Subscriber(
-                    self,
-                    RosImage,
+                depth_topics = [
                     self.seedo_depth_topic,
-                    qos_profile=qos_profile_sensor_data,
-                )
+                    self.seedo_record_depth_topics[1],
+                    self.seedo_record_depth_topics[2],
+                    self.seedo_record_depth_topics[3],
+                ]
 
-                self.seedo_rgbd_sync = (
-                    message_filters.ApproximateTimeSynchronizer(
-                        [
-                            self.seedo_rgb_sub,
-                            self.seedo_depth_sub,
-                        ],
-                        queue_size=10,
-                        slop=0.1,
+                for camera_name, rgb_topic, depth_topic in zip(
+                    self.seedo_record_camera_names,
+                    rgb_topics,
+                    depth_topics,
+                ):
+                    rgb_sub = message_filters.Subscriber(
+                        self,
+                        RosImage,
+                        rgb_topic,
+                        qos_profile=qos_profile_sensor_data,
                     )
-                )
 
-                self.seedo_rgbd_sync.registerCallback(
-                    self._seedo_rgbd_callback
-                )
+                    depth_sub = message_filters.Subscriber(
+                        self,
+                        RosImage,
+                        depth_topic,
+                        qos_profile=qos_profile_sensor_data,
+                    )
+
+                    rgbd_sync = (
+                        message_filters.ApproximateTimeSynchronizer(
+                            [
+                                rgb_sub,
+                                depth_sub,
+                            ],
+                            queue_size=10,
+                            slop=0.1,
+                        )
+                    )
+
+                    rgbd_sync.registerCallback(
+                        lambda rgb_msg,
+                            depth_msg,
+                            name=camera_name:
+                            self._seedo_rgbd_callback(
+                                rgb_msg,
+                                depth_msg,
+                                name,
+                            )
+                    )
+
+                    self.seedo_rgbd_subscribers.append(
+                        (
+                            rgb_sub,
+                            depth_sub,
+                        )
+                    )
+
+                    self.seedo_rgbd_syncs.append(
+                        rgbd_sync
+                    )
+
+                    self.get_logger().info(
+                        f'SeeDo RGB-D synchronizer created for '
+                        f'{camera_name}: '
+                        f'RGB={rgb_topic}, depth={depth_topic}'
+                    )
 
                 self.seedo_camera_info_sub = self.create_subscription(
                     CameraInfo,
@@ -475,50 +537,6 @@ class AIControllerNode(Node):
                     self._seedo_camera_info_callback,
                     qos_profile_sensor_data,
                 )
-
-                # Additional cameras used only for rollout recording.
-                # Front RGB-D is already handled by _seedo_rgbd_callback,
-                # therefore only cameras 1..3 are subscribed here.
-
-                self.seedo_record_rgb_subs = []
-                self.seedo_record_depth_subs = []
-
-                for index in range(1, len(self.seedo_record_camera_names)):
-
-                    camera_name = self.seedo_record_camera_names[index]
-
-                    rgb_topic = self.camera_topic[index]
-                    depth_topic = self.seedo_record_depth_topics[index]
-
-                    rgb_sub = self.create_subscription(
-                        RosImage,
-                        rgb_topic,
-                        lambda msg, name=camera_name:
-                            self._seedo_record_rgb_callback(
-                                msg,
-                                name,
-                            ),
-                        qos_profile_sensor_data,
-                    )
-
-                    depth_sub = self.create_subscription(
-                        RosImage,
-                        depth_topic,
-                        lambda msg, name=camera_name:
-                            self._seedo_record_depth_callback(
-                                msg,
-                                name,
-                            ),
-                        qos_profile_sensor_data,
-                    )
-
-                    self.seedo_record_rgb_subs.append(
-                        rgb_sub
-                    )
-
-                    self.seedo_record_depth_subs.append(
-                        depth_sub
-                    )
 
         self.traj_cnt = 0
         self.max_step = 90
@@ -533,41 +551,33 @@ class AIControllerNode(Node):
         self,
         rgb_msg: RosImage,
         depth_msg: RosImage,
+        camera_name: str,
     ):
-        self.seedo_rgb_msg = rgb_msg
-        self.seedo_depth_msg = depth_msg
+        """
+        Store one synchronized RGB-depth pair for a single camera.
+
+        Each ZED camera has its own ApproximateTimeSynchronizer, therefore
+        rgb_msg and depth_msg are temporally matched with each other.
+
+        Different cameras are intentionally independent.
+        """
 
         with self.seedo_record_lock:
             self.seedo_record_rgb_msgs[
-                'camera_front'
+                camera_name
             ] = rgb_msg
 
             self.seedo_record_depth_msgs[
-                'camera_front'
+                camera_name
             ] = depth_msg
 
-        self.seedo_rgbd_event.set()
+        # The front camera is also the RGB-D source used by the
+        # SeeDo runtime perception pipeline.
+        if camera_name == 'camera_front':
+            self.seedo_rgb_msg = rgb_msg
+            self.seedo_depth_msg = depth_msg
+            self.seedo_rgbd_event.set()
 
-    def _seedo_record_rgb_callback(
-        self,
-        msg: RosImage,
-        camera_name: str,
-    ):
-        with self.seedo_record_lock:
-            self.seedo_record_rgb_msgs[
-                camera_name
-            ] = msg
-
-
-    def _seedo_record_depth_callback(
-        self,
-        msg: RosImage,
-        camera_name: str,
-    ):
-        with self.seedo_record_lock:
-            self.seedo_record_depth_msgs[
-                camera_name
-            ] = msg
 
     def _get_seedo_record_camera_data(
         self,
@@ -1075,6 +1085,24 @@ class AIControllerNode(Node):
             self.traj_cnt
         )
 
+        if self.current_traj is not None:
+            trajectory_path = os.path.join(
+                complete_save_path,
+                traj_name + ".pkl",
+            )
+
+            self.current_traj.save(
+                trajectory_path,
+                len=len(self.current_traj),
+                env_type=self.task_name,
+                task_id=self.current_task_id,
+            )
+
+            self.get_logger().warning(
+                f"Partial rollout saved to: {trajectory_path} "
+                f"({len(self.current_traj)} steps)"
+            )
+
         json_path = os.path.join(
             complete_save_path,
             traj_name + ".json",
@@ -1229,6 +1257,7 @@ class AIControllerNode(Node):
             
             # create a new trajectory
             traj = Trajectory()
+            self.current_traj = traj
 
             # SeeDo runtime state
             seedo_runtime_input = None
@@ -1935,12 +1964,22 @@ class AIControllerNode(Node):
                     break  # exit the loop if the gripper has opened after being closed
 
             self.save_rollout(
-                              traj=traj,
-                              save_path=self.save_rollout_path,
-                              task_id=enter_task_id,
-                              traj_number=self.traj_cnt
-                              )
+                traj=traj,
+                save_path=self.save_rollout_path,
+                task_id=enter_task_id,
+                traj_number=self.traj_cnt,
+            )
+
             self.traj_cnt += 1
+
+            # The rollout has been saved successfully.
+            # Do not treat a later Ctrl+C at the prompt as a failure
+            # of the trajectory that just finished.
+            self.current_traj = None
+            self.current_task_id = None
+            self.current_failure_stage = None
+            self.current_failure_step = None
+            self.current_failure_action_index = None
                     
         
 def spin_executor(node=None, executor=None):
@@ -1980,9 +2019,31 @@ def main(args=None):
 
             node.control_loop()
 
-        except KeyboardInterrupt:
+        except KeyboardInterrupt as exc:
             node.get_logger().info(
-                'Keyboard interrupt, shutting down.\n'
+                'Keyboard interrupt received.'
+            )
+
+            if (
+                node.current_task_id is not None
+                and node.current_traj is not None
+            ):
+                try:
+                    node.save_rollout_failure(
+                        exception=exc,
+                    )
+                except Exception as save_exc:
+                    node.get_logger().error(
+                        "Failed to persist partial rollout: "
+                        f"{save_exc}"
+                    )
+            else:
+                node.get_logger().info(
+                    'No active rollout to save.'
+                )
+
+            node.get_logger().info(
+                'Shutting down.\n'
             )
         
         except Exception as exc:
@@ -1997,7 +2058,7 @@ def main(args=None):
                 )
             except Exception as save_exc:
                 node.get_logger().error(
-                    "Failed to persist rollout failure metadata: "
+                    "Failed to persist failed rollout: "
                     f"{save_exc}"
                 )
 

@@ -120,10 +120,11 @@ export HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface
 ```bash
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
 
-export HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface
-
+HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
+PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
+PYTHONNOUSERSITE=1 \
 /opt/graspmolmo_venv/bin/python server.py \
-  --config config/graspmolmo_config.yaml
+    --config config/graspmolmo_config.yaml
 ```
 
 Server:
@@ -246,8 +247,10 @@ The generic checkpoint is stored at:
 ```bash
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/m2t2
 
+PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
+PYTHONNOUSERSITE=1 \
 /opt/m2t2_venv/bin/python server.py \
-  --config config/m2t2_config.yaml
+    --config config/m2t2_config.yaml
 ```
 
 Server:
@@ -289,15 +292,17 @@ cd /home/ros2_ws/src/UR5e-2f-85
 
 PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller:$PYTHONPATH \
 python3 ai_controller/ai_controller/utils/grasping/test_grasp_pipeline.py \
-  --pkl /scene_capture/traj_011.pkl \
-  --step 18 \
-  --num-runs 10 \
-  --seed 42 \
-  --task "Pick up the blue cube." \
-  --semantic-radius-px 50 \
-  --confidence-threshold 0.5 \
-  --max-approach-tilt-deg 20 \
-  --max-wrist-rotation-deg 20
+    --pkl /scene_capture/traj_001.pkl \
+    --step 16 \
+    --base-to-table /home/ros2_ws/src/UR5e-2f-85/.runtime/eye_in_hand_tests/ring/base_to_table_transform.yaml \
+    --num-runs 20 \
+    --seed 42 \
+    --task "Pick up the gray ring by grasping its handle, not the circular ring body." \
+    --semantic-radius-px 50 \
+    --confidence-threshold 0.4 \
+    --max-approach-tilt-deg 45 \
+    --max-wrist-rotation-deg 45 \
+    --finger-collision-check
 ```
 
 Configuration used in the recent tests:
