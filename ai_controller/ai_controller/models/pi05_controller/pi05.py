@@ -42,6 +42,8 @@ from contextlib import nullcontext
 import logging
 from pathlib import Path
 from typing import Any
+import os
+
 
 import torch
 
@@ -238,12 +240,28 @@ class PI05Runtime:
             self.checkpoint_path
         )
 
+        paligemma_path = Path(
+            os.environ.get(
+                "PI05_PALIGEMMA_PATH",
+                "/opt/pi05/paligemma-3b-pt-224",
+            )
+        ).expanduser().resolve()
+
+        if not paligemma_path.is_dir():
+            raise FileNotFoundError(
+                "Local PaliGemma tokenizer directory not found: "
+                f"{paligemma_path}"
+            )
+
+        # Keep the runtime config consistent with the local tokenizer.
+        config.text_tokenizer_name = str(paligemma_path)
+
         checkpoint_n_action_steps = int(
-            self.config.n_action_steps
+            config.n_action_steps
         )
 
         chunk_size = int(
-            self.config.chunk_size
+            config.chunk_size
         )
 
         if self.n_action_steps_override is not None:
@@ -265,7 +283,7 @@ class PI05Runtime:
                     f"chunk_size={chunk_size}."
                 )
 
-            self.config.n_action_steps = (
+            config.n_action_steps = (
                 requested_n_action_steps
             )
 
@@ -340,7 +358,10 @@ class PI05Runtime:
             preprocessor_overrides={
                 "device_processor": {
                     "device": str(self.device),
-                }
+                },
+                 "tokenizer_processor": {
+                    "tokenizer_name": str(paligemma_path),
+                },
             },
         )
 
