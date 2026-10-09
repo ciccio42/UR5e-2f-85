@@ -150,6 +150,13 @@ grasp_planner:
   max_approach_tilt_deg: 45.0
   max_wrist_rotation_deg: 45.0
 
+  # M2T2 grasp-frame depth.
+  #
+  # M2T2 places the grasp-frame origin 0.1034 m behind the
+  # contact region along the local approach (+Z) direction.
+  # This value is used to recover the robot TCP grasp position.
+  m2t2_gripper_depth_m: 0.1034
+
   depth_min: 0.15
   depth_max: 0.60
   bottom_ignore_px: 30

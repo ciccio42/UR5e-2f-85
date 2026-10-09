@@ -1537,6 +1537,8 @@ class AIControllerNode(Node):
                     # eye-in-hand RGB-D observation and prepare GraspPlanner input.
                     # ----------------------------------------------------------
 
+                    pause_executor_for_grasp = False
+
                     if (
                         primitive_step.name.strip().lower()
                         == "approaching"
@@ -1569,10 +1571,7 @@ class AIControllerNode(Node):
                             )
                         )
 
-                        # Capture the TCP state again after receiving the fresh
-                        # eye-in-hand frame. The robot should be stationary after
-                        # reach, but this keeps grasp geometry and robot state as
-                        # temporally consistent as possible.
+                        # Capture TCP state while the executor is still active.
                         robot_state = (
                             self._capture_robot_state()
                         )
@@ -1589,10 +1588,30 @@ class AIControllerNode(Node):
                             "Fresh eye-in-hand grasp input prepared."
                         )
 
-                    out = self.controller.inference(
-                        input_data=seedo_inference_input,
-                        t=step,
-                    )
+                        # From this point onward all data required by the grasp
+                        # planner has already been captured. Stop ROS callbacks
+                        # while the heavy M2T2 + GraspMolmo inference runs.
+                        self.pause_executor.set()
+
+                        pause_executor_for_grasp = True
+
+                        self.get_logger().info(
+                            "ROS executor paused during grasp planning."
+                        )
+
+                    try:
+                        out = self.controller.inference(
+                            input_data=seedo_inference_input,
+                            t=step,
+                        )
+
+                    finally:
+                        if pause_executor_for_grasp:
+                            self.pause_executor.clear()
+
+                            self.get_logger().info(
+                                "ROS executor resumed after grasp planning."
+                            )
 
                 else:
                     out = self.controller.inference(

@@ -187,6 +187,8 @@ def test_constructor_initializes_motion_state():
         layer.current_gripper_position
         == pytest.approx(0.8)
     )
+    assert layer.active_grasp_position is None
+    assert layer.active_grasp_orientation is None
     assert layer.motion_history == []
     assert layer.artifacts_dir is None
 
@@ -291,6 +293,47 @@ def test_reset_clears_previous_motion_history():
     _reset(layer)
 
     assert layer.motion_history == []
+
+def test_reset_clears_active_grasp_pose():
+    layer = _motion_layer()
+
+    _reset(layer)
+
+    layer.set_grasp_pose(
+        position=(
+            0.4,
+            0.5,
+            0.6,
+        ),
+        orientation=(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
+    )
+
+    assert (
+        layer.active_grasp_position
+        is not None
+    )
+
+    assert (
+        layer.active_grasp_orientation
+        is not None
+    )
+
+    _reset(layer)
+
+    assert (
+        layer.active_grasp_position
+        is None
+    )
+
+    assert (
+        layer.active_grasp_orientation
+        is None
+    )
 
 
 # ---------------------------------------------------------------------
@@ -448,11 +491,35 @@ def test_reach_builds_hover_target(
     )
 
 
-def test_approaching_builds_approach_target(
+def test_approaching_uses_active_grasp_pose(
     monkeypatch,
 ):
     layer = _motion_layer()
     _reset(layer)
+
+    grasp_position = np.array(
+        [
+            0.18,
+            0.47,
+            -0.10,
+        ],
+        dtype=np.float64,
+    )
+
+    grasp_orientation = np.array(
+        [
+            0.97719848,
+            0.17864325,
+            -0.03462727,
+            -0.10941056,
+        ],
+        dtype=np.float64,
+    )
+
+    layer.set_grasp_pose(
+        position=grasp_position,
+        orientation=grasp_orientation,
+    )
 
     captured = {}
 
@@ -469,25 +536,50 @@ def test_approaching_builds_approach_target(
         scene_state=_scene_state(
             _scene_object(
                 "target",
+                # Deliberately unrelated to the grasp pose.
                 position_base=(
-                    0.4,
-                    0.5,
-                    0.6,
+                    9.0,
+                    9.0,
+                    9.0,
                 ),
             )
         ),
     )
 
-    assert np.allclose(
-        captured["target_position"],
-        np.array(
-            [
-                0.4,
-                0.44,
-                0.62,
-            ]
-        ),
+    np.testing.assert_allclose(
+        captured[
+            "target_position"
+        ],
+        grasp_position,
+        atol=1e-9,
     )
+
+    np.testing.assert_allclose(
+        captured[
+            "target_orientation"
+        ],
+        grasp_orientation,
+        atol=1e-9,
+    )
+
+def test_approaching_requires_active_grasp_pose():
+    layer = _motion_layer()
+    _reset(layer)
+
+    with pytest.raises(
+        RuntimeError,
+        match="No active grasp pose",
+    ):
+        layer.translate(
+            primitive_step=_primitive(
+                "approaching"
+            ),
+            scene_state=_scene_state(
+                _scene_object(
+                    "target"
+                )
+            ),
+        )
 
 
 def test_pick_closes_gripper_without_moving():

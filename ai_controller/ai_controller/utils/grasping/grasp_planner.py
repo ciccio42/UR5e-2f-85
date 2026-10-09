@@ -36,8 +36,11 @@ class GraspPlan:
     """
     Result of task-oriented 6-DoF grasp planning.
 
-    grasp_pose_base transforms points from the selected M2T2 grasp
-    frame into base_link.
+    grasp_pose_base is the raw selected M2T2 grasp pose expressed
+    in base_link.
+
+    tcp_pose_base is the corresponding Robotiq tcp_link pose
+    expressed in base_link.
     """
 
     grasp_instruction: str
@@ -48,6 +51,11 @@ class GraspPlan:
     grasp_position_base: np.ndarray
     grasp_orientation_base: np.ndarray
     approach_direction_base: np.ndarray
+
+    tcp_pose_base: np.ndarray
+    tcp_position_base: np.ndarray
+    tcp_orientation_base: np.ndarray
+    tcp_symmetry_flipped: bool
 
     selected_m2t2_index: int
     confidence: float
@@ -89,6 +97,7 @@ class GraspPlanner:
         finger_z_max_m: float = 0.1053,
         collision_margin_m: float = 0.002,
         collision_min_points: int = 3,
+        m2t2_gripper_depth_m: float = 0.1034,
     ) -> None:
         self.num_runs = int(
             num_runs
@@ -161,6 +170,15 @@ class GraspPlanner:
         self.collision_min_points = int(
             collision_min_points
         )
+
+        self.m2t2_gripper_depth_m = float(
+            m2t2_gripper_depth_m
+        )
+
+        if self.m2t2_gripper_depth_m <= 0.0:
+            raise ValueError(
+                "m2t2_gripper_depth_m must be positive."
+            )
 
         self.m2t2_client = M2T2Client(
             config_path=(
@@ -890,6 +908,113 @@ class GraspPlanner:
             ].copy()
         )
 
+        # ---------------------------------------------------------
+        # Resolve the 180-degree symmetry of the parallel gripper.
+        #
+        # Rotating the grasp frame by pi around its local Z axis
+        # preserves the approach direction and represents the same
+        # physical grasp for a symmetric two-finger gripper.
+        #
+        # Choose the equivalent orientation requiring the smallest
+        # rotation from the current robot TCP orientation.
+        # ---------------------------------------------------------
+
+        selected_rotation = (
+            selected_grasp_base[
+                :3,
+                :3,
+            ].copy()
+        )
+
+        local_z_flip = (
+            Rotation
+            .from_euler(
+                "z",
+                np.pi,
+            )
+            .as_matrix()
+        )
+
+        flipped_rotation = (
+            selected_rotation
+            @ local_z_flip
+        )
+
+        current_tcp_rotation = (
+            T_base_tcp[
+                :3,
+                :3,
+            ]
+        )
+
+        original_rotation_distance = (
+            Rotation
+            .from_matrix(
+                current_tcp_rotation.T
+                @ selected_rotation
+            )
+            .magnitude()
+        )
+
+        flipped_rotation_distance = (
+            Rotation
+            .from_matrix(
+                current_tcp_rotation.T
+                @ flipped_rotation
+            )
+            .magnitude()
+        )
+
+        tcp_symmetry_flipped = bool(
+            flipped_rotation_distance
+            < original_rotation_distance
+        )
+
+        selected_tcp_rotation = (
+            flipped_rotation
+            if tcp_symmetry_flipped
+            else selected_rotation
+        )
+
+        # ---------------------------------------------------------
+        # M2T2 grasp frame -> Robotiq TCP hypothesis
+        # ---------------------------------------------------------
+
+        selected_tcp_pose_base = (
+            selected_grasp_base.copy()
+        )
+
+        selected_tcp_pose_base[
+            :3,
+            :3,
+        ] = selected_tcp_rotation
+
+        selected_tcp_pose_base[
+            :3,
+            3,
+        ] += (
+            self.m2t2_gripper_depth_m
+            * selected_tcp_pose_base[
+                :3,
+                2,
+            ]
+        )
+
+        selected_tcp_position = (
+            selected_tcp_pose_base[
+                :3,
+                3,
+            ].copy()
+        )
+
+        selected_tcp_orientation = (
+            Rotation
+            .from_matrix(
+                selected_tcp_rotation
+            )
+            .as_quat()
+        )
+
         if artifact_dir is not None:
             combined_image = (
                 _draw_combined_result(
@@ -942,6 +1067,18 @@ class GraspPlanner:
             ),
             approach_direction_base=(
                 selected_approach_direction
+            ),
+            tcp_pose_base=(
+                selected_tcp_pose_base
+            ),
+            tcp_position_base=(
+                selected_tcp_position
+            ),
+            tcp_orientation_base=(
+                selected_tcp_orientation
+            ),
+            tcp_symmetry_flipped=(
+                tcp_symmetry_flipped
             ),
             selected_m2t2_index=(
                 selected_original_index
@@ -1061,6 +1198,21 @@ class GraspPlanner:
             ),
             "approach_direction_base": (
                 result.approach_direction_base.tolist()
+            ),
+            "tcp_pose_base": (
+                result.tcp_pose_base.tolist()
+            ),
+            "tcp_position_base": (
+                result.tcp_position_base.tolist()
+            ),
+            "tcp_orientation_base": (
+                result.tcp_orientation_base.tolist()
+            ),
+            "m2t2_gripper_depth_m": float(
+                self.m2t2_gripper_depth_m
+            ),
+            "tcp_symmetry_flipped": bool(
+                result.tcp_symmetry_flipped
             ),
             "table_z_offset_m": float(
                 table_z_offset

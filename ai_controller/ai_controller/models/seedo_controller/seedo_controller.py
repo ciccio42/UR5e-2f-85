@@ -702,6 +702,12 @@ class SeeDoController(AIController):
                     45.0,
                 )
             ),
+            m2t2_gripper_depth_m=float(
+                grasp_config.get(
+                    "m2t2_gripper_depth_m",
+                    0.1034,
+                )
+            ),
             depth_min=float(
                 grasp_config.get(
                     "depth_min",
@@ -1462,6 +1468,15 @@ class SeeDoController(AIController):
                         )
                     )
 
+                self.motion_layer.set_grasp_pose(
+                    position=(
+                        self.grasp_plan.tcp_position_base
+                    ),
+                    orientation=(
+                        self.grasp_plan.tcp_orientation_base
+                    ),
+                )
+
                 self.grasp_plan_target = (
                     grasp_target
                 )
@@ -1489,6 +1504,16 @@ class SeeDoController(AIController):
                 print(
                     "[GRASP] Orientation base:",
                     self.grasp_plan.grasp_orientation_base,
+                )
+
+                print(
+                    "[GRASP] TCP position base:",
+                    self.grasp_plan.tcp_position_base,
+                )
+
+                print(
+                    "[GRASP] TCP orientation base:",
+                    self.grasp_plan.tcp_orientation_base,
                 )
 
                 print()
