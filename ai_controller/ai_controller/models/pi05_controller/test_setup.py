@@ -507,7 +507,7 @@ def check_full_inference(config_path: Path, task_name: str) -> None:
 
     dummy_state = {
         "joint_positions": joints,
-        "gripper_qpos": 0.0,
+        "gripper_qpos": np.array([0.0], dtype=np.float64),
         "eef_position": eef_position,
         "eef_quaternion": eef_quaternion,
         "gripper_closed": False,

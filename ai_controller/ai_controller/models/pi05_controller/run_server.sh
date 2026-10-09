@@ -23,6 +23,31 @@ THIS_DIR="$(
     pwd
 )"
 
+# ----------------------------------------------------------------------
+# DGX Spark GB10 / sm_121 NVRTC compatibility
+#
+# PI0.5 keeps the training-compatible PyTorch build:
+#     torch 2.11.0+cu128
+#
+# CUDA 12.8 NVRTC cannot compile JIT kernels for sm_121.
+# We therefore override only NVRTC with CUDA 12.9, which supports sm_121.
+# ----------------------------------------------------------------------
+
+NVRTC_DIR="${THIS_DIR}/venv/nvrtc_12_9"
+
+if [[ ! -f "${NVRTC_DIR}/libnvrtc.so.12" ]]; then
+    echo "Missing PI0.5 NVRTC library: ${NVRTC_DIR}/libnvrtc.so.12" >&2
+    exit 1
+fi
+
+if [[ ! -f "${NVRTC_DIR}/libnvrtc-builtins.so.12.9" ]]; then
+    echo "Missing PI0.5 NVRTC builtins: ${NVRTC_DIR}/libnvrtc-builtins.so.12.9" >&2
+    exit 1
+fi
+
+export LD_LIBRARY_PATH="${NVRTC_DIR}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+export LD_PRELOAD="${NVRTC_DIR}/libnvrtc.so.12${LD_PRELOAD:+:${LD_PRELOAD}}"
+
 # -----------------------------------------------------------------------------
 # Runtime paths
 # -----------------------------------------------------------------------------

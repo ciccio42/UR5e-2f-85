@@ -606,56 +606,35 @@ class PI05Controller(AIController):
 
         Expected input_data
         -------------------
-
-            [
-                images,
-                robot_state,
-                joint_positions,
-                model_gripper_state,
-            ]
+        [
+            images,
+            robot_state,
+        ]
 
         images
         ------
-        List of live RGB camera images.
-
-        Current ai_controller ordering:
+        List of live RGB camera images using the AIControllerNode convention:
 
             images[0] = front
             images[1] = left
             images[2] = right
             images[3] = gripper
 
+        PI0.5 currently uses only front + gripper.
+
         robot_state
         -----------
-        Current EEF pose plus binary controller gripper state:
+        Dictionary produced by AIControllerNode._build_pi05_state():
 
-            [
-                x,
-                y,
-                z,
-                qx,
-                qy,
-                qz,
-                qw,
-                gripper_closed,
-            ]
+            {
+                "joint_positions": (6,),
+                "gripper_qpos": (1,),
+                "eef_position": (3,),
+                "eef_quaternion": (4,),   # XYZW
+                "gripper_closed": bool,
+            }
 
-        The pose is used both:
-        - to construct the PI0.5 EEF state;
-        - as the reference pose for delta -> absolute conversion.
-
-        joint_positions
-        ---------------
-        Six current UR5e joint positions:
-
-            [q1, q2, q3, q4, q5, q6]
-
-        model_gripper_state
-        -------------------
-        Current proprioceptive gripper state in the [0,1] convention used
-        by the training dataset.
-
-        Final raw PI0.5 state:
+        The controller constructs the raw PI0.5 state:
 
             [
                 q1, q2, q3, q4, q5, q6,
@@ -664,26 +643,29 @@ class PI05Controller(AIController):
             ]
 
         shape = (13,)
+
+        The quaternion -> RPY conversion is performed by build_pi05_state().
         """
+
+        # -------------------------------------------------------------------------
+        # Input contract
+        # -------------------------------------------------------------------------
 
         if (
             not isinstance(
                 input_data,
                 (list, tuple),
             )
-            or len(input_data) != 4
+            or len(input_data) != 2
         ):
             raise ValueError(
                 "PI0.5 input_data must be:\n"
-                "  [images, robot_state, "
-                "joint_positions, model_gripper_state]"
+                "  [images, robot_state]"
             )
 
         (
             images,
             robot_state,
-            joint_positions,
-            model_gripper_state,
         ) = input_data
 
         if self._runtime is None:
@@ -697,9 +679,9 @@ class PI05Controller(AIController):
                 "load_command() must be called before inference()."
             )
 
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
         # Cameras
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
 
         if images is None:
             raise ValueError(
@@ -711,9 +693,7 @@ class PI05Controller(AIController):
             self.gripper_camera_index,
         )
 
-        if len(
-            images
-        ) <= required_image_index:
+        if len(images) <= required_image_index:
             raise ValueError(
                 "Not enough camera images for PI0.5. "
                 f"Need indexes {self.front_camera_index} "
@@ -727,7 +707,6 @@ class PI05Controller(AIController):
         #   -> deterministic crop
         #   -> resize 224x224
         #   -> CHW float32 [0,1]
-        #
         front_image = process_front_image(
             images[
                 self.front_camera_index
@@ -741,7 +720,6 @@ class PI05Controller(AIController):
         # RGB live
         #   -> resize 224x224
         #   -> CHW float32 [0,1]
-        #
         gripper_image = process_gripper_image(
             images[
                 self.gripper_camera_index
@@ -750,69 +728,46 @@ class PI05Controller(AIController):
                 self.input_color_order,
         )
 
-        # ---------------------------------------------------------------------
-        # Robot EEF state
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
+        # Structured robot state from AIControllerNode
+        # -------------------------------------------------------------------------
 
-        robot_state = np.asarray(
+        if not isinstance(
             robot_state,
-            dtype=np.float64,
-        )
-
-        if (
-            robot_state.shape
-            != (
-                ROBOT_STATE_DIM,
-            )
-            or not np.all(
-                np.isfinite(
-                    robot_state
-                )
-            )
+            dict,
         ):
-            raise ValueError(
-                "robot_state must be finite and shaped (8,): "
-                "[x, y, z, qx, qy, qz, qw, gripper_closed]."
+            raise TypeError(
+                "PI0.5 robot_state must be a dictionary "
+                "produced by AIControllerNode._build_pi05_state()."
             )
 
-        reference_position = (
-            robot_state[:3]
-            .astype(
-                np.float32,
-                copy=True,
-            )
+        required_state_keys = (
+            "joint_positions",
+            "eef_position",
+            "eef_quaternion",
+            "gripper_closed",
         )
 
-        reference_quaternion = (
-            robot_state[3:7]
-            .astype(
-                np.float32,
-                copy=True,
-            )
-        )
+        missing_keys = [
+            key
+            for key in required_state_keys
+            if key not in robot_state
+        ]
 
-        quaternion_norm = float(
-            np.linalg.norm(
-                reference_quaternion
-            )
-        )
-
-        if quaternion_norm < 1e-8:
-            raise ValueError(
-                "Current robot quaternion has near-zero norm."
+        if missing_keys:
+            raise KeyError(
+                "PI0.5 robot_state is missing required fields: "
+                f"{missing_keys}"
             )
 
-        current_gripper_closed = bool(
-            robot_state[7]
-            >= 0.5
-        )
-
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
         # Joint positions
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
 
         joint_positions = np.asarray(
-            joint_positions,
+            robot_state[
+                "joint_positions"
+            ],
             dtype=np.float32,
         )
 
@@ -828,39 +783,119 @@ class PI05Controller(AIController):
             )
         ):
             raise ValueError(
-                "joint_positions must be finite and shaped (6,), "
+                "robot_state['joint_positions'] must be finite "
+                "and shaped (6,), "
                 f"got {joint_positions.shape}."
             )
 
-        # ---------------------------------------------------------------------
-        # Model gripper proprioception
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
+        # Current EEF pose
+        # -------------------------------------------------------------------------
 
-        model_gripper_state = float(
-            model_gripper_state
+        reference_position = np.asarray(
+            robot_state[
+                "eef_position"
+            ],
+            dtype=np.float32,
         )
 
-        if not np.isfinite(
-            model_gripper_state
+        if (
+            reference_position.shape
+            != (
+                3,
+            )
+            or not np.all(
+                np.isfinite(
+                    reference_position
+                )
+            )
         ):
             raise ValueError(
-                "model_gripper_state must be finite."
+                "robot_state['eef_position'] must be finite "
+                "and shaped (3,), "
+                f"got {reference_position.shape}."
             )
+
+        reference_quaternion = np.asarray(
+            robot_state[
+                "eef_quaternion"
+            ],
+            dtype=np.float32,
+        )
 
         if (
-            model_gripper_state < 0.0
-            or model_gripper_state > 1.0
+            reference_quaternion.shape
+            != (
+                4,
+            )
+            or not np.all(
+                np.isfinite(
+                    reference_quaternion
+                )
+            )
         ):
             raise ValueError(
-                "model_gripper_state must be in [0,1], "
-                f"got {model_gripper_state}."
+                "robot_state['eef_quaternion'] must be finite "
+                "and shaped (4,), "
+                f"got {reference_quaternion.shape}."
             )
 
-        # ---------------------------------------------------------------------
-        # PI0.5 raw 13D state
+        quaternion_norm = float(
+            np.linalg.norm(
+                reference_quaternion
+            )
+        )
+
+        if quaternion_norm < 1e-8:
+            raise ValueError(
+                "Current robot quaternion has near-zero norm."
+            )
+
+        # -------------------------------------------------------------------------
+        # Gripper state
+        # -------------------------------------------------------------------------
         #
-        # build_pi05_state() converts the current quaternion to RPY xyz.
-        # ---------------------------------------------------------------------
+        # PI0.5 training proprioception uses the binary [0,1] convention:
+        #
+        #   0 = open
+        #   1 = closed
+        #
+        # This is NOT the raw Robotiq qpos value.
+        # AIControllerNode already tracks the logical gripper state through
+        # `gripper_closed`.
+        # -------------------------------------------------------------------------
+
+        current_gripper_closed = bool(
+            robot_state[
+                "gripper_closed"
+            ]
+        )
+
+        model_gripper_state = (
+            1.0
+            if current_gripper_closed
+            else 0.0
+        )
+
+        # -------------------------------------------------------------------------
+        # PI0.5 raw 13D state
+        # -------------------------------------------------------------------------
+        #
+        # build_pi05_state() performs:
+        #
+        #   quaternion XYZW
+        #       -> Euler XYZ / RPY
+        #
+        # and constructs:
+        #
+        #   [
+        #       q1, q2, q3, q4, q5, q6,
+        #       gripper,
+        #       x, y, z, roll, pitch, yaw,
+        #   ]
+        #
+        # No 32D padding is performed here.
+        # -------------------------------------------------------------------------
 
         state = build_pi05_state(
             joint_positions=
@@ -886,9 +921,9 @@ class PI05Controller(AIController):
                 f"{tuple(state.shape)}."
             )
 
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
         # Raw LeRobot observation
-        # ---------------------------------------------------------------------
+        # -------------------------------------------------------------------------
 
         observation = build_lerobot_observation(
             front_image=
@@ -908,12 +943,13 @@ class PI05Controller(AIController):
             "observation":
                 observation,
 
-            # Used only by our physical postprocessing.
+            # Used by physical postprocessing:
+            # predicted delta -> absolute UR5e target.
             "reference_position":
-                reference_position,
+                reference_position.copy(),
 
             "reference_quaternion":
-                reference_quaternion,
+                reference_quaternion.copy(),
 
             "current_gripper_closed":
                 current_gripper_closed,

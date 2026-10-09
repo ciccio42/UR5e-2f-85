@@ -16,7 +16,7 @@
 #   policy_preprocessor_step_*.safetensors
 #   policy_postprocessor_step_*.safetensors
 
-checkpoint_path: "/home/ros2_ws/src/ai_controller/checkpoint_folder/pi05/pretrained_model"
+checkpoint_path: "/opt/pi05/checkpoint"
 
 device: "cuda"
 
