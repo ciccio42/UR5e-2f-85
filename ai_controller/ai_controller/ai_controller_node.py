@@ -134,12 +134,20 @@ class AIControllerNode(Node):
             '/zed_front/zed_node/rgb/color/rect/camera_info',
         )
         self.declare_parameter(
+            'seedo_gripper_camera_info_topic',
+            '/zed_gripper/zed_node/rgb/color/rect/camera_info',
+        )
+        self.declare_parameter(
             'seedo_rgb_topic',
             '/zed_front/zed_node/rgb/color/rect/image',
         )
         self.declare_parameter(
             'seedo_table_frame',
             'table_0',
+        )
+        self.declare_parameter(
+            'seedo_gripper_optical_frame',
+            'zed_mini_left_camera_frame_optical',
         )
         self.declare_parameter(
             'seedo_artifacts_dir',
@@ -193,12 +201,20 @@ class AIControllerNode(Node):
             'seedo_camera_info_topic'
         ).get_parameter_value().string_value
 
+        self.seedo_gripper_camera_info_topic = self.get_parameter(
+            'seedo_gripper_camera_info_topic'
+        ).get_parameter_value().string_value
+
         self.seedo_rgb_topic = self.get_parameter(
             'seedo_rgb_topic'
         ).get_parameter_value().string_value
 
         self.seedo_table_frame = self.get_parameter(
             'seedo_table_frame'
+        ).get_parameter_value().string_value
+
+        self.seedo_gripper_optical_frame = self.get_parameter(
+            'seedo_gripper_optical_frame'
         ).get_parameter_value().string_value
 
         self.seedo_artifacts_dir = self.get_parameter(
@@ -407,7 +423,11 @@ class AIControllerNode(Node):
             self.seedo_depth_msg = None
             self.seedo_camera_info_msg = None
 
+            # Eye-in-hand state used by the runtime grasp planner.
+            self.seedo_gripper_camera_info_msg = None
+
             self.seedo_rgbd_event = threading.Event()
+            self.seedo_gripper_rgbd_event = threading.Event()
 
             # Latest RGB/depth messages used only for rollout recording.
             # The callbacks store ROS messages without converting them to numpy,
@@ -538,6 +558,13 @@ class AIControllerNode(Node):
                     qos_profile_sensor_data,
                 )
 
+                self.seedo_gripper_camera_info_sub = self.create_subscription(
+                    CameraInfo,
+                    self.seedo_gripper_camera_info_topic,
+                    self._seedo_gripper_camera_info_callback,
+                    qos_profile_sensor_data,
+                )
+
         self.traj_cnt = 0
         self.max_step = 90
         self.gripper_closed = False
@@ -577,6 +604,9 @@ class AIControllerNode(Node):
             self.seedo_rgb_msg = rgb_msg
             self.seedo_depth_msg = depth_msg
             self.seedo_rgbd_event.set()
+
+        if camera_name == 'eye_in_hand':
+            self.seedo_gripper_rgbd_event.set()
 
 
     def _get_seedo_record_camera_data(
@@ -700,6 +730,12 @@ class AIControllerNode(Node):
         msg: CameraInfo,
     ):
         self.seedo_camera_info_msg = msg
+
+    def _seedo_gripper_camera_info_callback(
+        self,
+        msg: CameraInfo,
+    ):
+        self.seedo_gripper_camera_info_msg = msg
 
     def synced_images_callback(self, *image_msgs):
         """Called once per cycle when all camera topics have a message within the sync window."""
@@ -1263,6 +1299,7 @@ class AIControllerNode(Node):
             seedo_runtime_input = None
             seedo_primitive_count = None
             seedo_obj_bb = None
+            base_to_table_transform = None
 
             # Timing state for the current episode
             end_to_end_start = None
@@ -1472,18 +1509,97 @@ class AIControllerNode(Node):
                 step_save_path = f'{save_path}/step_{step}'
 
                 if self.ai_controller_target == 'seedo_controller':
+
                     self.current_failure_stage = "motion_generation"
+
+                    if self.controller.primitive_plan is None:
+                        raise RuntimeError(
+                            "SeeDo primitive plan is not available."
+                        )
+
+                    primitive_step = (
+                        self.controller
+                        .primitive_plan
+                        .steps[
+                            step - 1
+                        ]
+                    )
+
+                    seedo_inference_input = {
+                        "robot_state": robot_state,
+                    }
+
+                    # ----------------------------------------------------------
+                    # Runtime grasp planning
+                    #
+                    # The reach primitive has already been physically executed.
+                    # When the next primitive is approaching, acquire a fresh
+                    # eye-in-hand RGB-D observation and prepare GraspPlanner input.
+                    # ----------------------------------------------------------
+
+                    if (
+                        primitive_step.name.strip().lower()
+                        == "approaching"
+                    ):
+                        self.current_failure_stage = (
+                            "grasp_planning"
+                        )
+
+                        self.get_logger().info(
+                            "Approaching primitive detected: "
+                            "waiting for fresh eye-in-hand RGB-D data..."
+                        )
+
+                        wait_for_seedo_grasp_runtime_data(
+                            self
+                        )
+
+                        if base_to_table_transform is None:
+                            raise RuntimeError(
+                                "base_to_table_transform is not available "
+                                "for grasp planning."
+                            )
+
+                        grasp_input = (
+                            get_seedo_grasp_runtime_input(
+                                self,
+                                base_to_table_transform=(
+                                    base_to_table_transform
+                                ),
+                            )
+                        )
+
+                        # Capture the TCP state again after receiving the fresh
+                        # eye-in-hand frame. The robot should be stationary after
+                        # reach, but this keeps grasp geometry and robot state as
+                        # temporally consistent as possible.
+                        robot_state = (
+                            self._capture_robot_state()
+                        )
+
+                        seedo_inference_input[
+                            "robot_state"
+                        ] = robot_state
+
+                        seedo_inference_input[
+                            "grasp_input"
+                        ] = grasp_input
+
+                        self.get_logger().info(
+                            "Fresh eye-in-hand grasp input prepared."
+                        )
+
                     out = self.controller.inference(
-                        input_data={
-                            "robot_state": robot_state,
-                        },
+                        input_data=seedo_inference_input,
                         t=step,
                     )
+
                 else:
                     out = self.controller.inference(
-                                                    input_data=[images, states],
-                                                    t=step,
-                                                    save_path=step_save_path)
+                        input_data=[images, states],
+                        t=step,
+                        save_path=step_save_path
+                    )
                 
                 predicted_bb = None
                 target_obj_prediction = None

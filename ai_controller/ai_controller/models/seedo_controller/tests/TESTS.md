@@ -1637,6 +1637,11 @@ PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
   --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
   --expected-keyframes 20 35 \
   --artifacts-dir /seedo_tests/keyframe
+
+PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
+  --stage keyframe \
+  --video /dataset_nut/task_00/traj_000_camera_front.mp4 \
+  --artifacts-dir /seedo_tests/keyframe_nut
 ```
 
 Required upstream artifacts:
@@ -1672,6 +1677,12 @@ PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
   --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
   --expected-keyframes 20 35 \
   --artifacts-dir /seedo_tests/visual_prompting
+
+PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
+  --stage visual_prompting \
+  --video /dataset_nut/task_00/traj_000_camera_front.mp4 \
+  --expected-keyframes 20 40 \
+  --artifacts-dir /seedo_tests/visual_prompting_nut
 ```
 
 Required upstream artifacts:

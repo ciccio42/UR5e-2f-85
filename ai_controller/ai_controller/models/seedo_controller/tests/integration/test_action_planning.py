@@ -333,6 +333,22 @@ def run_action_planning_test(
             f"received={step.picked_detector_label!r}"
         )
 
+    if not step.grasp_instruction.strip():
+        raise AssertionError(
+            "Action planner produced an empty grasp_instruction."
+        )
+
+    if (
+        EXPECTED_PICKED_LABEL.casefold()
+        not in step.grasp_instruction.casefold()
+    ):
+        raise AssertionError(
+            "grasp_instruction does not explicitly name the "
+            "picked detector label: "
+            f"label={EXPECTED_PICKED_LABEL!r}, "
+            f"instruction={step.grasp_instruction!r}"
+        )
+
     if (
         step.picked_category
         != EXPECTED_PICKED_CATEGORY
@@ -605,6 +621,40 @@ def run_action_planning_test(
 
     raw_step = raw_steps[0]
 
+    raw_grasp_instruction = str(
+        raw_step.get(
+            "grasp_instruction",
+            "",
+        )
+    ).strip()
+
+    if not raw_grasp_instruction:
+        raise AssertionError(
+            "Raw OpenAI response is missing grasp_instruction."
+        )
+
+    if (
+        EXPECTED_PICKED_LABEL.casefold()
+        not in raw_grasp_instruction.casefold()
+    ):
+        raise AssertionError(
+            "Raw OpenAI grasp_instruction does not explicitly "
+            "name the picked detector label: "
+            f"label={EXPECTED_PICKED_LABEL!r}, "
+            f"instruction={raw_grasp_instruction!r}"
+        )
+
+    if (
+        raw_grasp_instruction
+        != step.grasp_instruction
+    ):
+        raise AssertionError(
+            "grasp_instruction changed while converting the raw "
+            "OpenAI response into ActionStep:\n"
+            f"raw: {raw_grasp_instruction}\n"
+            f"step: {step.grasp_instruction}"
+        )
+
     # These fields intentionally do NOT belong to the generalized
     # OpenAI schema. They are created deterministically afterward.
     if (
@@ -720,6 +770,7 @@ def run_action_planning_test(
         "TASK CLASSIFICATION:",
         "OBJECT METADATA:",
         "PICK OBJECT:",
+        "GRASP INSTRUCTION:",
         "DESTINATION:",
         "DESTINATION IDENTITY:",
         "RELATION:",
@@ -772,6 +823,10 @@ def run_action_planning_test(
     print(
         "Relation: "
         f"{step.relation}"
+    )
+    print(
+        "Grasp instruction: "
+        f"{step.grasp_instruction}"
     )
     print(
         "Natural-language plan: "

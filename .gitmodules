@@ -6,3 +6,6 @@
 	path = ai_controller/ai_controller/models/seedo_controller/models/GroundingDINO
 	url = https://github.com/InfanteAngelo/GroundingDINO.git
 	branch = seedo-compat
+[submodule "zed_camera/zed-ros2-description"]
+	path = zed_camera/zed-ros2-description
+	url = https://github.com/stereolabs/zed-ros2-description.git

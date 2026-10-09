@@ -44,7 +44,8 @@ if [ -d "${ROS_WS}/src" ] && \
             dataset_collector_pkg \
             ai_controller \
             ur5e_2f_85_description \
-            ur5e_2f_85_moveit_config
+            ur5e_2f_85_moveit_config \
+            zed_description
 
     else
         echo "[entrypoint] Skipping ROS 2 workspace build."

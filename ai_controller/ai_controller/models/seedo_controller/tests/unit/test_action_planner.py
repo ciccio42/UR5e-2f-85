@@ -8,6 +8,12 @@ from ai_controller.models.seedo_controller import action_planner
 from ai_controller.models.seedo_controller.action_planner import (
     ActionPlanner,
 )
+from results import ActionStep
+from vlm import (
+    GENERALIZED_PLAN_SCHEMA,
+    build_prompt,
+    validate_plan,
+)
 
 
 @pytest.mark.parametrize(
@@ -604,4 +610,229 @@ def test_run_propagates_generate_action_plan_exception(
                 "1": ["test"],
             },
             artifacts_dir=tmp_path / "artifacts",
+        )
+
+
+# ------------------------------------------------------------------
+# grasp_instruction tests
+# ------------------------------------------------------------------
+
+
+def _build_generalized_test_track_map():
+    return {
+        "1": {
+            "detector_label": "gray ring",
+            "category": "ring",
+            "attributes": {},
+        },
+        "2": {
+            "detector_label": "wooden peg",
+            "category": "peg",
+            "attributes": {},
+        },
+    }
+
+
+def _build_generalized_test_coordinates():
+    return {
+        "10": {
+            "1": [100, 120],
+            "2": [300, 120],
+        },
+        "20": {
+            "1": [295, 125],
+            "2": [300, 120],
+        },
+    }
+
+
+def _build_generalized_test_plan(
+    grasp_instruction: str,
+):
+    return {
+        "steps": [
+            {
+                "pick_keyframe": 10,
+                "place_keyframe": 20,
+                "picked_track_id": 1,
+                "picked_category": "ring",
+                "picked_color": "",
+                "picked_detector_label": "gray ring",
+                "grasp_instruction": grasp_instruction,
+                "destination_track_id": 2,
+                "destination_category": "peg",
+                "relation": "on",
+            }
+        ],
+        "status": "completed",
+        "task_type": "nut_assembly",
+        "ambiguities": [],
+    }
+
+
+def test_action_step_grasp_instruction_defaults_to_empty_string():
+    step = ActionStep(
+        pick_keyframe=10,
+        place_keyframe=20,
+        picked_track_id=1,
+        picked_category="ring",
+        picked_color="",
+        destination_track_id=2,
+        destination_category="peg",
+        destination_ordinal_from_left=None,
+        relation="on",
+        action=(
+            "Pick the gray ring and assemble it "
+            "onto the wooden peg."
+        ),
+        picked_detector_label="gray ring",
+    )
+
+    assert step.grasp_instruction == ""
+
+
+def test_action_step_stores_grasp_instruction():
+    instruction = (
+        "Pick up the gray ring by grasping its handle, "
+        "not the circular ring body."
+    )
+
+    step = ActionStep(
+        pick_keyframe=10,
+        place_keyframe=20,
+        picked_track_id=1,
+        picked_category="ring",
+        picked_color="",
+        destination_track_id=2,
+        destination_category="peg",
+        destination_ordinal_from_left=None,
+        relation="on",
+        action=(
+            "Pick the gray ring and assemble it "
+            "onto the wooden peg."
+        ),
+        picked_detector_label="gray ring",
+        grasp_instruction=instruction,
+    )
+
+    assert step.grasp_instruction == instruction
+
+
+def test_generalized_schema_requires_grasp_instruction():
+    step_schema = (
+        GENERALIZED_PLAN_SCHEMA[
+            "schema"
+        ][
+            "properties"
+        ][
+            "steps"
+        ][
+            "items"
+        ]
+    )
+
+    assert (
+        "grasp_instruction"
+        in step_schema["properties"]
+    )
+
+    assert (
+        "grasp_instruction"
+        in step_schema["required"]
+    )
+
+
+def test_generalized_prompt_requests_grasp_instruction():
+    prompt = build_prompt(
+        pick_frame=10,
+        place_frame=20,
+        track_map=(
+            _build_generalized_test_track_map()
+        ),
+        coordinates=(
+            _build_generalized_test_coordinates()
+        ),
+        perception_mode="generalized",
+    )
+
+    assert "GRASP INSTRUCTION:" in prompt
+    assert "grasp_instruction" in prompt
+
+    assert (
+        "Pick up the gray ring by grasping its handle, "
+        "not the circular ring body."
+        in prompt
+    )
+
+    assert (
+        "Do not specify pixel coordinates"
+        in prompt
+    )
+
+
+def test_validate_generalized_plan_accepts_valid_grasp_instruction():
+    validate_plan(
+        plan=_build_generalized_test_plan(
+            (
+                "Pick up the gray ring by grasping "
+                "its handle, not the circular ring body."
+            )
+        ),
+        pick_frame=10,
+        place_frame=20,
+        track_map=(
+            _build_generalized_test_track_map()
+        ),
+        coordinates=(
+            _build_generalized_test_coordinates()
+        ),
+        demonstration_bin_order="left_to_right",
+        perception_mode="generalized",
+    )
+
+
+def test_validate_generalized_plan_rejects_empty_grasp_instruction():
+    with pytest.raises(
+        ValueError,
+        match="empty grasp_instruction",
+    ):
+        validate_plan(
+            plan=_build_generalized_test_plan(
+                "   "
+            ),
+            pick_frame=10,
+            place_frame=20,
+            track_map=(
+                _build_generalized_test_track_map()
+            ),
+            coordinates=(
+                _build_generalized_test_coordinates()
+            ),
+            demonstration_bin_order="left_to_right",
+            perception_mode="generalized",
+        )
+
+
+def test_validate_generalized_plan_requires_detector_label_in_grasp_instruction():
+    with pytest.raises(
+        ValueError,
+        match=(
+            "must explicitly name the exact "
+            "picked_detector_label"
+        ),
+    ):
+        validate_plan(
+            plan=_build_generalized_test_plan(
+                "Pick up the object by grasping its handle."
+            ),
+            pick_frame=10,
+            place_frame=20,
+            track_map=(
+                _build_generalized_test_track_map()
+            ),
+            coordinates=(
+                _build_generalized_test_coordinates()
+            ),
+            demonstration_bin_order="left_to_right",
+            perception_mode="generalized",
         )

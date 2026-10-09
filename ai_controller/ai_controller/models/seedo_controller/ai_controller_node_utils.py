@@ -521,3 +521,258 @@ def gripper_joint_position_to_raw(
             raw_position
         )
     )
+
+def transform_msg_to_matrix(
+    transform,
+) -> np.ndarray:
+    """
+    Convert a geometry_msgs TransformStamped into a 4x4 matrix.
+
+    The returned matrix maps points from source_frame into target_frame.
+    """
+
+    t = transform.transform.translation
+    q = transform.transform.rotation
+
+    quat = np.array(
+        [
+            q.x,
+            q.y,
+            q.z,
+            q.w,
+        ],
+        dtype=np.float64,
+    )
+
+    matrix = np.eye(
+        4,
+        dtype=np.float64,
+    )
+
+    matrix[
+        :3,
+        :3,
+    ] = _quat2mat(
+        quat
+    )
+
+    matrix[
+        :3,
+        3,
+    ] = np.array(
+        [
+            t.x,
+            t.y,
+            t.z,
+        ],
+        dtype=np.float64,
+    )
+
+    return matrix
+
+
+def transform_dict_to_matrix(
+    transform,
+) -> np.ndarray:
+    """
+    Convert the SeeDo rotation/translation transform representation
+    into a homogeneous 4x4 matrix.
+    """
+
+    matrix = np.eye(
+        4,
+        dtype=np.float64,
+    )
+
+    matrix[
+        :3,
+        :3,
+    ] = np.asarray(
+        transform[
+            "rotation"
+        ],
+        dtype=np.float64,
+    )
+
+    matrix[
+        :3,
+        3,
+    ] = np.asarray(
+        transform[
+            "translation"
+        ],
+        dtype=np.float64,
+    )
+
+    return matrix
+
+
+def get_seedo_base_to_gripper_camera_transform(
+    node,
+) -> np.ndarray:
+    """
+    Return the current base_link <- eye-in-hand optical-camera transform.
+    """
+
+    transform = lookup_transform(
+        node,
+        node.frame_id,
+        node.seedo_gripper_optical_frame,
+    )
+
+    return transform_msg_to_matrix(
+        transform
+    )
+
+def wait_for_seedo_grasp_runtime_data(
+    node,
+    timeout: float = 10.0,
+) -> None:
+    """
+    Wait for a NEW eye-in-hand RGB-D pair and for the corresponding
+    CameraInfo to be available.
+
+    Clearing the event guarantees that grasp planning does not reuse
+    the frame captured before the reach primitive completed.
+    """
+
+    node.seedo_gripper_rgbd_event.clear()
+
+    deadline = (
+        time.monotonic()
+        + timeout
+    )
+
+    while time.monotonic() < deadline:
+
+        with node.seedo_record_lock:
+            rgb_ready = (
+                "eye_in_hand"
+                in node.seedo_record_rgb_msgs
+            )
+
+            depth_ready = (
+                "eye_in_hand"
+                in node.seedo_record_depth_msgs
+            )
+
+        camera_info_ready = (
+            node.seedo_gripper_camera_info_msg
+            is not None
+        )
+
+        fresh_pair_ready = (
+            node.seedo_gripper_rgbd_event.is_set()
+        )
+
+        if (
+            fresh_pair_ready
+            and rgb_ready
+            and depth_ready
+            and camera_info_ready
+        ):
+            return
+
+        time.sleep(
+            0.01
+        )
+
+    raise TimeoutError(
+        "Timed out waiting for fresh eye-in-hand "
+        "RGB-D + CameraInfo data for grasp planning."
+    )
+
+def get_seedo_grasp_runtime_input(
+    node,
+    base_to_table_transform,
+):
+    """
+    Build the runtime input required by GraspPlanner.
+    """
+
+    with node.seedo_record_lock:
+
+        if (
+            "eye_in_hand"
+            not in node.seedo_record_rgb_msgs
+        ):
+            raise RuntimeError(
+                "Eye-in-hand RGB frame is not available."
+            )
+
+        if (
+            "eye_in_hand"
+            not in node.seedo_record_depth_msgs
+        ):
+            raise RuntimeError(
+                "Eye-in-hand depth frame is not available."
+            )
+
+        rgb_msg = (
+            node.seedo_record_rgb_msgs[
+                "eye_in_hand"
+            ]
+        )
+
+        depth_msg = (
+            node.seedo_record_depth_msgs[
+                "eye_in_hand"
+            ]
+        )
+
+    if node.seedo_gripper_camera_info_msg is None:
+        raise RuntimeError(
+            "Eye-in-hand CameraInfo is not available."
+        )
+
+    rgb_image = (
+        node.bridge.imgmsg_to_cv2(
+            rgb_msg,
+            desired_encoding="rgb8",
+        )
+    )
+
+    depth_image = (
+        node.bridge.imgmsg_to_cv2(
+            depth_msg,
+            desired_encoding="passthrough",
+        )
+    )
+
+    camera_info = (
+        node.seedo_gripper_camera_info_msg
+    )
+
+    camera_matrix = np.asarray(
+        camera_info.k,
+        dtype=np.float64,
+    ).reshape(
+        3,
+        3,
+    )
+
+    T_base_camera = (
+        get_seedo_base_to_gripper_camera_transform(
+            node
+        )
+    )
+
+    T_base_table = (
+        transform_dict_to_matrix(
+            base_to_table_transform
+        )
+    )
+
+    return {
+        "rgb_image": np.asarray(
+            rgb_image,
+            dtype=np.uint8,
+        ),
+        "depth_image": np.asarray(
+            depth_image,
+            dtype=np.float32,
+        ),
+        "camera_matrix": camera_matrix,
+        "T_base_camera": T_base_camera,
+        "T_base_table": T_base_table,
+    }

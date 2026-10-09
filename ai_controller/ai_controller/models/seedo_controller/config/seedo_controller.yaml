@@ -139,3 +139,31 @@ motion_layer:
   gripper_closed_position: 0.8
 
   object_y_offset: -0.04
+
+grasp_planner:
+  num_runs: 20
+  seed: 42
+
+  confidence_threshold: 0.4
+  semantic_radius_px: 50.0
+
+  max_approach_tilt_deg: 45.0
+  max_wrist_rotation_deg: 45.0
+
+  depth_min: 0.15
+  depth_max: 0.60
+  bottom_ignore_px: 30
+
+  # Disabled in the validated tests.
+  surface_snap: 0.0
+
+  finger_collision_check: true
+
+  # Robotiq 2F-85 collision model.
+  gripper_opening_m: 0.085
+  finger_thickness_m: 0.031214
+  finger_width_m: 0.027000
+  finger_z_min_m: 0.0483
+  finger_z_max_m: 0.1053
+  collision_margin_m: 0.002
+  collision_min_points: 3

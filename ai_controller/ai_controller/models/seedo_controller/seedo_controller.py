@@ -40,6 +40,10 @@ from ai_controller.models.seedo_controller.lmp_generator import (
 from ai_controller.models.seedo_controller.motion_layer import (
     SeeDoMotionLayer,
 )
+from ai_controller.utils.grasping.grasp_planner import (
+    GraspPlanner,
+    GraspPlan,
+)
 from results import (
     ActionPlanningResult,
     ActionStep,
@@ -85,6 +89,9 @@ class SeeDoController(AIController):
         self.perception_result = None
         self.scene_state: SceneState | None = None
         self.primitive_plan: PrimitivePlan | None = None
+
+        self.grasp_plan: GraspPlan | None = None
+        self.grasp_plan_target: str | None = None
 
         # Structured scene representation of the runtime scene.
         self.runtime_structured_scene: StructuredScene | None = None
@@ -193,6 +200,12 @@ class SeeDoController(AIController):
                             "",
                         )
                     ),
+                    grasp_instruction=str(
+                        step.get(
+                            "grasp_instruction",
+                            "",
+                        )
+                    ).strip(),
                 )
             )
 
@@ -439,6 +452,11 @@ class SeeDoController(AIController):
             {},
         )
 
+        grasp_config = config.get(
+            "grasp_planner",
+            {},
+        )
+
         motion_config = config.get(
             "motion_layer",
             {},
@@ -641,6 +659,123 @@ class SeeDoController(AIController):
             perception_mode=self.perception_mode,
         )
 
+        self.grasp_planner = GraspPlanner(
+            m2t2_config_path=grasp_config.get(
+                "m2t2_config_path"
+            ),
+            graspmolmo_config_path=grasp_config.get(
+                "graspmolmo_config_path"
+            ),
+            num_runs=int(
+                grasp_config.get(
+                    "num_runs",
+                    20,
+                )
+            ),
+            seed=int(
+                grasp_config.get(
+                    "seed",
+                    42,
+                )
+            ),
+            confidence_threshold=float(
+                grasp_config.get(
+                    "confidence_threshold",
+                    0.4,
+                )
+            ),
+            semantic_radius_px=float(
+                grasp_config.get(
+                    "semantic_radius_px",
+                    50.0,
+                )
+            ),
+            max_approach_tilt_deg=float(
+                grasp_config.get(
+                    "max_approach_tilt_deg",
+                    45.0,
+                )
+            ),
+            max_wrist_rotation_deg=float(
+                grasp_config.get(
+                    "max_wrist_rotation_deg",
+                    45.0,
+                )
+            ),
+            depth_min=float(
+                grasp_config.get(
+                    "depth_min",
+                    0.15,
+                )
+            ),
+            depth_max=float(
+                grasp_config.get(
+                    "depth_max",
+                    0.60,
+                )
+            ),
+            bottom_ignore_px=int(
+                grasp_config.get(
+                    "bottom_ignore_px",
+                    30,
+                )
+            ),
+            surface_snap=float(
+                grasp_config.get(
+                    "surface_snap",
+                    0.0,
+                )
+            ),
+            finger_collision_check=bool(
+                grasp_config.get(
+                    "finger_collision_check",
+                    True,
+                )
+            ),
+            gripper_opening_m=float(
+                grasp_config.get(
+                    "gripper_opening_m",
+                    0.085,
+                )
+            ),
+            finger_thickness_m=float(
+                grasp_config.get(
+                    "finger_thickness_m",
+                    0.031214,
+                )
+            ),
+            finger_width_m=float(
+                grasp_config.get(
+                    "finger_width_m",
+                    0.027000,
+                )
+            ),
+            finger_z_min_m=float(
+                grasp_config.get(
+                    "finger_z_min_m",
+                    0.0483,
+                )
+            ),
+            finger_z_max_m=float(
+                grasp_config.get(
+                    "finger_z_max_m",
+                    0.1053,
+                )
+            ),
+            collision_margin_m=float(
+                grasp_config.get(
+                    "collision_margin_m",
+                    0.002,
+                )
+            ),
+            collision_min_points=int(
+                grasp_config.get(
+                    "collision_min_points",
+                    3,
+                )
+            ),
+        )
+
         self.motion_layer = SeeDoMotionLayer(
             grasp_orientation=motion_config.get(
                 "grasp_orientation",
@@ -715,6 +850,7 @@ class SeeDoController(AIController):
             "replicability_checker": self.replicability_checker,
             "lmp_generator": self.lmp_generator,
             "motion_layer": self.motion_layer,
+            "grasp_planner": self.grasp_planner,
         }
 
     def move_model_to_device(
@@ -771,6 +907,8 @@ class SeeDoController(AIController):
         self.action_plan = None
         self.scene_state = None
         self.primitive_plan = None
+        self.grasp_plan = None
+        self.grasp_plan_target = None
         self.demo_structured_scene = None
         self.runtime_structured_scene = None
         self.structural_matching_result = None
@@ -819,7 +957,115 @@ class SeeDoController(AIController):
                 input_data["robot_state"]
             )
 
+        if "grasp_input" in input_data:
+            processed_input["grasp_input"] = (
+                input_data["grasp_input"]
+            )
+
         return processed_input
+
+    def _resolve_grasp_action_step(
+        self,
+        primitive_step,
+    ) -> tuple[int, ActionStep, str]:
+        """
+        Resolve the ActionStep associated with the pick target of
+        the current approaching primitive.
+        """
+
+        if self.action_plan is None:
+            raise RuntimeError(
+                "Action plan is not available."
+            )
+
+        target = str(
+            primitive_step.arguments.get(
+                "target",
+                "",
+            )
+        ).strip()
+
+        if not target:
+            raise RuntimeError(
+                "The approaching primitive does not contain "
+                "a target argument."
+            )
+
+        normalized_target = (
+            target.casefold()
+        )
+
+        # In generalized mode the ReplicabilityChecker already
+        # provides the authoritative mapping:
+        #
+        # ActionStep -> runtime pick object.
+        if self.perception_mode == "generalized":
+
+            if self.replicability_result is None:
+                raise RuntimeError(
+                    "ReplicabilityResult is not available "
+                    "while resolving the grasp target."
+                )
+
+            matches = [
+                resolved_target
+                for resolved_target
+                in self.replicability_result.resolved_targets
+                if (
+                    str(
+                        resolved_target.runtime_pick_object_id
+                    )
+                    .strip()
+                    .casefold()
+                    == normalized_target
+                )
+            ]
+
+            if len(matches) != 1:
+                raise RuntimeError(
+                    "Could not uniquely associate the approaching "
+                    f"target {target!r} with an ActionStep. "
+                    f"Matches: {len(matches)}."
+                )
+
+            action_step_index = int(
+                matches[
+                    0
+                ].action_step_index
+            )
+
+            if not (
+                0
+                <= action_step_index
+                < len(self.action_plan.steps)
+            ):
+                raise RuntimeError(
+                    "Resolved ActionStep index is outside "
+                    "the action plan: "
+                    f"{action_step_index}."
+                )
+
+            return (
+                action_step_index,
+                self.action_plan.steps[
+                    action_step_index
+                ],
+                target,
+            )
+
+        # Current prior-guided executions normally contain a
+        # single pick/place action.
+        if len(self.action_plan.steps) == 1:
+            return (
+                0,
+                self.action_plan.steps[0],
+                target,
+            )
+
+        raise RuntimeError(
+            "Cannot uniquely associate the approaching primitive "
+            f"target {target!r} with one ActionStep."
+        )
 
     def inference(
         self,
@@ -1056,9 +1302,202 @@ class SeeDoController(AIController):
             primitive_index
         ]
 
-        self.execution_status = "executing"
-
         try:
+
+            # ---------------------------------------------------------
+            # Task-oriented grasp planning
+            #
+            # Run exactly after REACH has been physically completed
+            # and immediately before APPROACHING is translated.
+            # ---------------------------------------------------------
+
+            if (
+                primitive_step.name
+                .strip()
+                .lower()
+                == "approaching"
+            ):
+                grasp_input = processed_input.get(
+                    "grasp_input"
+                )
+
+                if grasp_input is None:
+                    raise ValueError(
+                        "SeeDo approaching requires a fresh "
+                        "eye-in-hand grasp_input."
+                    )
+
+                robot_state = processed_input.get(
+                    "robot_state"
+                )
+
+                if robot_state is None:
+                    raise ValueError(
+                        "SeeDo grasp planning requires robot_state."
+                    )
+
+                current_position = robot_state.get(
+                    EEF_POS_NAME
+                )
+
+                current_orientation = robot_state.get(
+                    EEF_QUAT_NAME
+                )
+
+                if current_position is None:
+                    raise ValueError(
+                        "SeeDo grasp planning robot_state does not "
+                        f"contain {EEF_POS_NAME!r}."
+                    )
+
+                if current_orientation is None:
+                    raise ValueError(
+                        "SeeDo grasp planning robot_state does not "
+                        f"contain {EEF_QUAT_NAME!r}."
+                    )
+
+                (
+                    action_step_index,
+                    action_step,
+                    grasp_target,
+                ) = self._resolve_grasp_action_step(
+                    primitive_step
+                )
+
+                grasp_instruction = str(
+                    action_step.grasp_instruction
+                ).strip()
+
+                if not grasp_instruction:
+                    raise RuntimeError(
+                        "The ActionStep associated with the "
+                        "approaching primitive contains an empty "
+                        "grasp_instruction."
+                    )
+
+                required_grasp_inputs = (
+                    "rgb_image",
+                    "depth_image",
+                    "camera_matrix",
+                    "T_base_camera",
+                    "T_base_table",
+                )
+
+                missing_grasp_inputs = [
+                    key
+                    for key in required_grasp_inputs
+                    if key not in grasp_input
+                ]
+
+                if missing_grasp_inputs:
+                    raise ValueError(
+                        "Missing GraspPlanner runtime inputs: "
+                        + ", ".join(
+                            missing_grasp_inputs
+                        )
+                    )
+
+                self.execution_status = (
+                    "planning_grasp"
+                )
+
+                print()
+                print(
+                    "[GRASP] Planning grasp for:",
+                    grasp_target,
+                )
+
+                print(
+                    "[GRASP] Instruction:",
+                    grasp_instruction,
+                )
+
+                with TIMING.measure(
+                    "grasp_planning"
+                ):
+                    self.grasp_plan = (
+                        self.grasp_planner.plan(
+                            rgb_image=(
+                                grasp_input[
+                                    "rgb_image"
+                                ]
+                            ),
+                            depth_image=(
+                                grasp_input[
+                                    "depth_image"
+                                ]
+                            ),
+                            camera_matrix=(
+                                grasp_input[
+                                    "camera_matrix"
+                                ]
+                            ),
+                            T_base_camera=(
+                                grasp_input[
+                                    "T_base_camera"
+                                ]
+                            ),
+                            T_base_table=(
+                                grasp_input[
+                                    "T_base_table"
+                                ]
+                            ),
+                            current_tcp_position=(
+                                current_position
+                            ),
+                            current_tcp_orientation=(
+                                current_orientation
+                            ),
+                            grasp_instruction=(
+                                grasp_instruction
+                            ),
+                            artifacts_dir=(
+                                self.artifacts_dir
+                                / "grasp_planner"
+                                / (
+                                    f"action_"
+                                    f"{action_step_index:02d}"
+                                )
+                            ),
+                        )
+                    )
+
+                self.grasp_plan_target = (
+                    grasp_target
+                )
+
+                print(
+                    "[GRASP] Selected M2T2 index:",
+                    self.grasp_plan.selected_m2t2_index,
+                )
+
+                print(
+                    "[GRASP] Confidence:",
+                    self.grasp_plan.confidence,
+                )
+
+                print(
+                    "[GRASP] Semantic point:",
+                    self.grasp_plan.semantic_point_px,
+                )
+
+                print(
+                    "[GRASP] Position base:",
+                    self.grasp_plan.grasp_position_base,
+                )
+
+                print(
+                    "[GRASP] Orientation base:",
+                    self.grasp_plan.grasp_orientation_base,
+                )
+
+                print()
+
+            # ---------------------------------------------------------
+            # Primitive -> robot actions
+            # ---------------------------------------------------------
+
+            self.execution_status = "executing"
 
             with TIMING.measure(
                 "motion_layer"
@@ -1067,6 +1506,7 @@ class SeeDoController(AIController):
                     primitive_step=primitive_step,
                     scene_state=self.scene_state,
                 )
+
         except Exception as exc:
             self.execution_status = "failed"
             self.execution_error = str(exc)
@@ -1167,6 +1607,8 @@ class SeeDoController(AIController):
             self.action_plan = None
             self.scene_state = None
             self.primitive_plan = None
+            self.grasp_plan = None
+            self.grasp_plan_target = None
             self.demo_structured_scene = None
             self.runtime_structured_scene = None
             self.structural_matching_result = None
@@ -1205,6 +1647,8 @@ class SeeDoController(AIController):
         self.action_plan = None
         self.scene_state = None
         self.primitive_plan = None
+        self.grasp_plan = None
+        self.grasp_plan_target = None
         self.demo_structured_scene = None
         self.runtime_structured_scene = None
         self.structural_matching_result = None
