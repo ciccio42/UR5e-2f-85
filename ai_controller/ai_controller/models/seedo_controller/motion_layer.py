@@ -42,6 +42,7 @@ class SeeDoMotionLayer:
         object_y_offset: float = -0.06,
         assembly_alignment_z_offset: float = 0.135,
         assembly_insertion_z_offset: float = -0.11,
+        grasp_planning_enabled: bool = True,
     ) -> None:
         self.grasp_orientation = np.asarray(
             grasp_orientation,
@@ -70,6 +71,10 @@ class SeeDoMotionLayer:
         )
 
         self.object_y_offset = float(object_y_offset)
+
+        self.grasp_planning_enabled = bool(
+            grasp_planning_enabled
+        )
 
         self.assembly_alignment_z_offset = float(
             assembly_alignment_z_offset
@@ -326,27 +331,59 @@ class SeeDoMotionLayer:
         primitive_step: PrimitiveStep,
         scene_state: SceneState,
     ) -> list[np.ndarray]:
-        # Validate that the symbolic target exists in the current scene.
-        self._resolve_target(
+
+        target = self._resolve_target(
             primitive_step,
             scene_state,
         )
 
-        if (
-            self.active_grasp_position is None
-            or self.active_grasp_orientation is None
-        ):
-            raise RuntimeError(
-                "No active grasp pose is available for the "
-                "approaching primitive."
+        # ---------------------------------------------------------
+        # Grasp-aware approaching
+        # ---------------------------------------------------------
+
+        if self.grasp_planning_enabled:
+
+            if (
+                self.active_grasp_position is None
+                or self.active_grasp_orientation is None
+            ):
+                raise RuntimeError(
+                    "Grasp planning is enabled but no active grasp "
+                    "pose is available for the approaching primitive."
+                )
+
+            return self._move_linear(
+                target_position=(
+                    self.active_grasp_position
+                ),
+                target_orientation=(
+                    self.active_grasp_orientation
+                ),
             )
 
+        # ---------------------------------------------------------
+        # Legacy approaching
+        #
+        # Used when task-oriented grasp refinement is disabled.
+        # ---------------------------------------------------------
+
+        target_position = np.asarray(
+            target.position_base,
+            dtype=np.float64,
+        ).copy()
+
+        target_position[1] += (
+            self.object_y_offset
+        )
+
+        target_position[2] += (
+            self.approach_z_offset
+        )
+
         return self._move_linear(
-            target_position=(
-                self.active_grasp_position
-            ),
+            target_position=target_position,
             target_orientation=(
-                self.active_grasp_orientation
+                self.grasp_orientation
             ),
         )
 

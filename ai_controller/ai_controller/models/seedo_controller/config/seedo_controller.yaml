@@ -141,6 +141,18 @@ motion_layer:
   object_y_offset: -0.04
 
 grasp_planner:
+
+  # Enable/disable task-oriented grasp refinement.
+  #
+  # true:
+  #   use the eye-in-hand camera with GraspMolmo + M2T2.
+  #
+  # false:
+  #   skip grasp refinement and use the legacy Motion Layer
+  #   approaching behavior.
+  enabled: true
+
+
   num_runs: 20
   seed: 42
 

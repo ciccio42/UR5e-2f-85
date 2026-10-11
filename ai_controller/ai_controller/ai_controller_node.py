@@ -1540,6 +1540,7 @@ class AIControllerNode(Node):
                     pause_executor_for_grasp = False
 
                     if (
+                        self.controller.grasp_planning_enabled and
                         primitive_step.name.strip().lower()
                         == "approaching"
                     ):

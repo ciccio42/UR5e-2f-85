@@ -457,6 +457,13 @@ class SeeDoController(AIController):
             {},
         )
 
+        self.grasp_planning_enabled = bool(
+            grasp_config.get(
+                "enabled",
+                True,
+            )
+        )
+
         motion_config = config.get(
             "motion_layer",
             {},
@@ -659,128 +666,131 @@ class SeeDoController(AIController):
             perception_mode=self.perception_mode,
         )
 
-        self.grasp_planner = GraspPlanner(
-            m2t2_config_path=grasp_config.get(
-                "m2t2_config_path"
-            ),
-            graspmolmo_config_path=grasp_config.get(
-                "graspmolmo_config_path"
-            ),
-            num_runs=int(
-                grasp_config.get(
-                    "num_runs",
-                    20,
-                )
-            ),
-            seed=int(
-                grasp_config.get(
-                    "seed",
-                    42,
-                )
-            ),
-            confidence_threshold=float(
-                grasp_config.get(
-                    "confidence_threshold",
-                    0.4,
-                )
-            ),
-            semantic_radius_px=float(
-                grasp_config.get(
-                    "semantic_radius_px",
-                    50.0,
-                )
-            ),
-            max_approach_tilt_deg=float(
-                grasp_config.get(
-                    "max_approach_tilt_deg",
-                    45.0,
-                )
-            ),
-            max_wrist_rotation_deg=float(
-                grasp_config.get(
-                    "max_wrist_rotation_deg",
-                    45.0,
-                )
-            ),
-            m2t2_gripper_depth_m=float(
-                grasp_config.get(
-                    "m2t2_gripper_depth_m",
-                    0.1034,
-                )
-            ),
-            depth_min=float(
-                grasp_config.get(
-                    "depth_min",
-                    0.15,
-                )
-            ),
-            depth_max=float(
-                grasp_config.get(
-                    "depth_max",
-                    0.60,
-                )
-            ),
-            bottom_ignore_px=int(
-                grasp_config.get(
-                    "bottom_ignore_px",
-                    30,
-                )
-            ),
-            surface_snap=float(
-                grasp_config.get(
-                    "surface_snap",
-                    0.0,
-                )
-            ),
-            finger_collision_check=bool(
-                grasp_config.get(
-                    "finger_collision_check",
-                    True,
-                )
-            ),
-            gripper_opening_m=float(
-                grasp_config.get(
-                    "gripper_opening_m",
-                    0.085,
-                )
-            ),
-            finger_thickness_m=float(
-                grasp_config.get(
-                    "finger_thickness_m",
-                    0.031214,
-                )
-            ),
-            finger_width_m=float(
-                grasp_config.get(
-                    "finger_width_m",
-                    0.027000,
-                )
-            ),
-            finger_z_min_m=float(
-                grasp_config.get(
-                    "finger_z_min_m",
-                    0.0483,
-                )
-            ),
-            finger_z_max_m=float(
-                grasp_config.get(
-                    "finger_z_max_m",
-                    0.1053,
-                )
-            ),
-            collision_margin_m=float(
-                grasp_config.get(
-                    "collision_margin_m",
-                    0.002,
-                )
-            ),
-            collision_min_points=int(
-                grasp_config.get(
-                    "collision_min_points",
-                    3,
-                )
-            ),
-        )
+        if self.grasp_planning_enabled:
+            self.grasp_planner = GraspPlanner(
+                m2t2_config_path=grasp_config.get(
+                    "m2t2_config_path"
+                ),
+                graspmolmo_config_path=grasp_config.get(
+                    "graspmolmo_config_path"
+                ),
+                num_runs=int(
+                    grasp_config.get(
+                        "num_runs",
+                        20,
+                    )
+                ),
+                seed=int(
+                    grasp_config.get(
+                        "seed",
+                        42,
+                    )
+                ),
+                confidence_threshold=float(
+                    grasp_config.get(
+                        "confidence_threshold",
+                        0.4,
+                    )
+                ),
+                semantic_radius_px=float(
+                    grasp_config.get(
+                        "semantic_radius_px",
+                        50.0,
+                    )
+                ),
+                max_approach_tilt_deg=float(
+                    grasp_config.get(
+                        "max_approach_tilt_deg",
+                        45.0,
+                    )
+                ),
+                max_wrist_rotation_deg=float(
+                    grasp_config.get(
+                        "max_wrist_rotation_deg",
+                        45.0,
+                    )
+                ),
+                m2t2_gripper_depth_m=float(
+                    grasp_config.get(
+                        "m2t2_gripper_depth_m",
+                        0.1034,
+                    )
+                ),
+                depth_min=float(
+                    grasp_config.get(
+                        "depth_min",
+                        0.15,
+                    )
+                ),
+                depth_max=float(
+                    grasp_config.get(
+                        "depth_max",
+                        0.60,
+                    )
+                ),
+                bottom_ignore_px=int(
+                    grasp_config.get(
+                        "bottom_ignore_px",
+                        30,
+                    )
+                ),
+                surface_snap=float(
+                    grasp_config.get(
+                        "surface_snap",
+                        0.0,
+                    )
+                ),
+                finger_collision_check=bool(
+                    grasp_config.get(
+                        "finger_collision_check",
+                        True,
+                    )
+                ),
+                gripper_opening_m=float(
+                    grasp_config.get(
+                        "gripper_opening_m",
+                        0.085,
+                    )
+                ),
+                finger_thickness_m=float(
+                    grasp_config.get(
+                        "finger_thickness_m",
+                        0.031214,
+                    )
+                ),
+                finger_width_m=float(
+                    grasp_config.get(
+                        "finger_width_m",
+                        0.027000,
+                    )
+                ),
+                finger_z_min_m=float(
+                    grasp_config.get(
+                        "finger_z_min_m",
+                        0.0483,
+                    )
+                ),
+                finger_z_max_m=float(
+                    grasp_config.get(
+                        "finger_z_max_m",
+                        0.1053,
+                    )
+                ),
+                collision_margin_m=float(
+                    grasp_config.get(
+                        "collision_margin_m",
+                        0.002,
+                    )
+                ),
+                collision_min_points=int(
+                    grasp_config.get(
+                        "collision_min_points",
+                        3,
+                    )
+                ),
+            )
+        else:
+            self.grasp_planner = None
 
         self.motion_layer = SeeDoMotionLayer(
             grasp_orientation=motion_config.get(
@@ -839,6 +849,9 @@ class SeeDoController(AIController):
                     "object_y_offset",
                     -0.06,
                 )
+            ),
+            grasp_planning_enabled=(
+                self.grasp_planning_enabled
             ),
         )
 
@@ -1318,11 +1331,19 @@ class SeeDoController(AIController):
             # ---------------------------------------------------------
 
             if (
+                self.grasp_planning_enabled and
                 primitive_step.name
                 .strip()
                 .lower()
                 == "approaching"
             ):
+
+                if self.grasp_planner is None:
+                    raise RuntimeError(
+                        "Grasp planning is enabled but "
+                        "GraspPlanner is not initialized."
+                    )
+                
                 grasp_input = processed_input.get(
                     "grasp_input"
                 )

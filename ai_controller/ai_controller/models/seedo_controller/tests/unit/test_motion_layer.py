@@ -562,13 +562,82 @@ def test_approaching_uses_active_grasp_pose(
         atol=1e-9,
     )
 
+def test_approaching_uses_legacy_target_when_grasp_disabled(
+    monkeypatch,
+):
+    layer = _motion_layer(
+        grasp_planning_enabled=False,
+    )
+
+    _reset(layer)
+
+    captured = {}
+
+    _install_fake_move_linear(
+        monkeypatch,
+        layer,
+        captured,
+    )
+
+    target_position = (
+        0.4,
+        0.5,
+        0.6,
+    )
+
+    layer.translate(
+        primitive_step=_primitive(
+            "approaching"
+        ),
+        scene_state=_scene_state(
+            _scene_object(
+                "target",
+                position_base=target_position,
+            )
+        ),
+    )
+
+    expected_position = np.array(
+        [
+            0.4,
+            0.44,
+            0.62,
+        ],
+        dtype=np.float64,
+    )
+
+    expected_orientation = np.array(
+        [
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    np.testing.assert_allclose(
+        captured["target_position"],
+        expected_position,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        captured["target_orientation"],
+        expected_orientation,
+        atol=1e-9,
+    )
+
+    assert layer.active_grasp_position is None
+    assert layer.active_grasp_orientation is None
+
 def test_approaching_requires_active_grasp_pose():
     layer = _motion_layer()
     _reset(layer)
 
     with pytest.raises(
         RuntimeError,
-        match="No active grasp pose",
+        match="no active grasp pose",
     ):
         layer.translate(
             primitive_step=_primitive(
