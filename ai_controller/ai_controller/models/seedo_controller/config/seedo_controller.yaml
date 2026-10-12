@@ -130,7 +130,18 @@ motion_layer:
     - 0.010251021036213035
 
   min_step: 0.02
-  reach_hover_height: 0.15
+  reach_hover_height: 0.18
+
+  # Distance before the final grasp pose used for pregrasp.
+  pregrasp_distance: 0.08
+
+  # Small extra penetration along the M2T2 approach direction.
+  grasp_depth_offset: 0.005
+
+  # Retreat after closing the gripper, along the opposite
+  # direction of the M2T2 approach.
+  retreat_distance: 0.04
+
   approach_z_offset: 0.0
   release_height_offset: 0.10
   lift_height: 0.15
@@ -159,7 +170,7 @@ grasp_planner:
   confidence_threshold: 0.4
   semantic_radius_px: 50.0
 
-  max_approach_tilt_deg: 45.0
+  max_approach_tilt_deg: 30.0
   max_wrist_rotation_deg: 45.0
 
   # M2T2 grasp-frame depth.
@@ -176,7 +187,7 @@ grasp_planner:
   # Disabled in the validated tests.
   surface_snap: 0.0
 
-  finger_collision_check: true
+  finger_collision_check: false
 
   # Robotiq 2F-85 collision model.
   gripper_opening_m: 0.085

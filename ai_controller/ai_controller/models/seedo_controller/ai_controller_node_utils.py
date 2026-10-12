@@ -313,6 +313,8 @@ def get_seedo_dataset_status(
         "lift_up": "picking",
         "moving": "moving",
         "placing": "placing",
+        "aligning": "placing",
+        "inserting": "placing",
     }
 
     primitive_name = str(

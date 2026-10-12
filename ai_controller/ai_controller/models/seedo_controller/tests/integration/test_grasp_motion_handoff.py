@@ -60,6 +60,10 @@ MIN_STEP = 0.02
 REACH_HOVER_HEIGHT = 0.15
 APPROACH_Z_OFFSET = 0.0
 
+PREGRASP_DISTANCE = 0.08
+GRASP_DEPTH_OFFSET = 0.005
+RETREAT_DISTANCE = 0.04
+
 RELEASE_HEIGHT_OFFSET = 0.10
 LIFT_HEIGHT = 0.15
 
@@ -101,6 +105,7 @@ def _load_grasp_plan(
     for key in (
         "tcp_position_base",
         "tcp_orientation_base",
+        "approach_direction_base",
     ):
         if key not in data:
             raise RuntimeError(
@@ -184,6 +189,16 @@ def _new_motion_layer() -> SeeDoMotionLayer:
         ),
         assembly_insertion_z_offset=(
             ASSEMBLY_INSERTION_Z_OFFSET
+        ),
+        grasp_planning_enabled=True,
+        pregrasp_distance=(
+            PREGRASP_DISTANCE
+        ),
+        grasp_depth_offset=(
+            GRASP_DEPTH_OFFSET
+        ),
+        retreat_distance=(
+            RETREAT_DISTANCE
         ),
     )
 
@@ -330,6 +345,23 @@ def _print_state(
     )
 
 
+def _print_vector(
+    name: str,
+    vector,
+) -> None:
+    vector = np.asarray(
+        vector,
+        dtype=np.float64,
+    )
+
+    print(
+        f"{name:28s}: "
+        f"[{vector[0]: .6f}, "
+        f"{vector[1]: .6f}, "
+        f"{vector[2]: .6f}]"
+    )
+
+
 # =====================================================================
 # Main test
 # =====================================================================
@@ -370,6 +402,13 @@ def run_test(
         dtype=np.float64,
     )
 
+    approach_direction = np.asarray(
+        grasp_plan[
+            "approach_direction_base"
+        ],
+        dtype=np.float64,
+    )
+
     if tcp_position.shape != (3,):
         raise AssertionError(
             "tcp_position_base must have shape (3,)."
@@ -378,6 +417,11 @@ def run_test(
     if tcp_orientation.shape != (4,):
         raise AssertionError(
             "tcp_orientation_base must have shape (4,)."
+        )
+
+    if approach_direction.shape != (3,):
+        raise AssertionError(
+            "approach_direction_base must have shape (3,)."
         )
 
     if not np.isfinite(
@@ -394,12 +438,55 @@ def run_test(
             "TCP orientation contains non-finite values."
         )
 
+    if not np.isfinite(
+        approach_direction
+    ).all():
+        raise AssertionError(
+            "Approach direction contains non-finite values."
+        )
+
     np.testing.assert_allclose(
         np.linalg.norm(
             tcp_orientation
         ),
         1.0,
         atol=1e-6,
+    )
+
+    approach_norm = np.linalg.norm(
+        approach_direction
+    )
+
+    if approach_norm < 1e-8:
+        raise AssertionError(
+            "approach_direction_base has near-zero norm."
+        )
+
+    approach_direction = (
+        approach_direction
+        / approach_norm
+    )
+
+    # =============================================================
+    # Expected grasp-aware geometry
+    # =============================================================
+
+    expected_final_grasp_position = (
+        tcp_position
+        + GRASP_DEPTH_OFFSET
+        * approach_direction
+    )
+
+    expected_pregrasp_position = (
+        expected_final_grasp_position
+        - PREGRASP_DISTANCE
+        * approach_direction
+    )
+
+    expected_retreat_position = (
+        expected_final_grasp_position
+        - RETREAT_DISTANCE
+        * approach_direction
     )
 
     print()
@@ -420,10 +507,82 @@ def run_test(
 
     print()
     print(
+        "[INPUT] approach direction:"
+    )
+    print(
+        approach_direction
+    )
+
+    print()
+    print(
         "[INPUT] symmetry flipped:",
         grasp_plan.get(
             "tcp_symmetry_flipped"
         ),
+    )
+
+    print()
+    print(
+        "-" * 78
+    )
+    print(
+        "EXPECTED GRASP GEOMETRY"
+    )
+    print(
+        "-" * 78
+    )
+
+    _print_vector(
+        "M2T2 TCP",
+        tcp_position,
+    )
+
+    _print_vector(
+        "Approach direction",
+        approach_direction,
+    )
+
+    _print_vector(
+        "Pregrasp",
+        expected_pregrasp_position,
+    )
+
+    _print_vector(
+        "Final grasp",
+        expected_final_grasp_position,
+    )
+
+    _print_vector(
+        "Retreat",
+        expected_retreat_position,
+    )
+
+    print()
+    print(
+        "TCP -> final grasp:",
+        np.linalg.norm(
+            expected_final_grasp_position
+            - tcp_position
+        ),
+        "m",
+    )
+
+    print(
+        "Pregrasp -> final grasp:",
+        np.linalg.norm(
+            expected_final_grasp_position
+            - expected_pregrasp_position
+        ),
+        "m",
+    )
+
+    print(
+        "Final grasp -> retreat:",
+        np.linalg.norm(
+            expected_retreat_position
+            - expected_final_grasp_position
+        ),
+        "m",
     )
 
     # =============================================================
@@ -600,6 +759,9 @@ def run_test(
         orientation=(
             tcp_orientation
         ),
+        approach_direction=(
+            approach_direction
+        ),
     )
 
     # =============================================================
@@ -627,11 +789,15 @@ def run_test(
         ]
     )
 
+    # -------------------------------------------------------------
+    # Verify final grasp position
+    # -------------------------------------------------------------
+
     np.testing.assert_allclose(
         approaching_final[
             :3
         ],
-        tcp_position,
+        expected_final_grasp_position,
         atol=1e-9,
     )
 
@@ -647,7 +813,98 @@ def run_test(
         GRIPPER_OPEN_POSITION,
     )
 
-    # Ensure that old SceneState geometry was not used.
+    # -------------------------------------------------------------
+    # Verify pregrasp waypoint
+    # -------------------------------------------------------------
+
+    approaching_positions = np.asarray(
+        [
+            action[:3]
+            for action in approaching_actions
+        ],
+        dtype=np.float64,
+    )
+
+    pregrasp_distances = np.linalg.norm(
+        approaching_positions
+        - expected_pregrasp_position,
+        axis=1,
+    )
+
+    pregrasp_index = int(
+        np.argmin(
+            pregrasp_distances
+        )
+    )
+
+    if (
+        pregrasp_distances[
+            pregrasp_index
+        ]
+        > 1e-9
+    ):
+        raise AssertionError(
+            "APPROACHING did not pass through "
+            "the expected pregrasp position."
+        )
+
+    pregrasp_action = (
+        approaching_actions[
+            pregrasp_index
+        ]
+    )
+
+    np.testing.assert_allclose(
+        pregrasp_action[
+            :3
+        ],
+        expected_pregrasp_position,
+        atol=1e-9,
+    )
+
+    _assert_quaternion_equivalent(
+        pregrasp_action[
+            3:7
+        ],
+        tcp_orientation,
+    )
+
+    # -------------------------------------------------------------
+    # Verify final approach direction
+    # -------------------------------------------------------------
+
+    actual_final_approach_vector = (
+        expected_final_grasp_position
+        - expected_pregrasp_position
+    )
+
+    actual_final_approach_distance = (
+        np.linalg.norm(
+            actual_final_approach_vector
+        )
+    )
+
+    np.testing.assert_allclose(
+        actual_final_approach_distance,
+        PREGRASP_DISTANCE,
+        atol=1e-9,
+    )
+
+    actual_final_approach_direction = (
+        actual_final_approach_vector
+        / actual_final_approach_distance
+    )
+
+    np.testing.assert_allclose(
+        actual_final_approach_direction,
+        approach_direction,
+        atol=1e-9,
+    )
+
+    # -------------------------------------------------------------
+    # Ensure old SceneState approach geometry was not used
+    # -------------------------------------------------------------
+
     legacy_approach_position = (
         object_position.copy()
     )
@@ -671,11 +928,12 @@ def run_test(
         )
 
     print(
-        "[PASS] APPROACHING uses GraspPlan TCP pose."
+        "[PASS] APPROACHING passes through pregrasp and "
+        "reaches the deeper final grasp pose."
     )
 
     # =============================================================
-    # PICK
+    # PICK + RETREAT
     # =============================================================
 
     pick_actions = (
@@ -695,42 +953,110 @@ def run_test(
 
     if len(
         pick_actions
-    ) != 1:
+    ) < 2:
         raise AssertionError(
-            "PICK must generate exactly one action."
+            "PICK must contain the gripper-close action "
+            "followed by retreat motion."
         )
 
-    pick_final = (
+    pick_close = (
         pick_actions[
             0
         ]
     )
 
+    retreat_final = (
+        pick_actions[
+            -1
+        ]
+    )
+
+    # -------------------------------------------------------------
+    # Gripper must close at final grasp pose
+    # -------------------------------------------------------------
+
     np.testing.assert_allclose(
-        pick_final[
+        pick_close[
             :3
         ],
-        tcp_position,
+        expected_final_grasp_position,
         atol=1e-9,
     )
 
     _assert_quaternion_equivalent(
-        pick_final[
+        pick_close[
             3:7
         ],
         tcp_orientation,
     )
 
     np.testing.assert_allclose(
-        pick_final[
+        pick_close[
             7
         ],
         GRIPPER_CLOSED_POSITION,
         atol=1e-9,
     )
 
+    # -------------------------------------------------------------
+    # Retreat must finish 4 cm along -approach_direction
+    # -------------------------------------------------------------
+
+    np.testing.assert_allclose(
+        retreat_final[
+            :3
+        ],
+        expected_retreat_position,
+        atol=1e-9,
+    )
+
+    _assert_quaternion_equivalent(
+        retreat_final[
+            3:7
+        ],
+        tcp_orientation,
+    )
+
+    _assert_actions_gripper(
+        pick_actions,
+        GRIPPER_CLOSED_POSITION,
+    )
+
+    actual_retreat_vector = (
+        retreat_final[
+            :3
+        ]
+        - pick_close[
+            :3
+        ]
+    )
+
+    actual_retreat_distance = (
+        np.linalg.norm(
+            actual_retreat_vector
+        )
+    )
+
+    np.testing.assert_allclose(
+        actual_retreat_distance,
+        RETREAT_DISTANCE,
+        atol=1e-9,
+    )
+
+    actual_retreat_direction = (
+        actual_retreat_vector
+        / actual_retreat_distance
+    )
+
+    np.testing.assert_allclose(
+        actual_retreat_direction,
+        -approach_direction,
+        atol=1e-9,
+    )
+
     print(
-        "[PASS] PICK preserves grasp pose and closes gripper."
+        "[PASS] PICK closes at final grasp pose and retreats "
+        "along -approach_direction."
     )
 
     # =============================================================
@@ -759,7 +1085,7 @@ def run_test(
     )
 
     expected_lift_position = (
-        tcp_position.copy()
+        expected_retreat_position.copy()
     )
 
     expected_lift_position[
@@ -784,8 +1110,20 @@ def run_test(
         GRIPPER_CLOSED_POSITION,
     )
 
+    np.testing.assert_allclose(
+        np.linalg.norm(
+            lift_final[
+                :3
+            ]
+            - expected_retreat_position
+        ),
+        LIFT_HEIGHT,
+        atol=1e-9,
+    )
+
     print(
-        "[PASS] LIFT_UP preserves grasp orientation and closed gripper."
+        "[PASS] LIFT_UP starts from retreat pose, moves vertically "
+        "and preserves grasp orientation and closed gripper."
     )
 
     # =============================================================
@@ -997,6 +1335,9 @@ def run_test(
         ),
         orientation=(
             tcp_orientation
+        ),
+        approach_direction=(
+            approach_direction
         ),
     )
 
@@ -1224,19 +1565,71 @@ def run_test(
         "=" * 78
     )
 
+    print()
+    print(
+        "Approach direction:",
+        approach_direction,
+    )
+
+    print(
+        "TCP -> final grasp:",
+        np.linalg.norm(
+            expected_final_grasp_position
+            - tcp_position
+        ),
+        "m",
+    )
+
+    print(
+        "Pregrasp -> final grasp:",
+        np.linalg.norm(
+            expected_final_grasp_position
+            - expected_pregrasp_position
+        ),
+        "m",
+    )
+
+    print(
+        "Final grasp -> retreat:",
+        np.linalg.norm(
+            expected_retreat_position
+            - expected_final_grasp_position
+        ),
+        "m",
+    )
+
+    print(
+        "Retreat -> lift:",
+        np.linalg.norm(
+            expected_lift_position
+            - expected_retreat_position
+        ),
+        "m",
+    )
+
     _print_state(
         "REACH",
         reach_final,
     )
 
     _print_state(
-        "APPROACHING",
+        "PREGRASP",
+        pregrasp_action,
+    )
+
+    _print_state(
+        "FINAL GRASP",
         approaching_final,
     )
 
     _print_state(
-        "PICK",
-        pick_final,
+        "PICK / CLOSE",
+        pick_close,
+    )
+
+    _print_state(
+        "RETREAT",
+        retreat_final,
     )
 
     _print_state(
@@ -1289,7 +1682,7 @@ def run_test(
     )
 
     print(
-        "  pick:",
+        "  pick + retreat:",
         len(
             pick_actions
         ),

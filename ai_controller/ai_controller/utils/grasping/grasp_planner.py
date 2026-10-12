@@ -827,11 +827,11 @@ class GraspPlanner:
         viable_indices = collision_free_indices
 
         # ---------------------------------------------------------
-        # 4. Ranking
+        # 5. Ranking
         #
-        # Primary:   minimum wrist rotation
-        # Secondary: maximum M2T2 confidence
-        # Tertiary:  minimum semantic distance
+        # Primary:   minimum semantic distance from GraspMolmo point
+        # Secondary: minimum wrist rotation
+        # Tertiary:  maximum M2T2 confidence
         # ---------------------------------------------------------
 
         semantic_distances = np.full(
@@ -846,16 +846,65 @@ class GraspPlanner:
 
         ranking = np.lexsort(
             (
-                semantic_distances[
-                    viable_indices
-                ],
                 -filtered_confidence[
                     viable_indices
                 ],
                 wrist_rotations[
                     viable_indices
                 ],
+                semantic_distances[
+                    viable_indices
+                ],
             )
+        )
+
+        selected_local_index = int(
+            viable_indices[
+                ranking[0]
+            ]
+        )
+
+        nearest_semantic_index = int(
+            viable_indices[
+                np.argmin(
+                    semantic_distances[
+                        viable_indices
+                    ]
+                )
+            ]
+        )
+
+        print(
+            "[GRASP] Viable candidates:",
+            len(viable_indices),
+        )
+
+        print(
+            "[GRASP] Minimum viable semantic distance:",
+            semantic_distances[
+                nearest_semantic_index
+            ],
+            "px",
+        )
+
+        print(
+            "[GRASP] Selected semantic distance:",
+            semantic_distances[
+                selected_local_index
+            ],
+            "px",
+        )
+
+        print(
+            "[GRASP] Selected is nearest viable candidate:",
+            selected_local_index
+            == nearest_semantic_index,
+        )
+
+        selected_original_index = int(
+            candidate_indices[
+                selected_local_index
+            ]
         )
 
         selected_local_index = int(

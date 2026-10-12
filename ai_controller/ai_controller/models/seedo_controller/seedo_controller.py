@@ -853,6 +853,24 @@ class SeeDoController(AIController):
             grasp_planning_enabled=(
                 self.grasp_planning_enabled
             ),
+            pregrasp_distance=float(
+                motion_config.get(
+                    "pregrasp_distance",
+                    0.08,
+                )
+            ),
+            grasp_depth_offset=float(
+                motion_config.get(
+                    "grasp_depth_offset",
+                    0.005,
+                )
+            ),
+            retreat_distance=float(
+                motion_config.get(
+                    "retreat_distance",
+                    0.04,
+                )
+            ),
         )
 
         self.pipeline_config = config
@@ -1495,6 +1513,9 @@ class SeeDoController(AIController):
                     ),
                     orientation=(
                         self.grasp_plan.tcp_orientation_base
+                    ),
+                    approach_direction=(
+                        self.grasp_plan.approach_direction_base
                     ),
                 )
 

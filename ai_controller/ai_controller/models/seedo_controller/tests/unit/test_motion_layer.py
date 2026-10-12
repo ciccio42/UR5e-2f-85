@@ -311,6 +311,11 @@ def test_reset_clears_active_grasp_pose():
             0.0,
             1.0,
         ),
+        approach_direction=(
+            0.0,
+            0.0,
+            -1.0,
+        ),
     )
 
     assert (
@@ -320,6 +325,11 @@ def test_reset_clears_active_grasp_pose():
 
     assert (
         layer.active_grasp_orientation
+        is not None
+    )
+
+    assert (
+        layer.active_approach_direction
         is not None
     )
 
@@ -332,6 +342,11 @@ def test_reset_clears_active_grasp_pose():
 
     assert (
         layer.active_grasp_orientation
+        is None
+    )
+
+    assert (
+        layer.active_approach_direction
         is None
     )
 
@@ -411,7 +426,9 @@ def test_translate_rejects_unsupported_primitive():
 
 
 def test_translate_strips_primitive_name():
-    layer = _motion_layer()
+    layer = _motion_layer(
+        grasp_planning_enabled=False,
+    )
     _reset(layer)
 
     actions = layer.translate(
@@ -491,10 +508,14 @@ def test_reach_builds_hover_target(
     )
 
 
-def test_approaching_uses_active_grasp_pose(
+def test_approaching_uses_pregrasp_and_final_grasp(
     monkeypatch,
 ):
-    layer = _motion_layer()
+    layer = _motion_layer(
+        pregrasp_distance=0.08,
+        grasp_depth_offset=0.005,
+    )
+
     _reset(layer)
 
     grasp_position = np.array(
@@ -516,48 +537,147 @@ def test_approaching_uses_active_grasp_pose(
         dtype=np.float64,
     )
 
+    approach_direction = np.array(
+        [
+            0.0,
+            0.0,
+            -1.0,
+        ],
+        dtype=np.float64,
+    )
+
     layer.set_grasp_pose(
         position=grasp_position,
         orientation=grasp_orientation,
+        approach_direction=approach_direction,
     )
 
-    captured = {}
+    calls = []
 
-    _install_fake_move_linear(
-        monkeypatch,
+    def fake_move_linear(
+        *,
+        target_position,
+        target_orientation,
+    ):
+        position = np.asarray(
+            target_position,
+            dtype=np.float64,
+        )
+
+        orientation = np.asarray(
+            target_orientation,
+            dtype=np.float64,
+        )
+
+        calls.append(
+            {
+                "position": position.copy(),
+                "orientation": orientation.copy(),
+            }
+        )
+
+        layer.current_pose = SimpleNamespace(
+            position=position.copy(),
+            orientation=orientation.copy(),
+        )
+
+        return [
+            layer._build_action(
+                position=position,
+                orientation=orientation,
+                gripper_position=(
+                    layer.current_gripper_position
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(
         layer,
-        captured,
+        "_move_linear",
+        fake_move_linear,
     )
 
-    layer.translate(
+    actions = layer.translate(
         primitive_step=_primitive(
             "approaching"
         ),
         scene_state=_scene_state(
             _scene_object(
-                "target",
-                # Deliberately unrelated to the grasp pose.
-                position_base=(
-                    9.0,
-                    9.0,
-                    9.0,
-                ),
+                "target"
             )
         ),
     )
 
+    expected_final_grasp = (
+        grasp_position
+        + 0.005 * approach_direction
+    )
+
+    expected_pregrasp = (
+        expected_final_grasp
+        - 0.08 * approach_direction
+    )
+
+    # ---------------------------------------------------------
+    # Two distinct motion phases
+    # ---------------------------------------------------------
+
+    assert len(calls) == 2
+
+    # Phase A:
+    # current pose -> pregrasp
     np.testing.assert_allclose(
-        captured[
-            "target_position"
-        ],
-        grasp_position,
+        calls[0]["position"],
+        expected_pregrasp,
         atol=1e-9,
     )
 
     np.testing.assert_allclose(
-        captured[
-            "target_orientation"
-        ],
+        calls[0]["orientation"],
+        grasp_orientation,
+        atol=1e-9,
+    )
+
+    # Phase B:
+    # pregrasp -> final grasp
+    np.testing.assert_allclose(
+        calls[1]["position"],
+        expected_final_grasp,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        calls[1]["orientation"],
+        grasp_orientation,
+        atol=1e-9,
+    )
+
+    # Final approach must be exactly 8 cm along
+    # the M2T2 approach direction.
+    np.testing.assert_allclose(
+        (
+            calls[1]["position"]
+            - calls[0]["position"]
+        ),
+        (
+            0.08
+            * approach_direction
+        ),
+        atol=1e-9,
+    )
+
+    # The fake generates one action per phase.
+    assert len(actions) == 2
+
+    # Motion Layer must finish at the deeper final grasp pose.
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        expected_final_grasp,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.orientation,
         grasp_orientation,
         atol=1e-9,
     )
@@ -637,7 +757,7 @@ def test_approaching_requires_active_grasp_pose():
 
     with pytest.raises(
         RuntimeError,
-        match="no active grasp pose",
+        match="active grasp pose or approach direction",
     ):
         layer.translate(
             primitive_step=_primitive(
@@ -652,7 +772,9 @@ def test_approaching_requires_active_grasp_pose():
 
 
 def test_pick_closes_gripper_without_moving():
-    layer = _motion_layer()
+    layer = _motion_layer(
+        grasp_planning_enabled=False,
+    )
 
     _reset(
         layer,
@@ -687,6 +809,97 @@ def test_pick_closes_gripper_without_moving():
 
     assert action[7] == pytest.approx(
         0.2
+    )
+
+    assert (
+        layer.current_gripper_position
+        == pytest.approx(0.2)
+    )
+
+def test_pick_closes_gripper_and_retreats_when_grasp_enabled(
+    monkeypatch,
+):
+    layer = _motion_layer(
+        grasp_planning_enabled=True,
+        retreat_distance=0.04,
+    )
+
+    _reset(
+        layer,
+        position=(
+            0.2,
+            0.4,
+            0.1,
+        ),
+    )
+
+    layer.active_approach_direction = np.array(
+        [
+            0.0,
+            0.0,
+            -1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    captured = {}
+
+    _install_fake_move_linear(
+        monkeypatch,
+        layer,
+        captured,
+    )
+
+    actions = layer.translate(
+        primitive_step=_primitive(
+            "pick"
+        ),
+        scene_state=_scene_state(
+            _scene_object(
+                "target"
+            )
+        ),
+    )
+
+    expected_retreat_position = np.array(
+        [
+            0.2,
+            0.4,
+            0.14,
+        ],
+        dtype=np.float64,
+    )
+
+    # First action: close gripper at grasp pose.
+    assert len(actions) == 2
+
+    np.testing.assert_allclose(
+        actions[0][:3],
+        np.array(
+            [
+                0.2,
+                0.4,
+                0.1,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    assert actions[0][7] == pytest.approx(
+        0.2
+    )
+
+    # Second action: retreat 4 cm along -approach_direction.
+    np.testing.assert_allclose(
+        captured["target_position"],
+        expected_retreat_position,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        expected_retreat_position,
+        atol=1e-9,
     )
 
     assert (
@@ -1373,7 +1586,9 @@ def test_extract_target_prefers_target_over_other_aliases():
 
 
 def test_translate_records_motion_history():
-    layer = _motion_layer()
+    layer = _motion_layer(
+        grasp_planning_enabled=False,
+    )
 
     _reset(layer)
 
@@ -1475,7 +1690,9 @@ def test_reset_with_artifacts_writes_initial_motion_plan(
 def test_translate_updates_motion_artifact(
     tmp_path,
 ):
-    layer = _motion_layer()
+    layer = _motion_layer(
+        grasp_planning_enabled=False,
+    )
 
     artifacts_dir = (
         tmp_path
