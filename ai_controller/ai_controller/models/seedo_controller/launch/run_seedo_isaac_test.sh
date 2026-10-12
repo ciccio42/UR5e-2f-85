@@ -160,7 +160,7 @@ fi
 
 TASK_ID="$(printf '%02d' "${TASK_ID_NUM}")"
 
-DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps_modified.mp4"
+DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
 
 if [[ ! -f "${DEMO_PATH}" ]]; then
     echo "ERROR: demonstration video not found:"
