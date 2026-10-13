@@ -163,6 +163,14 @@ grasp_planner:
   #   approaching behavior.
   enabled: true
 
+  # Grasp-generation backend.
+  #
+  # m2t2:
+  #   GraspMolmo + M2T2
+  #
+  # graspgenx:
+  #   GraspMolmo + GraspGen-X
+  backend: m2t2
 
   num_runs: 20
   seed: 42

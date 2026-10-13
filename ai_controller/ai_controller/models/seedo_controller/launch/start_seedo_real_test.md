@@ -85,6 +85,10 @@ docker run -it --rm \
   -v "$(pwd)/external/GraspMolmo":/opt/GraspMolmo \
   -v "$(pwd)/.runtime/m2t2_venv":/opt/m2t2_venv \
   -v "$(pwd)/external/M2T2":/opt/M2T2 \
+  -v "$(pwd)/external/GraspGenX":/opt/GraspGenX \
+  -v "$(pwd)/.runtime/graspgenx_venv":/opt/graspgenx_venv \
+  -v "$(pwd)/.runtime/graspgenx_checkpoints":/opt/graspgenx_checkpoints \
+  -v "$(pwd)/.runtime/graspgenx_gripper_descriptions":/opt/graspgenx_gripper_descriptions \
   -v "$(pwd)/../dataset_nut_assembly/video":/dataset_nut:ro \
   -v "$(pwd)/../test_dataset":/test_dataset:ro \
   -v "$(pwd)/../seedo_tests":/seedo_tests \

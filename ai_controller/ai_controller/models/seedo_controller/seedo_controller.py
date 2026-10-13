@@ -40,9 +40,11 @@ from ai_controller.models.seedo_controller.lmp_generator import (
 from ai_controller.models.seedo_controller.motion_layer import (
     SeeDoMotionLayer,
 )
-from ai_controller.utils.grasping.grasp_planner import (
-    GraspPlanner,
-    GraspPlan,
+from ai_controller.utils.grasping.grasp_planner_base import (
+    GraspPlanResult,
+)
+from ai_controller.utils.grasping.grasp_planner_factory import (
+    build_grasp_planner,
 )
 from results import (
     ActionPlanningResult,
@@ -90,7 +92,7 @@ class SeeDoController(AIController):
         self.scene_state: SceneState | None = None
         self.primitive_plan: PrimitivePlan | None = None
 
-        self.grasp_plan: GraspPlan | None = None
+        self.grasp_plan: GraspPlanResult | None = None
         self.grasp_plan_target: str | None = None
 
         # Structured scene representation of the runtime scene.
@@ -667,127 +669,8 @@ class SeeDoController(AIController):
         )
 
         if self.grasp_planning_enabled:
-            self.grasp_planner = GraspPlanner(
-                m2t2_config_path=grasp_config.get(
-                    "m2t2_config_path"
-                ),
-                graspmolmo_config_path=grasp_config.get(
-                    "graspmolmo_config_path"
-                ),
-                num_runs=int(
-                    grasp_config.get(
-                        "num_runs",
-                        20,
-                    )
-                ),
-                seed=int(
-                    grasp_config.get(
-                        "seed",
-                        42,
-                    )
-                ),
-                confidence_threshold=float(
-                    grasp_config.get(
-                        "confidence_threshold",
-                        0.4,
-                    )
-                ),
-                semantic_radius_px=float(
-                    grasp_config.get(
-                        "semantic_radius_px",
-                        50.0,
-                    )
-                ),
-                max_approach_tilt_deg=float(
-                    grasp_config.get(
-                        "max_approach_tilt_deg",
-                        45.0,
-                    )
-                ),
-                max_wrist_rotation_deg=float(
-                    grasp_config.get(
-                        "max_wrist_rotation_deg",
-                        45.0,
-                    )
-                ),
-                m2t2_gripper_depth_m=float(
-                    grasp_config.get(
-                        "m2t2_gripper_depth_m",
-                        0.1034,
-                    )
-                ),
-                depth_min=float(
-                    grasp_config.get(
-                        "depth_min",
-                        0.15,
-                    )
-                ),
-                depth_max=float(
-                    grasp_config.get(
-                        "depth_max",
-                        0.60,
-                    )
-                ),
-                bottom_ignore_px=int(
-                    grasp_config.get(
-                        "bottom_ignore_px",
-                        30,
-                    )
-                ),
-                surface_snap=float(
-                    grasp_config.get(
-                        "surface_snap",
-                        0.0,
-                    )
-                ),
-                finger_collision_check=bool(
-                    grasp_config.get(
-                        "finger_collision_check",
-                        True,
-                    )
-                ),
-                gripper_opening_m=float(
-                    grasp_config.get(
-                        "gripper_opening_m",
-                        0.085,
-                    )
-                ),
-                finger_thickness_m=float(
-                    grasp_config.get(
-                        "finger_thickness_m",
-                        0.031214,
-                    )
-                ),
-                finger_width_m=float(
-                    grasp_config.get(
-                        "finger_width_m",
-                        0.027000,
-                    )
-                ),
-                finger_z_min_m=float(
-                    grasp_config.get(
-                        "finger_z_min_m",
-                        0.0483,
-                    )
-                ),
-                finger_z_max_m=float(
-                    grasp_config.get(
-                        "finger_z_max_m",
-                        0.1053,
-                    )
-                ),
-                collision_margin_m=float(
-                    grasp_config.get(
-                        "collision_margin_m",
-                        0.002,
-                    )
-                ),
-                collision_min_points=int(
-                    grasp_config.get(
-                        "collision_min_points",
-                        3,
-                    )
-                ),
+            self.grasp_planner = build_grasp_planner(
+                grasp_config
             )
         else:
             self.grasp_planner = None
@@ -1524,8 +1407,8 @@ class SeeDoController(AIController):
                 )
 
                 print(
-                    "[GRASP] Selected M2T2 index:",
-                    self.grasp_plan.selected_m2t2_index,
+                    "[GRASP] Backend:",
+                    self.grasp_planner.backend_name,
                 )
 
                 print(
@@ -1539,16 +1422,6 @@ class SeeDoController(AIController):
                 )
 
                 print(
-                    "[GRASP] Position base:",
-                    self.grasp_plan.grasp_position_base,
-                )
-
-                print(
-                    "[GRASP] Orientation base:",
-                    self.grasp_plan.grasp_orientation_base,
-                )
-
-                print(
                     "[GRASP] TCP position base:",
                     self.grasp_plan.tcp_position_base,
                 )
@@ -1556,6 +1429,11 @@ class SeeDoController(AIController):
                 print(
                     "[GRASP] TCP orientation base:",
                     self.grasp_plan.tcp_orientation_base,
+                )
+
+                print(
+                    "[GRASP] Approach direction base:",
+                    self.grasp_plan.approach_direction_base,
                 )
 
                 print()

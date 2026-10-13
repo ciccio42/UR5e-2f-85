@@ -70,10 +70,9 @@ class GraspPlanner:
         GraspMolmo semantic 2-D grasp selection
                     +
         M2T2 generic 6-DoF grasp proposals
-
-    The selection policy intentionally mirrors the already validated
-    test_grasp_pipeline.py behavior.
     """
+
+    backend_name = "m2t2"
 
     def __init__(
         self,
