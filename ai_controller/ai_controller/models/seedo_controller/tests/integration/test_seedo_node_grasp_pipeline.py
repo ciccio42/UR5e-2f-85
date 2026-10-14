@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import shutil
 import sys
 import threading
 import time
@@ -101,6 +102,7 @@ DEFAULT_EXPECTED_PRIMITIVES = (
 )
 
 EXPECTED_M2T2_GRIPPER_DEPTH_M = 0.1034
+EXPECTED_GRASPGENX_FINGERTIP_DEPTH_M = 0.136
 
 
 # =====================================================================
@@ -1911,6 +1913,29 @@ def _install_grasp_instruction_override(
 # Validation helpers
 # =====================================================================
 
+def _get_grasp_backend_name(
+    planner,
+) -> str:
+    backend_name = str(
+        getattr(
+            planner,
+            "backend_name",
+            "",
+        )
+    ).strip().lower()
+
+    if backend_name not in (
+        "m2t2",
+        "graspgenx",
+    ):
+        raise AssertionError(
+            "Unexpected grasp-planning backend: "
+            f"{backend_name!r}."
+        )
+
+    return backend_name
+
+
 def _assert_quaternion_equivalent(
     actual,
     expected,
@@ -2159,21 +2184,45 @@ def _validate_pipeline_state(
         controller.grasp_plan
     )
 
-    for attribute in (
-        "grasp_pose_base",
-        "grasp_position_base",
-        "grasp_orientation_base",
-        "tcp_pose_base",
+    planner = (
+        controller.grasp_planner
+    )
+
+    backend_name = (
+        _get_grasp_backend_name(
+            planner
+        )
+    )
+
+    required_grasp_attributes = (
+        "grasp_instruction",
+        "semantic_point_px",
         "tcp_position_base",
         "tcp_orientation_base",
+        "approach_direction_base",
+        "confidence",
+    )
+
+    if backend_name == "m2t2":
+        required_grasp_attributes += (
+            "grasp_pose_base",
+            "grasp_position_base",
+            "grasp_orientation_base",
+            "tcp_pose_base",
+            "tcp_symmetry_flipped",
+            "selected_m2t2_index",
+        )
+
+    for attribute in (
+        required_grasp_attributes
     ):
         if not hasattr(
             grasp_plan,
             attribute,
         ):
             raise AssertionError(
-                "GraspPlan is missing new grasp-aware field "
-                f"{attribute!r}."
+                "GraspPlan is missing required grasp-aware field "
+                f"{attribute!r} for backend {backend_name!r}."
             )
 
     tcp_position = np.asarray(
@@ -2218,6 +2267,42 @@ def _validate_pipeline_state(
         atol=1e-6,
     )
 
+    approach_direction = np.asarray(
+        grasp_plan.approach_direction_base,
+        dtype=np.float64,
+    )
+
+    if approach_direction.shape != (3,):
+        raise AssertionError(
+            "GraspPlan.approach_direction_base "
+            "must have shape (3,)."
+        )
+
+    if not np.isfinite(
+        approach_direction
+    ).all():
+        raise AssertionError(
+            "GraspPlan approach direction "
+            "contains non-finite values."
+        )
+
+    approach_norm = float(
+        np.linalg.norm(
+            approach_direction
+        )
+    )
+
+    if approach_norm <= 1e-8:
+        raise AssertionError(
+            "GraspPlan approach direction "
+            "has near-zero norm."
+        )
+
+    approach_direction = (
+        approach_direction
+        / approach_norm
+    )
+
     if instruction_override:
         if (
             str(
@@ -2236,24 +2321,37 @@ def _validate_pipeline_state(
     # Verify YAML -> SeeDoController -> GraspPlanner propagation.
     # -------------------------------------------------------------
 
-    planner = (
-        controller.grasp_planner
-    )
+    if backend_name == "m2t2":
+        if not hasattr(
+            planner,
+            "m2t2_gripper_depth_m",
+        ):
+            raise AssertionError(
+                "M2T2 GraspPlanner does not expose "
+                "m2t2_gripper_depth_m."
+            )
 
-    if not hasattr(
-        planner,
-        "m2t2_gripper_depth_m",
-    ):
-        raise AssertionError(
-            "GraspPlanner does not expose "
-            "m2t2_gripper_depth_m."
+        np.testing.assert_allclose(
+            planner.m2t2_gripper_depth_m,
+            EXPECTED_M2T2_GRIPPER_DEPTH_M,
+            atol=1e-12,
         )
 
-    np.testing.assert_allclose(
-        planner.m2t2_gripper_depth_m,
-        EXPECTED_M2T2_GRIPPER_DEPTH_M,
-        atol=1e-12,
-    )
+    elif backend_name == "graspgenx":
+        if not hasattr(
+            planner,
+            "FINGERTIP_DEPTH",
+        ):
+            raise AssertionError(
+                "GraspGenXPlanner does not expose "
+                "FINGERTIP_DEPTH."
+            )
+
+        np.testing.assert_allclose(
+            planner.FINGERTIP_DEPTH,
+            EXPECTED_GRASPGENX_FINGERTIP_DEPTH_M,
+            atol=1e-12,
+        )
 
     # -------------------------------------------------------------
     # Verify GraspPlan -> MotionLayer handoff.
@@ -2262,6 +2360,16 @@ def _validate_pipeline_state(
     motion_layer = (
         controller.motion_layer
     )
+
+    if (
+        motion_layer.active_grasp_backend
+        != backend_name
+    ):
+        raise AssertionError(
+            "MotionLayer received the wrong grasp backend: "
+            f"expected={backend_name!r}, "
+            f"received={motion_layer.active_grasp_backend!r}."
+        )
 
     if (
         motion_layer.active_grasp_position
@@ -2306,6 +2414,34 @@ def _validate_pipeline_state(
     closed_position = float(
         motion_layer.gripper_closed_position
     )
+
+    if backend_name == "m2t2":
+        expected_approaching_position = (
+            tcp_position
+            + float(
+                motion_layer.grasp_depth_offset
+            )
+            * approach_direction
+        )
+
+        expected_pick_position = (
+            expected_approaching_position
+            - float(
+                motion_layer.retreat_distance
+            )
+            * approach_direction
+        )
+
+    else:
+        # GraspGen-X already returns the final robot TCP pose.
+        # No M2T2 depth offset or retreat is applied.
+        expected_approaching_position = (
+            tcp_position.copy()
+        )
+
+        expected_pick_position = (
+            tcp_position.copy()
+        )
 
     for (
         primitive_index,
@@ -2367,7 +2503,7 @@ def _validate_pipeline_state(
                 final_action[
                     :3
                 ],
-                tcp_position,
+                expected_approaching_position,
                 atol=1e-8,
             )
 
@@ -2395,7 +2531,7 @@ def _validate_pipeline_state(
                 final_action[
                     :3
                 ],
-                tcp_position,
+                expected_pick_position,
                 atol=1e-8,
             )
 
@@ -2413,6 +2549,16 @@ def _validate_pipeline_state(
                 closed_position,
                 atol=1e-9,
             )
+
+            if (
+                backend_name == "graspgenx"
+                and len(actions) != 1
+            ):
+                raise AssertionError(
+                    "GraspGen-X PICK must contain exactly "
+                    "one close action; no M2T2 retreat "
+                    "must be generated."
+                )
 
         elif primitive_name in (
             "lift_up",
@@ -2475,6 +2621,8 @@ def _validate_pipeline_state(
 
 def _validate_artifacts(
     artifacts_dir: Path,
+    *,
+    backend_name: str,
 ) -> Path:
     required_paths = (
         artifacts_dir
@@ -2561,24 +2709,61 @@ def _validate_artifacts(
             stream
         )
 
-    for key in (
+    required_keys = [
         "tcp_position_base",
         "tcp_orientation_base",
-        "m2t2_gripper_depth_m",
-    ):
+        "approach_direction_base",
+    ]
+
+    if backend_name == "m2t2":
+        required_keys.append(
+            "m2t2_gripper_depth_m"
+        )
+
+    elif backend_name == "graspgenx":
+        required_keys.extend(
+            [
+                "backend",
+                "confidence",
+                "fingertip_depth_m",
+            ]
+        )
+
+    for key in required_keys:
         if key not in payload:
             raise AssertionError(
                 "Grasp artifact is missing "
                 f"{key!r}."
             )
 
-    np.testing.assert_allclose(
-        payload[
-            "m2t2_gripper_depth_m"
-        ],
-        EXPECTED_M2T2_GRIPPER_DEPTH_M,
-        atol=1e-12,
-    )
+    if backend_name == "m2t2":
+        np.testing.assert_allclose(
+            payload[
+                "m2t2_gripper_depth_m"
+            ],
+            EXPECTED_M2T2_GRIPPER_DEPTH_M,
+            atol=1e-12,
+        )
+
+    elif backend_name == "graspgenx":
+        if (
+            str(
+                payload["backend"]
+            ).strip().lower()
+            != "graspgenx"
+        ):
+            raise AssertionError(
+                "GraspGen-X artifact contains "
+                "the wrong backend."
+            )
+
+        np.testing.assert_allclose(
+            payload[
+                "fingertip_depth_m"
+            ],
+            EXPECTED_GRASPGENX_FINGERTIP_DEPTH_M,
+            atol=1e-12,
+        )
 
     return grasp_plan_path
 
@@ -2586,51 +2771,25 @@ def _validate_artifacts(
 def _snapshot_rollouts(
     rollout_root: Path,
 ) -> tuple[
-    dict[Path, tuple[int, int]],
-    dict[Path, tuple[int, int]],
+    set[Path],
+    set[Path],
 ]:
-    """
-    Snapshot rollout files using both path and file metadata.
-
-    This allows the integration test to detect not only newly
-    created trajectories, but also an existing trajectory file
-    that has been overwritten by the current test run.
-    """
-
     if not rollout_root.exists():
         return (
-            {},
-            {},
+            set(),
+            set(),
         )
 
-    def snapshot(
-        pattern: str,
-    ) -> dict[
-        Path,
-        tuple[int, int],
-    ]:
-        result = {}
-
-        for path in rollout_root.rglob(
-            pattern
-        ):
-            stat = path.stat()
-
-            result[
-                path
-            ] = (
-                stat.st_mtime_ns,
-                stat.st_size,
-            )
-
-        return result
-
     return (
-        snapshot(
-            "traj_*.pkl"
+        set(
+            rollout_root.rglob(
+                "traj_*.pkl"
+            )
         ),
-        snapshot(
-            "traj_*.json"
+        set(
+            rollout_root.rglob(
+                "traj_*.json"
+            )
         ),
     )
 
@@ -2830,6 +2989,122 @@ def _resolve_inputs(
 
 
 # =====================================================================
+# Artifact snapshot
+# =====================================================================
+
+def _save_artifacts_next_to_rollout(
+    artifacts_dir: Path,
+    trajectory_path: Path,
+) -> Path:
+    """
+    Persist the artifacts generated by this integration run next to the
+    corresponding rollout PKL/JSON.
+
+    The top-level ``rollouts`` directory is intentionally not copied,
+    otherwise the snapshot would recursively contain the rollout tree itself.
+    """
+
+    artifacts_dir = Path(
+        artifacts_dir
+    ).expanduser().resolve()
+
+    trajectory_path = Path(
+        trajectory_path
+    ).expanduser().resolve()
+
+    snapshot_dir = (
+        trajectory_path.parent
+        / f"{trajectory_path.stem}_artifacts"
+    )
+
+    if snapshot_dir.exists():
+        shutil.rmtree(
+            snapshot_dir
+        )
+
+    snapshot_dir.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    artifact_names = (
+        "visual_prompting",
+        "demo_structured_scene",
+        "action_planning",
+        "scene_perceiver",
+        "scene_interpreter",
+        "runtime_structured_scene",
+        "structural_matching",
+        "replicability_check",
+        "lmp_generator",
+        "grasp_planner",
+        "motion_layer",
+        "timings.json",
+    )
+
+    copied = []
+
+    for name in artifact_names:
+        source = (
+            artifacts_dir
+            / name
+        )
+
+        if not source.exists():
+            continue
+
+        destination = (
+            snapshot_dir
+            / name
+        )
+
+        if source.is_dir():
+            shutil.copytree(
+                source,
+                destination,
+            )
+        else:
+            shutil.copy2(
+                source,
+                destination,
+            )
+
+        copied.append(
+            name
+        )
+
+    if not copied:
+        raise AssertionError(
+            "No artifacts were copied next to the saved rollout."
+        )
+
+    manifest = {
+        "trajectory": str(
+            trajectory_path
+        ),
+        "artifact_source": str(
+            artifacts_dir
+        ),
+        "copied_entries": copied,
+    }
+
+    with (
+        snapshot_dir
+        / "artifact_snapshot.json"
+    ).open(
+        "w",
+        encoding="utf-8",
+    ) as stream:
+        json.dump(
+            manifest,
+            stream,
+            indent=2,
+        )
+
+    return snapshot_dir
+
+
+# =====================================================================
 # Main test
 # =====================================================================
 
@@ -2995,20 +3270,48 @@ def run_test(
             .grasp_planner
         )
 
-        if not hasattr(
-            planner,
-            "m2t2_gripper_depth_m",
-        ):
-            raise AssertionError(
-                "Updated GraspPlanner does not expose "
-                "m2t2_gripper_depth_m."
+        backend_name = (
+            _get_grasp_backend_name(
+                planner
+            )
+        )
+
+        print(
+            "[INFO] Grasp backend:",
+            backend_name,
+        )
+
+        if backend_name == "m2t2":
+            if not hasattr(
+                planner,
+                "m2t2_gripper_depth_m",
+            ):
+                raise AssertionError(
+                    "M2T2 GraspPlanner does not expose "
+                    "m2t2_gripper_depth_m."
+                )
+
+            np.testing.assert_allclose(
+                planner.m2t2_gripper_depth_m,
+                EXPECTED_M2T2_GRIPPER_DEPTH_M,
+                atol=1e-12,
             )
 
-        np.testing.assert_allclose(
-            planner.m2t2_gripper_depth_m,
-            EXPECTED_M2T2_GRIPPER_DEPTH_M,
-            atol=1e-12,
-        )
+        elif backend_name == "graspgenx":
+            if not hasattr(
+                planner,
+                "FINGERTIP_DEPTH",
+            ):
+                raise AssertionError(
+                    "GraspGenXPlanner does not expose "
+                    "FINGERTIP_DEPTH."
+                )
+
+            np.testing.assert_allclose(
+                planner.FINGERTIP_DEPTH,
+                EXPECTED_GRASPGENX_FINGERTIP_DEPTH_M,
+                atol=1e-12,
+            )
 
         controller_node.demo_path = str(
             inputs[
@@ -3379,7 +3682,10 @@ def run_test(
             _validate_artifacts(
                 inputs[
                     "artifacts_dir"
-                ]
+                ],
+                backend_name=(
+                    backend_name
+                ),
             )
         )
 
@@ -3409,33 +3715,13 @@ def run_test(
         )
 
         new_pkl = sorted(
-            path
-            for (
-                path,
-                metadata,
-            )
-            in after_pkl.items()
-            if (
-                path not in before_pkl
-                or before_pkl[
-                    path
-                ] != metadata
-            )
+            after_pkl
+            - before_pkl
         )
 
         new_json = sorted(
-            path
-            for (
-                path,
-                metadata,
-            )
-            in after_json.items()
-            if (
-                path not in before_json
-                or before_json[
-                    path
-                ] != metadata
-            )
+            after_json
+            - before_json
         )
 
         if len(
@@ -3484,6 +3770,17 @@ def run_test(
             ]
         )
 
+        artifact_snapshot_dir = (
+            _save_artifacts_next_to_rollout(
+                inputs[
+                    "artifacts_dir"
+                ],
+                new_pkl[
+                    0
+                ],
+            )
+        )
+
         print(
             "[PASS] trajectory:",
             new_pkl[
@@ -3496,6 +3793,11 @@ def run_test(
             new_json[
                 0
             ],
+        )
+
+        print(
+            "[PASS] artifacts snapshot:",
+            artifact_snapshot_dir,
         )
 
         # ---------------------------------------------------------
@@ -3536,9 +3838,15 @@ def run_test(
         )
 
         print(
-            "M2T2 index:",
-            grasp_plan.selected_m2t2_index,
+            "Backend:",
+            backend_name,
         )
+
+        if backend_name == "m2t2":
+            print(
+                "M2T2 index:",
+                grasp_plan.selected_m2t2_index,
+            )
 
         print(
             "Confidence:",
@@ -3555,10 +3863,17 @@ def run_test(
             grasp_plan.tcp_orientation_base,
         )
 
-        print(
-            "Symmetry flipped:",
-            grasp_plan.tcp_symmetry_flipped,
-        )
+        if backend_name == "m2t2":
+            print(
+                "Symmetry flipped:",
+                grasp_plan.tcp_symmetry_flipped,
+            )
+
+        elif backend_name == "graspgenx":
+            print(
+                "Approach direction:",
+                grasp_plan.approach_direction_base,
+            )
 
         print()
         print(

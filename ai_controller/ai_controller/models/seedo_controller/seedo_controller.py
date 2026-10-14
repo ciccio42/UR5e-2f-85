@@ -1400,6 +1400,9 @@ class SeeDoController(AIController):
                     approach_direction=(
                         self.grasp_plan.approach_direction_base
                     ),
+                    backend_name=(
+                        self.grasp_planner.backend_name
+                    ),
                 )
 
                 self.grasp_plan_target = (

@@ -1750,3 +1750,265 @@ def test_translate_updates_motion_artifact(
     ] == pytest.approx(
         0.2
     )
+
+def test_graspgenx_approaching_uses_exact_tcp_pose(
+    monkeypatch,
+):
+    layer = _motion_layer(
+        grasp_planning_enabled=True,
+        pregrasp_distance=0.08,
+        grasp_depth_offset=0.005,
+    )
+
+    _reset(layer)
+
+    tcp_position = np.array(
+        [
+            -0.10693327,
+            0.46925381,
+            -0.05868659,
+        ],
+        dtype=np.float64,
+    )
+
+    tcp_orientation = np.array(
+        [
+            0.81915205,
+            -0.57357643,
+            0.0,
+            0.0,
+        ],
+        dtype=np.float64,
+    )
+
+    approach_direction = np.array(
+        [
+            0.0,
+            0.0,
+            -1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    layer.set_grasp_pose(
+        position=tcp_position,
+        orientation=tcp_orientation,
+        approach_direction=(
+            approach_direction
+        ),
+        backend_name="graspgenx",
+    )
+
+    calls = []
+
+    def fake_move_linear(
+        *,
+        target_position,
+        target_orientation,
+    ):
+        position = np.asarray(
+            target_position,
+            dtype=np.float64,
+        )
+
+        orientation = np.asarray(
+            target_orientation,
+            dtype=np.float64,
+        )
+
+        calls.append(
+            {
+                "position": position.copy(),
+                "orientation": orientation.copy(),
+            }
+        )
+
+        layer.current_pose = SimpleNamespace(
+            position=position.copy(),
+            orientation=orientation.copy(),
+        )
+
+        return [
+            layer._build_action(
+                position=position,
+                orientation=orientation,
+                gripper_position=(
+                    layer.current_gripper_position
+                ),
+            )
+        ]
+
+    monkeypatch.setattr(
+        layer,
+        "_move_linear",
+        fake_move_linear,
+    )
+
+    actions = layer.translate(
+        primitive_step=_primitive(
+            "approaching"
+        ),
+        scene_state=_scene_state(
+            _scene_object(
+                "target"
+            )
+        ),
+    )
+
+    # GraspGen-X must perform exactly one motion:
+    # current pose -> planner TCP.
+    assert len(calls) == 1
+    assert len(actions) == 1
+
+    np.testing.assert_allclose(
+        calls[0]["position"],
+        tcp_position,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        calls[0]["orientation"],
+        (
+            tcp_orientation
+            / np.linalg.norm(
+                tcp_orientation
+            )
+        ),
+        atol=1e-8,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        tcp_position,
+        atol=1e-9,
+    )
+
+    # Explicitly verify that the old M2T2
+    # +5 mm depth offset was NOT applied.
+    old_m2t2_final = (
+        tcp_position
+        + 0.005
+        * approach_direction
+    )
+
+    assert not np.allclose(
+        layer.current_pose.position,
+        old_m2t2_final,
+    )
+
+    assert (
+        layer.active_grasp_backend
+        == "graspgenx"
+    )
+
+
+def test_graspgenx_pick_closes_without_retreat(
+    monkeypatch,
+):
+    layer = _motion_layer(
+        grasp_planning_enabled=True,
+        retreat_distance=0.04,
+    )
+
+    tcp_position = np.array(
+        [
+            -0.10693327,
+            0.46925381,
+            -0.05868659,
+        ],
+        dtype=np.float64,
+    )
+
+    tcp_orientation = np.array(
+        [
+            0.81915205,
+            -0.57357643,
+            0.0,
+            0.0,
+        ],
+        dtype=np.float64,
+    )
+
+    approach_direction = np.array(
+        [
+            0.0,
+            0.0,
+            -1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    _reset(
+        layer,
+        position=tcp_position,
+        orientation=tcp_orientation,
+    )
+
+    layer.set_grasp_pose(
+        position=tcp_position,
+        orientation=tcp_orientation,
+        approach_direction=(
+            approach_direction
+        ),
+        backend_name="graspgenx",
+    )
+
+    def forbidden_move_linear(
+        *,
+        target_position,
+        target_orientation,
+    ):
+        raise AssertionError(
+            "GraspGen-X PICK must not perform "
+            "the M2T2 retreat motion."
+        )
+
+    monkeypatch.setattr(
+        layer,
+        "_move_linear",
+        forbidden_move_linear,
+    )
+
+    actions = layer.translate(
+        primitive_step=_primitive(
+            "pick"
+        ),
+        scene_state=_scene_state(
+            _scene_object(
+                "target"
+            )
+        ),
+    )
+
+    # PICK must only close the gripper.
+    assert len(actions) == 1
+
+    np.testing.assert_allclose(
+        actions[0][:3],
+        tcp_position,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        actions[0][3:7],
+        (
+            tcp_orientation
+            / np.linalg.norm(
+                tcp_orientation
+            )
+        ),
+        atol=1e-8,
+    )
+
+    assert (
+        actions[0][7]
+        == pytest.approx(
+            layer.gripper_closed_position
+        )
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        tcp_position,
+        atol=1e-9,
+    )

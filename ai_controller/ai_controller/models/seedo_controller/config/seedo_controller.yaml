@@ -170,13 +170,13 @@ grasp_planner:
   #
   # graspgenx:
   #   GraspMolmo + GraspGen-X
-  backend: m2t2
+  backend: graspgenx
 
   num_runs: 20
   seed: 42
 
   confidence_threshold: 0.4
-  semantic_radius_px: 50.0
+  semantic_radius_px: 100.0
 
   max_approach_tilt_deg: 30.0
   max_wrist_rotation_deg: 45.0
@@ -205,3 +205,11 @@ grasp_planner:
   finger_z_max_m: 0.1053
   collision_margin_m: 0.002
   collision_min_points: 3
+
+  # GraspGen-X
+  graspgenx_server_host: 127.0.0.1
+  graspgenx_server_port: 8782
+  graspgenx_gripper_name: robotiq_2f_85
+  graspgenx_num_grasps: 200
+  graspgenx_grasp_threshold: -1.0
+  graspgenx_topk_num_grasps: -1

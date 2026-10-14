@@ -7,6 +7,7 @@ import csv
 import json
 import sys
 from pathlib import Path
+import yaml
 
 import cv2
 import numpy as np
@@ -66,6 +67,44 @@ T_TCP_CAMERA = np.array(
     dtype=np.float64,
 )
 
+def load_transform_yaml(
+    path: Path,
+) -> np.ndarray:
+    path = (
+        Path(path)
+        .expanduser()
+        .resolve()
+    )
+
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Transform YAML does not exist: {path}"
+        )
+
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as stream:
+        data = yaml.safe_load(
+            stream
+        )
+
+    T = np.eye(
+        4,
+        dtype=np.float64,
+    )
+
+    T[:3, :3] = np.asarray(
+        data["rotation"],
+        dtype=np.float64,
+    )
+
+    T[:3, 3] = np.asarray(
+        data["translation"],
+        dtype=np.float64,
+    )
+
+    return T
 
 # =====================================================================
 # Rollout helpers
@@ -1261,6 +1300,18 @@ def main() -> None:
     )
 
     parser.add_argument(
+        "--base-to-table-transform",
+        type=Path,
+        default=None,
+        help=(
+            "Optional production base_link -> table_0 YAML. "
+            "When supplied, this transform is passed to "
+            "GraspGenXPlanner instead of the plane fitted "
+            "from the depth image."
+        ),
+    )
+
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -1421,6 +1472,22 @@ def main() -> None:
         )
     )
 
+    fitted_T_base_table = (
+        T_base_table.copy()
+    )
+
+    fitted_table_normal = (
+        table_normal.copy()
+    )
+
+    fitted_table_d = float(
+        table_d
+    )
+
+    fitted_table_origin = (
+        table_origin.copy()
+    )
+
     table_inlier_ratio = float(
         table_inlier_mask.mean()
     )
@@ -1492,6 +1559,132 @@ def main() -> None:
             ].max()
         ),
     )
+
+    # -----------------------------------------------------------------
+    # Select the table transform actually passed to GraspGen-X.
+    #
+    # If a production base_link -> table_0 transform is supplied,
+    # use exactly that transform for grasp safety evaluation.
+    #
+    # The depth-fitted plane above remains diagnostic only.
+    # -----------------------------------------------------------------
+
+    table_source = "depth_fit"
+
+    if args.base_to_table_transform is not None:
+        T_base_table = load_transform_yaml(
+            args.base_to_table_transform
+        )
+
+        table_source = "production_tf"
+
+        table_normal = (
+            T_base_table[
+                :3,
+                2,
+            ].copy()
+        )
+
+        table_normal /= np.linalg.norm(
+            table_normal
+        )
+
+        if table_normal[2] < 0.0:
+            table_normal = -table_normal
+
+        table_origin = (
+            T_base_table[
+                :3,
+                3,
+            ].copy()
+        )
+
+        table_d = -float(
+            np.dot(
+                table_normal,
+                table_origin,
+            )
+        )
+
+        normal_angle_deg = float(
+            np.degrees(
+                np.arccos(
+                    np.clip(
+                        np.dot(
+                            fitted_table_normal,
+                            table_normal,
+                        ),
+                        -1.0,
+                        1.0,
+                    )
+                )
+            )
+        )
+
+        fitted_origin_to_runtime_plane = abs(
+            float(
+                np.dot(
+                    table_normal,
+                    fitted_table_origin,
+                )
+                + table_d
+            )
+        )
+
+        print()
+        print(
+            "[TABLE] Using production TF for "
+            "GraspGen-X collision checks."
+        )
+        print(
+            "[TABLE] Transform YAML:",
+            args.base_to_table_transform,
+        )
+        print(
+            "[TABLE] Runtime normal:",
+            table_normal,
+        )
+        print(
+            "[TABLE] Runtime origin:",
+            table_origin,
+        )
+        print(
+            "[TABLE] Runtime d:",
+            table_d,
+        )
+        print(
+            "[TABLE] Fitted/runtime normal angle:",
+            f"{normal_angle_deg:.6f} deg",
+        )
+        print(
+            "[TABLE] Fitted origin -> runtime plane:",
+            f"{fitted_origin_to_runtime_plane * 1000.0:.3f} mm",
+        )
+
+        np.savez_compressed(
+            output_dir
+            / "runtime_table_transform.npz",
+            T_base_table=T_base_table,
+            table_normal_base=table_normal,
+            table_origin_base=table_origin,
+            table_d=np.asarray(
+                table_d,
+                dtype=np.float64,
+            ),
+            fitted_T_base_table=(
+                fitted_T_base_table
+            ),
+            fitted_table_normal_base=(
+                fitted_table_normal
+            ),
+            fitted_table_origin_base=(
+                fitted_table_origin
+            ),
+            fitted_table_d=np.asarray(
+                fitted_table_d,
+                dtype=np.float64,
+            ),
+        )
 
     # -----------------------------------------------------------------
     # Build the REAL backend and capture one real plan() execution
@@ -2604,6 +2797,10 @@ def main() -> None:
             T_base_camera.tolist()
         ),
         "table": {
+            "source": table_source,
+            "T_base_table": (
+                T_base_table.tolist()
+            ),
             "normal_base": (
                 table_normal.tolist()
             ),

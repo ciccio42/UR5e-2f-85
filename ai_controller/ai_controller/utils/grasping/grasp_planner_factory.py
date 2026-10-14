@@ -204,6 +204,18 @@ def build_grasp_planner(
                     42,
                 )
             ),
+            table_surface_offset_m=float(
+                grasp_config.get(
+                    "graspgenx_table_surface_offset_m",
+                    0.0,
+                )
+            ),
+            semantic_radius_px=float(
+                grasp_config.get(
+                    "semantic_radius_px",
+                    50.0,
+                )
+            ),
         )
 
     raise ValueError(

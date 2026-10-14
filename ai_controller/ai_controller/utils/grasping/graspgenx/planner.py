@@ -3,12 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import json
 
 from ai_controller.utils.grasping.graspgenx.client import (
     GraspGenXRemoteClient,
 )
 from ai_controller.utils.grasping.graspmolmo.client import (
     GraspMolmoClient,
+)
+
+from ai_controller.utils.grasping.graspgenx.artifacts import (
+    save_graspgenx_artifacts,
 )
 
 from dataclasses import dataclass
@@ -86,6 +91,17 @@ class GraspGenXPlanner:
 
     TABLE_SAFETY_MARGIN = 0.005
 
+    # Scene point-cloud collision validation. Table safety is already
+    # handled independently above, so 2 mm here is an intersection-like
+    # threshold rather than an extra table margin.
+    SCENE_COLLISION_THRESHOLD_M = 0.002
+    TARGET_COLLISION_THRESHOLD_M = 0.002
+    NUM_COLLISION_SAMPLES = 2000
+
+    # Retained only for compatibility with the current client/worker CLI.
+    # The full-resolution collision worker does NOT subsample the scene.
+    MAX_SCENE_COLLISION_POINTS = 8192
+
     MIN_DEPTH = 0.15
     MAX_DEPTH = 0.60
 
@@ -100,6 +116,9 @@ class GraspGenXPlanner:
         graspmolmo_config_path: str | Path | None = None,
         seed: int = 42,
         sam_checkpoint_path: str | Path = DEFAULT_SAM_CHECKPOINT,
+        table_surface_offset_m: float = 0.0,
+        semantic_radius_px: float = 50.0,
+        grasp_depth_offset_m: float = 0.005,
     ) -> None:
 
         self.num_grasps = int(
@@ -138,6 +157,201 @@ class GraspGenXPlanner:
 
         self._sam_predictor = None
 
+        self.table_surface_offset_m = float(
+            table_surface_offset_m
+        )
+
+        self.semantic_radius_px = float(
+            semantic_radius_px
+        )
+
+        # Positive values move every GraspGen-X candidate farther along
+        # its local +Z approach axis before any safety/semantic checks.
+        # For the top-down OBB grasps used here, +Z points downward,
+        # therefore 0.01 m means a 10 mm deeper grasp.
+        self.grasp_depth_offset_m = float(
+            grasp_depth_offset_m
+        )
+
+    def _get_semantic_grasp_point_base(
+        self,
+        grasp_base: np.ndarray,
+        target_point_cloud_base: np.ndarray,
+    ) -> np.ndarray | None:
+        grasp_base = np.asarray(
+            grasp_base,
+            dtype=np.float64,
+        )
+
+        point_cloud = np.asarray(
+            target_point_cloud_base,
+            dtype=np.float64,
+        )
+
+        rotation = grasp_base[
+            :3,
+            :3,
+        ]
+
+        translation = grasp_base[
+            :3,
+            3,
+        ]
+
+        sweep_center_local = np.asarray(
+            self.ROBOTIQ_SWEEP_VOLUME[
+                "offset_open"
+            ],
+            dtype=np.float64,
+        )
+
+        sweep_extents = np.asarray(
+            self.ROBOTIQ_SWEEP_VOLUME[
+                "extents_open"
+            ],
+            dtype=np.float64,
+        )
+
+        sweep_min = (
+            sweep_center_local
+            - sweep_extents / 2.0
+        )
+
+        sweep_max = (
+            sweep_center_local
+            + sweep_extents / 2.0
+        )
+
+        # base -> grasp local
+        local_points = (
+            point_cloud
+            - translation
+        ) @ rotation
+
+        inside = np.all(
+            (
+                local_points
+                >= sweep_min
+            )
+            & (
+                local_points
+                <= sweep_max
+            ),
+            axis=1,
+        )
+
+        # Center of the actual Robotiq sweep/contact volume,
+        # expressed in base_link.
+        reference_base = (
+            translation
+            + rotation
+            @ sweep_center_local
+        )
+
+        # The target must physically enter the intended open
+        # sweep/contact volume. Do not accept a grasp floating above
+        # or beside the target via a nearest-point fallback.
+        if not np.any(
+            inside
+        ):
+            return None
+
+        candidate_points = (
+            point_cloud[
+                inside
+            ]
+        )
+
+        squared_distances = np.sum(
+            (
+                candidate_points
+                - reference_base
+            )
+            ** 2,
+            axis=1,
+        )
+
+        return candidate_points[
+            int(
+                np.argmin(
+                    squared_distances
+                )
+            )
+        ].copy()
+
+    def _project_base_point_to_image(
+        self,
+        point_base: np.ndarray,
+        T_base_camera: np.ndarray,
+        camera_matrix: np.ndarray,
+    ) -> np.ndarray | None:
+
+        point_base = np.asarray(
+            point_base,
+            dtype=np.float64,
+        )
+
+        T_base_camera = np.asarray(
+            T_base_camera,
+            dtype=np.float64,
+        )
+
+        K = np.asarray(
+            camera_matrix,
+            dtype=np.float64,
+        )
+
+        T_camera_base = np.linalg.inv(
+            T_base_camera
+        )
+
+        point_camera = (
+            T_camera_base[
+                :3,
+                :3,
+            ]
+            @ point_base
+            + T_camera_base[
+                :3,
+                3,
+            ]
+        )
+
+        if (
+            not np.isfinite(
+                point_camera
+            ).all()
+            or point_camera[2] <= 0.0
+        ):
+            return None
+
+        u = (
+            K[0, 0]
+            * point_camera[0]
+            / point_camera[2]
+            + K[0, 2]
+        )
+
+        v = (
+            K[1, 1]
+            * point_camera[1]
+            / point_camera[2]
+            + K[1, 2]
+        )
+
+        if not np.isfinite(
+            [u, v]
+        ).all():
+            return None
+
+        return np.asarray(
+            [
+                u,
+                v,
+            ],
+            dtype=np.float64,
+        )
+
     def _get_sam_predictor(self):
         if self._sam_predictor is not None:
             return self._sam_predictor
@@ -170,6 +384,40 @@ class GraspGenXPlanner:
         )
 
         return self._sam_predictor
+
+    @classmethod
+    def _select_sam_mask_index(
+        cls,
+        masks: np.ndarray,
+        scores: np.ndarray,
+    ) -> int:
+
+        masks = np.asarray(
+            masks,
+            dtype=bool,
+        )
+
+        scores = np.asarray(
+            scores,
+            dtype=np.float64,
+        )
+
+        if len(masks) == 0:
+            raise RuntimeError(
+                "SAM returned no masks."
+            )
+
+        if len(masks) != len(scores):
+            raise ValueError(
+                "SAM masks and scores must have "
+                "the same length."
+            )
+
+        # Standard SAM behavior:
+        # choose the mask with the highest predicted quality.
+        return int(
+            np.argmax(scores)
+        )
 
     def _segment_target(
         self,
@@ -205,7 +453,7 @@ class GraspGenXPlanner:
             dtype=np.int32,
         )
 
-        masks, scores, _ = predictor.predict(
+        masks, scores, logits = predictor.predict(
             point_coords=point,
             point_labels=label,
             multimask_output=True,
@@ -216,14 +464,36 @@ class GraspGenXPlanner:
                 "SAM returned no masks."
             )
 
-        best_index = int(
-            np.argmax(
-                scores
+        best_index = (
+            self._select_sam_mask_index(
+                masks=masks,
+                scores=scores,
             )
         )
 
+        # Keep SAM diagnostics available for
+        # runtime artifact generation.
+        self._last_sam_masks = np.asarray(
+            masks
+        ).copy()
+
+        self._last_sam_scores = np.asarray(
+            scores,
+            dtype=np.float64,
+        ).copy()
+
+        self._last_sam_logits = np.asarray(
+            logits
+        ).copy()
+
+        self._last_sam_best_index = int(
+            best_index
+        )
+
         return np.asarray(
-            masks[best_index],
+            masks[
+                best_index
+            ],
             dtype=bool,
         )
 
@@ -356,6 +626,11 @@ class GraspGenXPlanner:
         confidences: np.ndarray,
         branch_tags: np.ndarray,
         T_base_table: np.ndarray,
+        semantic_point_px: np.ndarray,
+        T_base_camera: np.ndarray,
+        camera_matrix: np.ndarray,
+        target_point_cloud_base: np.ndarray,
+        background_scene_point_cloud_base: np.ndarray,
     ) -> int:
 
         grasps_base = np.asarray(
@@ -408,10 +683,18 @@ class GraspGenXPlanner:
             3,
         ]
 
+        # table_0 represents the physical tabletop plane.
+        # An optional offset can be applied along table +Z if needed.
+        table_surface_origin = (
+            table_origin
+            + self.table_surface_offset_m
+            * normal
+        )
+
         plane_d = -float(
             np.dot(
                 normal,
-                table_origin,
+                table_surface_origin,
             )
         )
 
@@ -479,11 +762,292 @@ class GraspGenXPlanner:
             else safe_indices
         )
 
-        return max(
-            candidates,
-            key=lambda index: float(
-                confidences[index]
+        semantic_point_px = np.asarray(
+            semantic_point_px,
+            dtype=np.float64,
+        )
+
+        semantic_candidates = []
+
+        semantic_distances_px = {}
+
+        target_contact_candidates = []
+
+        grasp_points_base = {}
+
+        # ---------------------------------------------------------
+        # 1. Require real target geometry inside the grasp sweep.
+        # ---------------------------------------------------------
+        for index in candidates:
+            grasp = grasps_base[
+                index
+            ]
+
+            grasp_point_base = (
+                self._get_semantic_grasp_point_base(
+                    grasp_base=grasp,
+                    target_point_cloud_base=(
+                        target_point_cloud_base
+                    ),
+                )
+            )
+
+            if grasp_point_base is None:
+                continue
+
+            target_contact_candidates.append(
+                index
+            )
+
+            grasp_points_base[
+                index
+            ] = grasp_point_base
+
+            grasp_point_px = (
+                self._project_base_point_to_image(
+                    point_base=grasp_point_base,
+                    T_base_camera=T_base_camera,
+                    camera_matrix=camera_matrix,
+                )
+            )
+
+            if grasp_point_px is None:
+                continue
+
+            distance_px = float(
+                np.linalg.norm(
+                    grasp_point_px
+                    - semantic_point_px
+                )
+            )
+
+            semantic_distances_px[
+                index
+            ] = distance_px
+
+            if (
+                distance_px
+                <= self.semantic_radius_px
+            ):
+                semantic_candidates.append(
+                    index
+                )
+
+        print(
+            "[GRASP] Table-safe OBB candidates:",
+            len(candidates),
+        )
+
+        print(
+            "[GRASP] Target-contact candidates:",
+            len(target_contact_candidates),
+        )
+
+        print(
+            "[GRASP] Semantic candidates before collision:",
+            len(semantic_candidates),
+        )
+
+        if not semantic_candidates:
+            nearest_distance = (
+                min(
+                    semantic_distances_px.values()
+                )
+                if semantic_distances_px
+                else float("inf")
+            )
+
+            raise RuntimeError(
+                "No target-contact GraspGen-X candidate lies "
+                f"within {self.semantic_radius_px:.1f} px "
+                "of the GraspMolmo point. "
+                f"Nearest candidate: "
+                f"{nearest_distance:.2f} px."
+            )
+
+        # ---------------------------------------------------------
+        # 2. Check only semantic candidates against the real
+        #    Robotiq collision mesh.
+        # ---------------------------------------------------------
+        (
+            collision_free_mask,
+            background_free_mask,
+            target_free_mask,
+        ) = self.client.filter_collision_free_grasps(
+            grasps_base=(
+                grasps_base[
+                    semantic_candidates
+                ]
             ),
+            background_scene_point_cloud_base=(
+                background_scene_point_cloud_base
+            ),
+            target_point_cloud_base=(
+                target_point_cloud_base
+            ),
+            sweep_volume_params=(
+                self.ROBOTIQ_SWEEP_VOLUME
+            ),
+            collision_threshold=(
+                self.SCENE_COLLISION_THRESHOLD_M
+            ),
+            target_collision_threshold=(
+                self.TARGET_COLLISION_THRESHOLD_M
+            ),
+            num_collision_samples=(
+                self.NUM_COLLISION_SAMPLES
+            ),
+            max_scene_points=(
+                self.MAX_SCENE_COLLISION_POINTS
+            ),
+            timeout=180.0,
+        )
+
+        background_free_candidates = [
+            index
+            for index, keep in zip(
+                semantic_candidates,
+                background_free_mask,
+                strict=True,
+            )
+            if keep
+        ]
+
+        target_self_free_candidates = [
+            index
+            for index, keep in zip(
+                semantic_candidates,
+                target_free_mask,
+                strict=True,
+            )
+            if keep
+        ]
+
+        collision_free_candidates = [
+            index
+            for index, keep in zip(
+                semantic_candidates,
+                collision_free_mask,
+                strict=True,
+            )
+            if keep
+        ]
+
+        print(
+            "[GRASP] Background-collision-free semantic candidates:",
+            len(background_free_candidates),
+        )
+
+        print(
+            "[GRASP] Target-self-collision-free semantic candidates:",
+            len(target_self_free_candidates),
+        )
+
+        print(
+            "[GRASP] Combined-collision-free semantic candidates:",
+            len(collision_free_candidates),
+        )
+
+        if not collision_free_candidates:
+            raise RuntimeError(
+                "All semantic GraspGen-X candidates collide "
+                "with scene or target geometry."
+            )
+
+        semantic_candidates = (
+            collision_free_candidates
+        )
+
+        selected_index = max(
+            semantic_candidates,
+            key=lambda index: float(
+                confidences[
+                    index
+                ]
+            ),
+        )
+
+        print(
+            "[GRASP] Selected semantic distance:",
+            semantic_distances_px[
+                selected_index
+            ],
+            "px",
+        )
+
+        return selected_index
+
+    @staticmethod
+    def _resolve_parallel_gripper_symmetry(
+        grasp_rotation_base: np.ndarray,
+        current_tcp_orientation: np.ndarray,
+    ) -> np.ndarray:
+        grasp_rotation_base = np.asarray(
+            grasp_rotation_base,
+            dtype=np.float64,
+        )
+
+        current_tcp_orientation = np.asarray(
+            current_tcp_orientation,
+            dtype=np.float64,
+        )
+
+        if grasp_rotation_base.shape != (3, 3):
+            raise ValueError(
+                "grasp_rotation_base must have shape (3, 3)."
+            )
+
+        if current_tcp_orientation.shape != (4,):
+            raise ValueError(
+                "current_tcp_orientation must have shape (4,)."
+            )
+
+        current_rotation = Rotation.from_quat(
+            current_tcp_orientation
+        )
+
+        # Parallel-jaw symmetry:
+        # rotating 180 degrees around local approach axis (+Z)
+        # swaps the two fingers but leaves the physical grasp equivalent.
+        symmetry_rotation = Rotation.from_euler(
+            "z",
+            180.0,
+            degrees=True,
+        ).as_matrix()
+
+        candidate_a = grasp_rotation_base
+
+        candidate_b = (
+            grasp_rotation_base
+            @ symmetry_rotation
+        )
+
+        def angular_distance(
+            candidate: np.ndarray,
+        ) -> float:
+            relative = (
+                current_rotation.inv()
+                * Rotation.from_matrix(
+                    candidate
+                )
+            )
+
+            return float(
+                relative.magnitude()
+            )
+
+        distance_a = angular_distance(
+            candidate_a
+        )
+
+        distance_b = angular_distance(
+            candidate_b
+        )
+
+        return (
+            candidate_b
+            if distance_b < distance_a
+            else candidate_a
         )
 
     def _generate_grasp_candidates_base(
@@ -576,6 +1140,10 @@ class GraspGenXPlanner:
             # keep every candidate so later stages
             # can apply geometric filtering.
             topk_num_grasps=-1,
+
+            # Official GraspMoE dense OBB sweep.
+            obb_density="dense",
+            obb_position_spacing_m=0.01,
 
             timeout=180.0,
         )
@@ -865,12 +1433,77 @@ class GraspGenXPlanner:
             ),
         )
 
+        semantic_point_camera = (
+            self._semantic_point_to_camera_point(
+                semantic_point_px=semantic_point_px,
+                depth_image=depth_image,
+                camera_matrix=camera_matrix,
+            )
+        )
+
+        semantic_point_base = (
+            semantic_point_camera.astype(
+                np.float64
+            )
+            @ T_base_camera[
+                :3,
+                :3,
+            ].T
+            + T_base_camera[
+                :3,
+                3,
+            ]
+        )
+
         target_point_cloud_camera = (
             self._mask_to_camera_point_cloud(
                 mask=target_mask,
                 depth_image=depth_image,
                 camera_matrix=camera_matrix,
             )
+        )
+
+        # Use the FULL eye-in-hand depth image as background collision
+        # geometry. Only pixels belonging to the selected SAM target mask
+        # are removed here; the target itself is checked separately by the
+        # target-self-collision path below.
+        #
+        # No image-space stride/subsampling is applied: every valid depth
+        # pixel in [MIN_DEPTH, MAX_DEPTH] outside the target mask becomes a
+        # 3D scene point.
+        background_scene_mask = (
+            ~target_mask
+        )
+
+        background_scene_point_cloud_camera = (
+            self._mask_to_camera_point_cloud(
+                mask=background_scene_mask,
+                depth_image=depth_image,
+                camera_matrix=camera_matrix,
+            )
+        )
+
+        background_scene_point_cloud_base = (
+            background_scene_point_cloud_camera.astype(
+                np.float64
+            )
+            @ T_base_camera[
+                :3,
+                :3,
+            ].T
+            + T_base_camera[
+                :3,
+                3,
+            ]
+        ).astype(
+            np.float32
+        )
+
+        print(
+            "[GRASP] Full-resolution background points:",
+            len(
+                background_scene_point_cloud_base
+            ),
         )
 
         (
@@ -885,12 +1518,134 @@ class GraspGenXPlanner:
             T_base_camera=T_base_camera,
         )
 
+        # ---------------------------------------------------------
+        # DEBUG: target / table height consistency
+        # ---------------------------------------------------------
+        table_normal = np.asarray(
+            T_base_table[:3, 2],
+            dtype=np.float64,
+        ).copy()
+
+        table_normal /= np.linalg.norm(
+            table_normal
+        )
+
+        if table_normal[2] < 0.0:
+            table_normal = -table_normal
+
+        table_origin = np.asarray(
+            T_base_table[:3, 3],
+            dtype=np.float64,
+        )
+
+        target_heights = (
+            np.asarray(
+                target_point_cloud_base,
+                dtype=np.float64,
+            )
+            - table_origin
+        ) @ table_normal
+
+        print(
+            "[DEPTH DEBUG] Target height above table [mm]: "
+            f"min={np.min(target_heights) * 1000.0:.2f}, "
+            f"p10={np.percentile(target_heights, 10) * 1000.0:.2f}, "
+            f"median={np.median(target_heights) * 1000.0:.2f}, "
+            f"p90={np.percentile(target_heights, 90) * 1000.0:.2f}, "
+            f"max={np.max(target_heights) * 1000.0:.2f}"
+        )
+
+        background_heights = (
+            np.asarray(
+                background_scene_point_cloud_base,
+                dtype=np.float64,
+            )
+            - table_origin
+        ) @ table_normal
+
+        near_table = background_heights[
+            np.abs(background_heights) < 0.020
+        ]
+
+        print(
+            "[DEPTH DEBUG] Background points within +/-20 mm of table:",
+            len(near_table),
+        )
+
+        if len(near_table) > 0:
+            print(
+                "[DEPTH DEBUG] Near-table height [mm]: "
+                f"median={np.median(near_table) * 1000.0:.2f}, "
+                f"mean={np.mean(near_table) * 1000.0:.2f}, "
+                f"std={np.std(near_table) * 1000.0:.2f}"
+            )
+
+        # Apply the desired extra grasp depth BEFORE every downstream
+        # geometric check. This is important: the table-clearance,
+        # target-contact, collision and semantic filters must validate
+        # the same pose that will eventually be sent to the Motion Layer.
+        grasps_base = np.asarray(
+            grasps_base,
+            dtype=np.float64,
+        ).copy()
+
+        if self.grasp_depth_offset_m != 0.0:
+            approach_axes = (
+                grasps_base[
+                    :,
+                    :3,
+                    2,
+                ]
+            )
+
+            approach_norms = np.linalg.norm(
+                approach_axes,
+                axis=1,
+                keepdims=True,
+            )
+
+            if np.any(
+                approach_norms <= 1e-12
+            ):
+                raise RuntimeError(
+                    "GraspGen-X returned a candidate with "
+                    "an invalid approach axis."
+                )
+
+            approach_axes = (
+                approach_axes
+                / approach_norms
+            )
+
+            grasps_base[
+                :,
+                :3,
+                3,
+            ] += (
+                self.grasp_depth_offset_m
+                * approach_axes
+            )
+
+        print(
+            "[GRASP] Depth offset:",
+            f"{self.grasp_depth_offset_m * 1000.0:.1f} mm",
+        )
+
         selected_index = (
             self._select_safe_grasp(
                 grasps_base=grasps_base,
                 confidences=confidences,
                 branch_tags=branch_tags,
                 T_base_table=T_base_table,
+                semantic_point_px=semantic_point_px,
+                T_base_camera=T_base_camera,
+                camera_matrix=camera_matrix,
+                target_point_cloud_base=(
+                    target_point_cloud_base
+                ),
+                background_scene_point_cloud_base=(
+                    background_scene_point_cloud_base
+                ),
             )
         )
 
@@ -929,12 +1684,23 @@ class GraspGenXPlanner:
             * approach_direction_base
         )
 
+        selected_rotation_base = (
+            self._resolve_parallel_gripper_symmetry(
+                grasp_rotation_base=(
+                    selected_grasp[
+                        :3,
+                        :3,
+                    ]
+                ),
+                current_tcp_orientation=(
+                    current_tcp_orientation
+                ),
+            )
+        )
+
         tcp_orientation_base = (
             Rotation.from_matrix(
-                selected_grasp[
-                    :3,
-                    :3,
-                ]
+                selected_rotation_base
             ).as_quat()
         )
 
@@ -944,7 +1710,96 @@ class GraspGenXPlanner:
             ]
         )
 
-        return GraspGenXPlanResult(
+        if artifacts_dir is not None:
+            save_graspgenx_artifacts(
+                artifacts_dir=(
+                    artifacts_dir
+                ),
+                rgb_image=(
+                    rgb_image
+                ),
+                depth_image=(
+                    depth_image
+                ),
+                camera_matrix=(
+                    camera_matrix
+                ),
+                T_base_camera=(
+                    T_base_camera
+                ),
+                T_base_table=(
+                    T_base_table
+                ),
+                semantic_point_px=(
+                    semantic_point_px
+                ),
+                target_mask=(
+                    target_mask
+                ),
+                target_point_cloud_camera=(
+                    target_point_cloud_camera
+                ),
+                target_point_cloud_base=(
+                    target_point_cloud_base
+                ),
+                grasps_base=(
+                    grasps_base
+                ),
+                confidences=(
+                    confidences
+                ),
+                branch_tags=(
+                    branch_tags
+                ),
+                selected_index=(
+                    selected_index
+                ),
+                tcp_position_base=(
+                    tcp_position_base
+                ),
+                tcp_orientation_base=(
+                    tcp_orientation_base
+                ),
+                approach_direction_base=(
+                    approach_direction_base
+                ),
+                fingertip_depth=(
+                    self.FINGERTIP_DEPTH
+                ),
+                gripper_opening=(
+                    self.ROBOTIQ_SWEEP_VOLUME[
+                        "extents_open"
+                    ][0]
+                ),
+                bbox_min=(
+                    self.ROBOTIQ_BBOX_MIN
+                ),
+                bbox_max=(
+                    self.ROBOTIQ_BBOX_MAX
+                ),
+                sam_masks=getattr(
+                    self,
+                    "_last_sam_masks",
+                    None,
+                ),
+                sam_scores=getattr(
+                    self,
+                    "_last_sam_scores",
+                    None,
+                ),
+                sam_logits=getattr(
+                    self,
+                    "_last_sam_logits",
+                    None,
+                ),
+                sam_best_index=getattr(
+                    self,
+                    "_last_sam_best_index",
+                    None,
+                ),
+            )
+
+        result = GraspGenXPlanResult(
             grasp_instruction=str(
                 grasp_instruction
             ),
@@ -966,3 +1821,66 @@ class GraspGenXPlanner:
             ),
             confidence=confidence,
         )
+
+        if artifacts_dir is not None:
+            artifacts_path = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            artifacts_path.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            payload = {
+                "backend": self.backend_name,
+                "grasp_instruction": (
+                    result.grasp_instruction
+                ),
+                "semantic_point_px": (
+                    result.semantic_point_px.tolist()
+                ),
+                "tcp_position_base": (
+                    result.tcp_position_base.tolist()
+                ),
+                "tcp_orientation_base": (
+                    result.tcp_orientation_base.tolist()
+                ),
+                "approach_direction_base": (
+                    result.approach_direction_base.tolist()
+                ),
+                "confidence": float(
+                    result.confidence
+                ),
+                "selected_grasp_index": int(
+                    selected_index
+                ),
+                "selected_branch": str(
+                    branch_tags[
+                        selected_index
+                    ]
+                ),
+                "fingertip_depth_m": float(
+                    self.FINGERTIP_DEPTH
+                ),
+                "grasp_depth_offset_m": float(
+                    self.grasp_depth_offset_m
+                ),
+            }
+
+            with (
+                artifacts_path
+                / "grasp_plan.json"
+            ).open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+                json.dump(
+                    payload,
+                    stream,
+                    indent=2,
+                )
+
+        return result

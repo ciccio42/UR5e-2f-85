@@ -373,3 +373,169 @@ def test_plan_end_to_end_unit(
         ],
         atol=1e-6,
     )
+
+def test_sam_mask_selection_prefers_compact_mask():
+    masks = np.zeros(
+        (
+            3,
+            120,
+            120,
+        ),
+        dtype=bool,
+    )
+
+    # Compact handle-like mask.
+    masks[
+        0,
+        10:41,
+        10:82,
+    ] = True
+    # area ~= 2232
+
+    # Whole-object alternatives.
+    masks[
+        1,
+        5:108,
+        0:120,
+    ] = True
+
+    masks[
+        2,
+        0:109,
+        0:120,
+    ] = True
+
+    scores = np.array(
+        [
+            0.9601,
+            0.9700,
+            0.9293,
+        ],
+        dtype=np.float64,
+    )
+
+    selected = (
+        GraspGenXPlanner
+        ._select_sam_mask_index(
+            masks=masks,
+            scores=scores,
+        )
+    )
+
+    assert selected == 0
+
+def test_sam_mask_selection_keeps_best_when_area_difference_is_small():
+    masks = np.zeros(
+        (
+            3,
+            100,
+            100,
+        ),
+        dtype=bool,
+    )
+
+    # Areas approximately representative
+    # of the cube case.
+    masks[
+        0
+    ].flat[
+        :7008
+    ] = True
+
+    masks[
+        1
+    ].flat[
+        :8688
+    ] = True
+
+    masks[
+        2
+    ].flat[
+        :8761
+    ] = True
+
+    scores = np.array(
+        [
+            0.96,
+            0.97,
+            0.98,
+        ],
+        dtype=np.float64,
+    )
+
+    selected = (
+        GraspGenXPlanner
+        ._select_sam_mask_index(
+            masks=masks,
+            scores=scores,
+        )
+    )
+
+    assert selected == 2
+
+def test_parallel_gripper_symmetry_selects_nearest_orientation():
+    current = Rotation.from_euler(
+        "z",
+        10.0,
+        degrees=True,
+    ).as_quat()
+
+    predicted = Rotation.from_euler(
+        "z",
+        190.0,
+        degrees=True,
+    ).as_matrix()
+
+    resolved = (
+        GraspGenXPlanner
+        ._resolve_parallel_gripper_symmetry(
+            grasp_rotation_base=predicted,
+            current_tcp_orientation=current,
+        )
+    )
+
+    relative = (
+        Rotation.from_quat(
+            current
+        ).inv()
+        * Rotation.from_matrix(
+            resolved
+        )
+    )
+
+    assert np.degrees(
+        relative.magnitude()
+    ) < 1e-6
+
+def test_parallel_gripper_symmetry_preserves_approach_axis():
+    current = Rotation.identity().as_quat()
+
+    predicted = Rotation.from_euler(
+        "xyz",
+        [
+            180.0,
+            0.0,
+            170.0,
+        ],
+        degrees=True,
+    ).as_matrix()
+
+    resolved = (
+        GraspGenXPlanner
+        ._resolve_parallel_gripper_symmetry(
+            grasp_rotation_base=predicted,
+            current_tcp_orientation=current,
+        )
+    )
+
+    np.testing.assert_allclose(
+        resolved[
+            :,
+            2,
+        ],
+        predicted[
+            :,
+            2,
+        ],
+        atol=1e-8,
+    )
