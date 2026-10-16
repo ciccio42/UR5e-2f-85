@@ -1,12 +1,11 @@
-"""Lightweight GraspGen-X V2 candidate selector (offline pose prefilter).
+"""Lightweight GraspGen-X V2 selector, with local semantic centering.
 
-Uses the measured table plane, a conservative *static* V1 Robotiq envelope,
-observed target points inside the V1 sweep volume, and GraspMolmo image
-proximity. Does NOT simulate finger closure, physical target interaction,
-background obstacles, arm motion, or MoveIt collisions.
-
-The selected pose is NOT safe for execution on a robot. This module deliberately
-has no bypass to the backend's robot-command safety interlock.
+This module is shared by offline and real SeeDo inference through the same
+runtime_worker. A small 3D region around the GraspMolmo point helps prefer
+grips centered on the intended object part. Candidate orientations are kept
+within a small angle of the original preferred grasp; poses are not translated
+arbitrarily. The module does NOT verify object/fingertip, scene or arm
+collisions and cannot certify safe physical execution.
 """
 from __future__ import annotations
 
@@ -39,6 +38,14 @@ _BBOX_VERTICES = np.array([
 # V1 sweep/contact region, NOT the entire gripper volume.
 _SWEEP_CENTER = np.array([0.0, 0.0, 0.130], dtype=float)
 _SWEEP_HALF = np.array([0.085, 0.032, 0.036], dtype=float) / 2.0
+
+# Centering refinement: only when the old best candidate is significantly
+# off-center. Keep the chosen wrist/gripper orientation within 5 degrees.
+_SEMANTIC_PATCH_RADIUS_M = 0.018
+_CENTER_TRIGGER_FRACTION = 0.55
+_CENTER_ORIENTATION_TOLERANCE_DEG = 5.0
+_CENTER_SCORE_TIEBREAK = 0.12
+_MIN_CENTER_IMPROVEMENT = 0.06
 
 
 class GraspGenXV2LightweightGeometry:
@@ -105,6 +112,26 @@ class GraspGenXV2LightweightGeometry:
                 f"(nearest={pixel_dists.min():.2f}px)"
             )
         semantic_point = target[np.flatnonzero(visible)[np.argmin(pixel_dists)]]
+
+        # GraspMolmo may point to a VISIBLE EDGE of the handle rather than
+        # its middle. Build a local target region and use its robust median.
+        # This excludes distant points on the ring body or another object.
+        semantic_neighborhood = (
+            np.linalg.norm(target - semantic_point, axis=1)
+            <= _SEMANTIC_PATCH_RADIUS_M
+        )
+        if int(semantic_neighborhood.sum()) >= 10:
+            semantic_anchor = np.median(
+                target[semantic_neighborhood], axis=0
+            )
+        else:
+            semantic_anchor = semantic_point.copy()
+        print(
+            "[V2 LIGHT CENTER] local region: "
+            f"points={int(semantic_neighborhood.sum())} "
+            f"radius={_SEMANTIC_PATCH_RADIUS_M*1000:.1f}mm",
+            flush=True,
+        )
 
         rotation0 = None
         if current_tcp_orientation is not None:
@@ -205,11 +232,19 @@ class GraspGenXV2LightweightGeometry:
                 gap_3d = _distance_to_box(
                     (semantic_point - t) @ R, sweep_min, sweep_max
                 )
+                # Metric only: no change to the candidate pose, depth or
+                # orientation. X is jaw closing direction, Y is finger width.
+                anchor_local = (semantic_anchor - t) @ R
+                center_cost = max(
+                    abs(float(anchor_local[0])) / _SWEEP_HALF[0],
+                    abs(float(anchor_local[1])) / _SWEEP_HALF[1],
+                )
                 accepted.append((
                     score, i, symmetry, poses[i].copy(),
                     float(final_clearance[i]), float(clearances[i]),
                     pixel_gap, float(gap_3d), rotation_deg,
-                    int(inside.sum()),
+                    int(inside.sum()), float(center_cost),
+                    anchor_local[:2].copy(),
                 ))
                 evaluated_branches[str(tags[i])] += 1
 
@@ -226,11 +261,53 @@ class GraspGenXV2LightweightGeometry:
             raise NoValidGrasp(
                 f"No V1-style table/semantic-valid grasp: {rejected}"
             )
-        best = max(
+        # Keep the original score and selection unchanged for grasps whose
+        # intended contact region is already fairly centered. This protects
+        # the working cube/upright-ring behavior from unnecessary changes.
+        baseline = max(
             accepted,
             key=lambda o: (o[0], conf[o[1]], -o[1], o[2] == "original"),
         )
-        score, index, symmetry, pose, final_h, approach_h, px, gap, rotation, npts = best
+        best = baseline
+        if baseline[10] > _CENTER_TRIGGER_FRACTION:
+            baseline_rot = Rotation.from_matrix(baseline[3][:3, :3])
+            possible = [
+                option for option in accepted
+                if np.degrees((
+                    baseline_rot.inv()
+                    * Rotation.from_matrix(option[3][:3, :3])
+                ).magnitude()) <= _CENTER_ORIENTATION_TOLERANCE_DEG
+                and conf[option[1]] >= max(0.10, conf[baseline[1]] * 0.5)
+            ]
+            if possible:
+                proposed = min(
+                    possible,
+                    key=lambda o: (
+                        o[10] + _CENTER_SCORE_TIEBREAK * (1.0 - o[0]),
+                        -o[0], o[1], o[2] != "original",
+                    ),
+                )
+                if proposed[10] + _MIN_CENTER_IMPROVEMENT < baseline[10]:
+                    best = proposed
+            print(
+                "[V2 LIGHT CENTER] original idx="
+                f"{baseline[1]} centerXYmm="
+                f"{np.round(baseline[11]*1000, 2).tolist()} "
+                f"norm={baseline[10]:.3f}; "
+                f"selected idx={best[1]} centerXYmm="
+                f"{np.round(best[11]*1000, 2).tolist()} "
+                f"norm={best[10]:.3f}; "
+                f"same_orientation_candidates={len(possible)}",
+                flush=True,
+            )
+            if best[10] > 0.75:
+                print(
+                    "[V2 LIGHT CENTER] WARNING: selected region remains "
+                    "far from jaw center; review offline before robot use",
+                    flush=True,
+                )
+
+        score, index, symmetry, pose, final_h, approach_h, px, gap, rotation, npts, center_cost, center_xy = best
         print(
             f"[V2 LIGHT] selected branch={tags[index]} idx={index} "
             f"symmetry={symmetry} score={score:.3f} "
