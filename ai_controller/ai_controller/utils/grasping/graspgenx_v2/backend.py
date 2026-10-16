@@ -30,7 +30,9 @@ class GraspGenXV2Planner(GraspGenXPlanner):
         v2_worker_python: str = "/opt/graspgenx_venv/bin/python",
         v2_gripper_open_q: float = 0.1,
         v2_table_margin_mm: float = 5.0,
-        v2_max_expensive_checks: int = 80,
+        v2_max_expensive_checks: int = 0,
+        v2_validation_mode: str = "detailed",
+        v2_semantic_radius_px: float = 100.0,
         v2_worker_timeout_s: int = 300,
         v2_unsafe_enable_robot_commands: bool = False,
         **v1_kwargs,
@@ -42,6 +44,12 @@ class GraspGenXV2Planner(GraspGenXPlanner):
         self.v2_gripper_open_q = float(v2_gripper_open_q)
         self.v2_table_margin_mm = float(v2_table_margin_mm)
         self.v2_max_expensive_checks = int(v2_max_expensive_checks)
+        self.v2_validation_mode = str(v2_validation_mode).strip().lower()
+        if self.v2_validation_mode not in ("detailed", "lightweight"):
+            raise ValueError("V2 validation mode must be detailed/lightweight")
+        self.v2_semantic_radius_px = float(v2_semantic_radius_px)
+        if not (0 < self.v2_semantic_radius_px <= 1000):
+            raise ValueError("Invalid V2 semantic radius")
         self.v2_worker_timeout_s = int(v2_worker_timeout_s)
         self.v2_unsafe_enable_robot_commands = bool(
             v2_unsafe_enable_robot_commands
@@ -49,6 +57,11 @@ class GraspGenXV2Planner(GraspGenXPlanner):
         self._v2_selected_rotation = None
         self._v2_tcp_orientation = None
         self._v2_last_details = None
+        # if (self.v2_validation_mode == "lightweight"
+        #         and self.v2_unsafe_enable_robot_commands):
+        #     raise RuntimeError(
+        #         "Lightweight is offline-only: refuse robot-command enable"
+        #     )
 
     def _compute_plan(self, *args, **kwargs):
         # Capture the PRE-grasp TCP orientation; index selection needs this.
@@ -121,7 +134,9 @@ class GraspGenXV2Planner(GraspGenXPlanner):
             root.mkdir(parents=True, exist_ok=True)
 
             report = {
-                "status": "OFFLINE_GEOMETRIC_PLAN_NOT_ROBOT_SAFE",
+                "status": ("LIGHTWEIGHT_POSE_ONLY_NOT_ROBOT_SAFE"
+                           if self.v2_validation_mode == "lightweight"
+                           else "OFFLINE_GEOMETRIC_PLAN_NOT_ROBOT_SAFE"),
                 "backend": "graspgenx_v2",
                 "note": (
                     "Use selected_gripper_pose_base below: the V1 raw "
@@ -212,16 +227,15 @@ class GraspGenXV2Planner(GraspGenXPlanner):
             current_tcp_orientation=self._v2_tcp_orientation,
         )
 
-        for path in (
-            self.v2_driver_urdf,
-            self.v2_worker_python,
-        ):
+        dependencies = [self.v2_worker_python]
+        if self.v2_validation_mode == "detailed":
+            dependencies.append(self.v2_driver_urdf)
+        for path in dependencies:
             if not path.is_file():
-                raise FileNotFoundError(
-                    f"V2 dependency missing: {path}"
-                )
+                raise FileNotFoundError(f"V2 dependency missing: {path}")
 
-        if not self.v2_robotiq_mesh_share.is_dir():
+        if (self.v2_validation_mode == "detailed"
+                and not self.v2_robotiq_mesh_share.is_dir()):
             raise FileNotFoundError(
                 "V2 Robotiq package missing: "
                 f"{self.v2_robotiq_mesh_share}"
@@ -257,6 +271,8 @@ class GraspGenXV2Planner(GraspGenXPlanner):
                 "--open-q", str(self.v2_gripper_open_q),
                 "--table-margin-mm", str(self.v2_table_margin_mm),
                 "--max-expensive-checks", str(self.v2_max_expensive_checks),
+                "--validation-mode", self.v2_validation_mode,
+                "--semantic-radius-px", str(self.v2_semantic_radius_px),
             ]
 
             process = subprocess.run(

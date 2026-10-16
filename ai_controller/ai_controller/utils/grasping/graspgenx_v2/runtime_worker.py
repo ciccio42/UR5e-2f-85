@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from .runtime_core import GraspGenXV2Geometry, V2Config
+from .lightweight_core import GraspGenXV2LightweightGeometry
 
 
 def run(
@@ -23,6 +24,8 @@ def run(
     open_q: float,
     table_margin_mm: float,
     max_expensive_checks: int,
+    validation_mode: str = "detailed",
+    semantic_radius_px: float = 100.0,
 ) -> None:
     with np.load(
         input_path,
@@ -37,13 +40,17 @@ def run(
         open_q_rad=float(open_q),
         table_margin_m=float(table_margin_mm) / 1000.0,
         max_expensive_checks=int(max_expensive_checks),
+        semantic_radius_px=float(semantic_radius_px),
     )
 
-    selector = GraspGenXV2Geometry(
-        urdf,
-        mesh_share,
-        cfg,
+    if validation_mode not in {"lightweight", "detailed"}:
+        raise ValueError(f"Unknown V2 validation mode: {validation_mode}")
+    selector_class = (
+        GraspGenXV2LightweightGeometry
+        if validation_mode == "lightweight"
+        else GraspGenXV2Geometry
     )
+    selector = selector_class(urdf, mesh_share, cfg)
 
     choice = selector.select(
         grasps_base=data["grasps_base"],
@@ -61,6 +68,7 @@ def run(
     )
 
     result = {
+        "validation_mode": validation_mode,
         "index": int(choice.index),
         "T_base_gripper": choice.T_base_gripper.tolist(),
         "confidence": float(choice.confidence),
@@ -151,7 +159,9 @@ def run(
         "closure_postcontact_table_risk": False,
         "closure_postcontact_first_risk": None,
 
-        "status": "GEOMETRY_PREFILTERED_NOT_ROBOT_SAFE",
+        "status": ("LIGHTWEIGHT_POSE_ONLY_NOT_ROBOT_SAFE"
+                   if validation_mode == "lightweight"
+                   else "GEOMETRY_PREFILTERED_NOT_ROBOT_SAFE"),
     }
 
     output_path.write_text(
@@ -196,7 +206,14 @@ def main():
     parser.add_argument(
         "--max-expensive-checks",
         type=int,
-        default=80,
+        default=0,
+    )
+    parser.add_argument(
+        "--validation-mode", choices=("detailed", "lightweight"),
+        default="detailed",
+    )
+    parser.add_argument(
+        "--semantic-radius-px", type=float, default=100.0,
     )
 
     args = parser.parse_args()
@@ -209,6 +226,8 @@ def main():
         args.open_q,
         args.table_margin_mm,
         args.max_expensive_checks,
+        args.validation_mode,
+        args.semantic_radius_px,
     )
 
 

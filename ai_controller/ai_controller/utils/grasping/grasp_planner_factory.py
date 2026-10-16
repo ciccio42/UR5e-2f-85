@@ -173,7 +173,9 @@ def build_grasp_planner(
             )),
             "v2_gripper_open_q": float(grasp_config.get("graspgenx_v2_gripper_open_q", 0.1)),
             "v2_table_margin_mm": float(grasp_config.get("graspgenx_v2_table_margin_mm", 5.0)),
-            "v2_max_expensive_checks": int(grasp_config.get("graspgenx_v2_max_expensive_checks", 80)),
+            "v2_max_expensive_checks": int(grasp_config.get("graspgenx_v2_max_expensive_checks", 0)),
+            "v2_validation_mode": str(grasp_config.get("graspgenx_v2_validation_mode", "detailed")),
+            "v2_semantic_radius_px": float(grasp_config.get("semantic_radius_px", 100.0)),
             "v2_unsafe_enable_robot_commands": bool(grasp_config.get(
                 "graspgenx_v2_unsafe_enable_robot_commands", False,
             )),
@@ -237,6 +239,12 @@ def build_grasp_planner(
                 grasp_config.get(
                     "semantic_radius_px",
                     50.0,
+                )
+            ),
+            grasp_depth_offset_m=float(
+                grasp_config.get(
+                    "graspgenx_v2_depth_offset_m" if is_v2 else "graspgenx_depth_offset_m",
+                    0.0 if is_v2 else 0.005,
                 )
             ),
         )
