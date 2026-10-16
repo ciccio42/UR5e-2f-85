@@ -170,7 +170,7 @@ grasp_planner:
   #
   # graspgenx:
   #   GraspMolmo + GraspGen-X
-  backend: graspgenx
+  backend: graspgenx_v2
 
   num_runs: 20
   seed: 42
@@ -213,3 +213,14 @@ grasp_planner:
   graspgenx_num_grasps: 200
   graspgenx_grasp_threshold: -1.0
   graspgenx_topk_num_grasps: -1
+
+  # GraspGen-X V2
+  graspgenx_v2_driver_urdf: /test_real/urdf_audit/ur5e_driver_installed_audit.urdf
+  graspgenx_v2_robotiq_mesh_share: /home/ros2_ws/install/robotiq_description/share/robotiq_description
+  graspgenx_v2_worker_python: /opt/graspgenx_venv/bin/python
+
+  graspgenx_v2_gripper_open_q: 0.1
+  graspgenx_v2_table_margin_mm: 5.0
+  graspgenx_v2_max_expensive_checks: 80
+
+  graspgenx_v2_unsafe_enable_robot_commands: false

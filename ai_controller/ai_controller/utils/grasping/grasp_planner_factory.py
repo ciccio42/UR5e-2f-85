@@ -11,6 +11,7 @@ from ai_controller.utils.grasping.grasp_planner_base import (
 from ai_controller.utils.grasping.graspgenx.planner import (
     GraspGenXPlanner,
 )
+from ai_controller.utils.grasping.graspgenx_v2.backend import GraspGenXV2Planner
 
 
 def build_grasp_planner(
@@ -155,8 +156,30 @@ def build_grasp_planner(
             ),
         )
 
-    if backend == "graspgenx":
-        return GraspGenXPlanner(
+    if backend in ("graspgenx", "graspgenx_v2"):
+        is_v2 = backend == "graspgenx_v2"
+        planner_class = GraspGenXV2Planner if is_v2 else GraspGenXPlanner
+        v2_options = ({
+            "v2_driver_urdf": str(grasp_config.get(
+                "graspgenx_v2_driver_urdf",
+                "/test_real/urdf_audit/ur5e_driver_installed_audit.urdf",
+            )),
+            "v2_robotiq_mesh_share": str(grasp_config.get(
+                "graspgenx_v2_robotiq_mesh_share",
+                "/home/ros2_ws/install/robotiq_description/share/robotiq_description",
+            )),
+            "v2_worker_python": str(grasp_config.get(
+                "graspgenx_v2_worker_python", "/opt/graspgenx_venv/bin/python",
+            )),
+            "v2_gripper_open_q": float(grasp_config.get("graspgenx_v2_gripper_open_q", 0.1)),
+            "v2_table_margin_mm": float(grasp_config.get("graspgenx_v2_table_margin_mm", 5.0)),
+            "v2_max_expensive_checks": int(grasp_config.get("graspgenx_v2_max_expensive_checks", 80)),
+            "v2_unsafe_enable_robot_commands": bool(grasp_config.get(
+                "graspgenx_v2_unsafe_enable_robot_commands", False,
+            )),
+        } if is_v2 else {})
+        return planner_class(
+            **v2_options,
             server_host=str(
                 grasp_config.get(
                     "graspgenx_server_host",
@@ -221,5 +244,5 @@ def build_grasp_planner(
     raise ValueError(
         "Unsupported grasp-planning backend: "
         f"{backend!r}. "
-        "Supported backends are 'm2t2' and 'graspgenx'."
+        "Supported backends are 'm2t2', 'graspgenx', and 'graspgenx_v2'."
     )
