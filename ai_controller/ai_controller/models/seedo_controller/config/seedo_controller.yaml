@@ -151,6 +151,30 @@ motion_layer:
 
   object_y_offset: -0.04
 
+  # ==================================================
+  # NUT-ASSEMBLY ONLY
+  # ==================================================
+  nut_assembly:
+
+    # Safety distance kept above the peg before insertion.
+    peg_clearance_m: 0.02
+
+    # Initial penetration of the peg into the hole.
+    initial_entry_m: 0.005
+
+    # Maximum Cartesian increment during precision insertion.
+    insertion_step_m: 0.005
+
+    # Desired final distance between the bottom of the nut
+    # and the supporting surface.
+    release_bottom_height_m: 0.01
+
+    # Maximum orientation increment while aligning the
+    # grasped nut with the peg axis.
+    rotation_step_deg: 5.0
+
+    auto_release: false
+
 grasp_planner:
 
   # Enable/disable task-oriented grasp refinement.

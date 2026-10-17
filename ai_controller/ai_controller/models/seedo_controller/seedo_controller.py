@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 import json
+import numpy as np
 
 from ai_controller.utils.ai_controller import AIController
 
@@ -39,6 +40,9 @@ from ai_controller.models.seedo_controller.lmp_generator import (
 )
 from ai_controller.models.seedo_controller.motion_layer import (
     SeeDoMotionLayer,
+)
+from ai_controller.models.seedo_controller.nut_visual_debug import (
+    export_nut_visual_debug_artifacts,
 )
 from ai_controller.utils.grasping.grasp_planner_base import (
     GraspPlanResult,
@@ -94,6 +98,41 @@ class SeeDoController(AIController):
 
         self.grasp_plan: GraspPlanResult | None = None
         self.grasp_plan_target: str | None = None
+
+        self.nut_place_refinements: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        self.nut_pick_refinements: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        # Nut-Assembly visual diagnostics.
+        #
+        # The initial RGB-D scene is cached once at t=0.
+        # Motion actions are then accumulated until one INSERTING
+        # primitive completes.
+        self._nut_visual_debug_scene_context: (
+            dict[str, Any]
+            | None
+        ) = None
+
+        self._nut_visual_debug_action_groups: dict[
+            str,
+            list[np.ndarray],
+        ] = {
+            "reach": [],
+            "approaching": [],
+            "pick": [],
+            "lift_up": [],
+            "moving": [],
+            "aligning": [],
+            "inserting": [],
+        }
+
+        self._nut_visual_debug_export_index = 0
 
         # Structured scene representation of the runtime scene.
         self.runtime_structured_scene: StructuredScene | None = None
@@ -754,6 +793,10 @@ class SeeDoController(AIController):
                     0.04,
                 )
             ),
+            nut_assembly_config=motion_config.get(
+                "nut_assembly",
+                {},
+            ),
         )
 
         self.pipeline_config = config
@@ -829,6 +872,9 @@ class SeeDoController(AIController):
         self.primitive_plan = None
         self.grasp_plan = None
         self.grasp_plan_target = None
+        self.nut_place_refinements = {}
+        self._reset_nut_visual_debug_state()
+        self.nut_pick_refinements = {}
         self.demo_structured_scene = None
         self.runtime_structured_scene = None
         self.structural_matching_result = None
@@ -987,6 +1033,1412 @@ class SeeDoController(AIController):
             f"target {target!r} with one ActionStep."
         )
 
+    def _resolve_nut_pick_targets(
+        self,
+    ) -> tuple[str, ...]:
+        """
+        Return the runtime objects actually used by Nut-Assembly
+        APPROACHING primitives.
+
+        The refinement therefore happens only after CAP has already
+        decided which object is being picked.
+        """
+
+        if self.action_plan is None:
+            raise RuntimeError(
+                "Action plan is not available."
+            )
+
+        if (
+            str(self.action_plan.task_type)
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            return ()
+
+        if self.primitive_plan is None:
+            raise RuntimeError(
+                "Primitive plan is not available."
+            )
+
+        targets: list[str] = []
+        normalized_targets: set[str] = set()
+
+        for primitive_step in self.primitive_plan.steps:
+
+            if (
+                str(primitive_step.name)
+                .strip()
+                .lower()
+                != "approaching"
+            ):
+                continue
+
+            target = primitive_step.arguments.get(
+                "target"
+            )
+
+            if not isinstance(target, str):
+                raise RuntimeError(
+                    "Nut-Assembly APPROACHING primitive does "
+                    "not contain a valid target."
+                )
+
+            target = target.strip()
+
+            if not target:
+                raise RuntimeError(
+                    "Nut-Assembly APPROACHING target is empty."
+                )
+
+            normalized = target.casefold()
+
+            if normalized not in normalized_targets:
+
+                targets.append(
+                    target
+                )
+
+                normalized_targets.add(
+                    normalized
+                )
+
+        if not targets:
+            raise RuntimeError(
+                "Nut-Assembly primitive plan contains no "
+                "pick target."
+            )
+
+        return tuple(targets)
+
+    def _resolve_nut_place_targets(
+        self,
+    ) -> tuple[str, ...]:
+        """
+        Resolve the actual runtime destination objects used by the
+        Nut-Assembly place primitives.
+
+        CAP is authoritative here: refinement is performed only after
+        moving/aligning/inserting have been generated, therefore
+        ScenePerceiver never has to guess which visible object is a peg.
+
+        The expected place sequence for every assembly is:
+
+            moving(target)
+            aligning(target)
+            inserting(target)
+
+        and all three primitives must refer to the same target.
+        """
+
+        if self.action_plan is None:
+            raise RuntimeError(
+                "Action plan is not available while resolving "
+                "Nut-Assembly place targets."
+            )
+
+        if (
+            str(self.action_plan.task_type)
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            return ()
+
+        if self.primitive_plan is None:
+            raise RuntimeError(
+                "Primitive plan is not available while resolving "
+                "Nut-Assembly place targets."
+            )
+
+        place_primitive_names = {
+            "moving",
+            "aligning",
+            "inserting",
+        }
+
+        expected_phase = "moving"
+        active_target: str | None = None
+
+        resolved_targets: list[str] = []
+        normalized_targets: set[str] = set()
+
+        for primitive_step in self.primitive_plan.steps:
+
+            primitive_name = (
+                str(primitive_step.name)
+                .strip()
+                .lower()
+            )
+
+            if primitive_name not in place_primitive_names:
+                continue
+
+            if primitive_name != expected_phase:
+                raise RuntimeError(
+                    "Invalid Nut-Assembly place primitive sequence: "
+                    f"expected {expected_phase!r}, "
+                    f"received {primitive_name!r}."
+                )
+
+            target = primitive_step.arguments.get(
+                "target"
+            )
+
+            if not isinstance(target, str):
+                raise RuntimeError(
+                    "Nut-Assembly place primitive "
+                    f"{primitive_name!r} does not contain a "
+                    "string 'target' argument."
+                )
+
+            target = target.strip()
+
+            if not target:
+                raise RuntimeError(
+                    "Nut-Assembly place primitive "
+                    f"{primitive_name!r} contains an empty target."
+                )
+
+            normalized_target = (
+                target.casefold()
+            )
+
+            if primitive_name == "moving":
+
+                active_target = target
+
+                if (
+                    normalized_target
+                    not in normalized_targets
+                ):
+                    resolved_targets.append(
+                        target
+                    )
+
+                    normalized_targets.add(
+                        normalized_target
+                    )
+
+                expected_phase = "aligning"
+
+            elif primitive_name == "aligning":
+
+                if active_target is None:
+                    raise RuntimeError(
+                        "Nut-Assembly ALIGNING does not have "
+                        "an active MOVING destination."
+                    )
+
+                if (
+                    normalized_target
+                    != active_target.casefold()
+                ):
+                    raise RuntimeError(
+                        "Nut-Assembly destination changed between "
+                        "MOVING and ALIGNING: "
+                        f"{active_target!r} -> {target!r}."
+                    )
+
+                expected_phase = "inserting"
+
+            elif primitive_name == "inserting":
+
+                if active_target is None:
+                    raise RuntimeError(
+                        "Nut-Assembly INSERTING does not have "
+                        "an active destination."
+                    )
+
+                if (
+                    normalized_target
+                    != active_target.casefold()
+                ):
+                    raise RuntimeError(
+                        "Nut-Assembly destination changed between "
+                        "ALIGNING and INSERTING: "
+                        f"{active_target!r} -> {target!r}."
+                    )
+
+                active_target = None
+                expected_phase = "moving"
+
+        if active_target is not None:
+            raise RuntimeError(
+                "Incomplete Nut-Assembly place sequence: "
+                "MOVING/ALIGNING was not followed by INSERTING."
+            )
+
+        if not resolved_targets:
+            raise RuntimeError(
+                "Nut-Assembly primitive plan contains no "
+                "MOVING -> ALIGNING -> INSERTING destination."
+            )
+
+        return tuple(
+            resolved_targets
+        )
+
+    def _resolve_raw_object_for_runtime_target(
+        self,
+        target: str,
+    ):
+        """
+        Recover the RawSceneObject, including its SAM mask, associated
+        with one already-resolved runtime SceneState target.
+
+        Generalized mode normally preserves the raw object_id directly.
+        Pixel coordinates provide a deterministic identity-preserving
+        fallback for modes where SceneInterpreter changes the semantic
+        object name.
+        """
+
+        if self.scene_state is None:
+            raise RuntimeError(
+                "SceneState is not available while resolving "
+                "the Nut-Assembly destination mask."
+            )
+
+        if self.perception_result is None:
+            raise RuntimeError(
+                "Scene perception result is not available while "
+                "resolving the Nut-Assembly destination mask."
+            )
+
+        normalized_target = (
+            str(target)
+            .strip()
+            .casefold()
+        )
+
+        scene_matches = [
+            obj
+            for obj in self.scene_state.objects
+            if (
+                obj.object_id
+                .strip()
+                .casefold()
+                == normalized_target
+            )
+        ]
+
+        if len(scene_matches) != 1:
+            raise RuntimeError(
+                "Could not uniquely resolve Nut-Assembly "
+                f"destination {target!r} in SceneState. "
+                f"Matches: {len(scene_matches)}."
+            )
+
+        scene_object = scene_matches[0]
+
+        raw_objects = (
+            self.perception_result
+            .raw_scene
+            .objects
+        )
+
+        # ---------------------------------------------------------
+        # Fast path used by generalized perception:
+        #
+        # SceneInterpreter intentionally preserves raw object IDs.
+        # ---------------------------------------------------------
+
+        raw_id_matches = [
+            raw_object
+            for raw_object in raw_objects
+            if (
+                raw_object.object_id
+                .strip()
+                .casefold()
+                == normalized_target
+            )
+        ]
+
+        if len(raw_id_matches) == 1:
+            return raw_id_matches[0]
+
+        if len(raw_id_matches) > 1:
+            raise RuntimeError(
+                "Multiple raw perception objects share "
+                f"destination ID {target!r}."
+            )
+
+        # ---------------------------------------------------------
+        # Identity-preserving fallback.
+        #
+        # SceneInterpreter copies pixel_coordinates directly from
+        # RawSceneObject into SceneObject, so they can be used to
+        # recover the exact original SAM mask.
+        # ---------------------------------------------------------
+
+        scene_pixel = tuple(
+            int(value)
+            for value in scene_object.pixel_coordinates
+        )
+
+        pixel_matches = [
+            raw_object
+            for raw_object in raw_objects
+            if tuple(
+                int(value)
+                for value
+                in raw_object.pixel_coordinates
+            )
+            == scene_pixel
+        ]
+
+        if len(pixel_matches) != 1:
+            raise RuntimeError(
+                "Could not uniquely recover the raw SAM mask "
+                f"for Nut-Assembly destination {target!r}. "
+                f"Pixel={scene_pixel}, "
+                f"matches={len(pixel_matches)}."
+            )
+
+        return pixel_matches[0]
+
+    def _resolve_nut_pick_refinement(
+        self,
+        target: str,
+    ) -> dict[str, Any]:
+        """
+        Return the frozen hole refinement associated with the
+        runtime object actually being grasped.
+        """
+
+        normalized_target = (
+            str(target)
+            .strip()
+            .casefold()
+        )
+
+        matches = [
+            refinement
+            for object_id, refinement
+            in self.nut_pick_refinements.items()
+            if (
+                str(object_id)
+                .strip()
+                .casefold()
+                == normalized_target
+            )
+        ]
+
+        if len(matches) != 1:
+            raise RuntimeError(
+                "Could not uniquely resolve Nut-Assembly "
+                f"pick refinement for {target!r}. "
+                f"Matches: {len(matches)}."
+            )
+
+        return matches[0]
+
+    def _reset_nut_visual_debug_state(
+        self,
+    ) -> None:
+        """
+        Reset all runtime state used only for Nut-Assembly
+        visual diagnostics.
+        """
+
+        self._nut_visual_debug_scene_context = None
+
+        self._nut_visual_debug_action_groups = {
+            "reach": [],
+            "approaching": [],
+            "pick": [],
+            "lift_up": [],
+            "moving": [],
+            "aligning": [],
+            "inserting": [],
+        }
+
+        self._nut_visual_debug_export_index = 0
+
+    def _clear_nut_visual_debug_actions(
+        self,
+    ) -> None:
+        """
+        Clear only the primitive actions accumulated for the current
+        Nut-Assembly cycle.
+
+        The initial scene remains cached so that a PrimitivePlan
+        containing multiple assembly cycles can still be visualized.
+        """
+
+        self._nut_visual_debug_action_groups = {
+            "reach": [],
+            "approaching": [],
+            "pick": [],
+            "lift_up": [],
+            "moving": [],
+            "aligning": [],
+            "inserting": [],
+        }
+
+    def _cache_nut_visual_debug_scene_context(
+        self,
+        *,
+        rgb_image: np.ndarray,
+        depth_image: np.ndarray,
+        camera_info: dict[str, Any],
+    ) -> None:
+        """
+        Freeze the exact initial RGB-D and geometric calibration used
+        by ScenePerceiver.run().
+
+        No calibration is reconstructed or re-sampled here.
+        """
+
+        if self.action_plan is None:
+            return
+
+        if (
+            str(
+                self.action_plan.task_type
+            )
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            return
+
+        runtime_camera_calibration = (
+            self.scene_perceiver
+            ._last_runtime_camera_calibration
+        )
+
+        table_to_base_rotation = (
+            self.scene_perceiver
+            ._last_base_to_table_rotation
+        )
+
+        table_to_base_translation = (
+            self.scene_perceiver
+            ._last_base_to_table_translation
+        )
+
+        if runtime_camera_calibration is None:
+            raise RuntimeError(
+                "Nut visual-debug cache requires the "
+                "runtime camera calibration used by "
+                "ScenePerceiver.run()."
+            )
+
+        if table_to_base_rotation is None:
+            raise RuntimeError(
+                "Nut visual-debug cache requires the "
+                "runtime table-to-base rotation."
+            )
+
+        if table_to_base_translation is None:
+            raise RuntimeError(
+                "Nut visual-debug cache requires the "
+                "runtime table-to-base translation."
+            )
+
+        camera_matrix = (
+            self.scene_perceiver
+            .camera_matrix_from_info(
+                camera_info
+            )
+        )
+
+        T_base_table = np.eye(
+            4,
+            dtype=np.float64,
+        )
+
+        T_base_table[
+            :3,
+            :3,
+        ] = np.asarray(
+            table_to_base_rotation,
+            dtype=np.float64,
+        )
+
+        T_base_table[
+            :3,
+            3,
+        ] = np.asarray(
+            table_to_base_translation,
+            dtype=np.float64,
+        )
+
+        self._nut_visual_debug_scene_context = {
+            "front_rgb": np.asarray(
+                rgb_image,
+                dtype=np.uint8,
+            ).copy(),
+
+            "front_depth": np.asarray(
+                depth_image,
+                dtype=np.float64,
+            ).copy(),
+
+            "front_K": np.asarray(
+                camera_matrix,
+                dtype=np.float64,
+            ).copy(),
+
+            "front_camera_calibration": {
+                "position": np.asarray(
+                    runtime_camera_calibration[
+                        "position"
+                    ],
+                    dtype=np.float64,
+                ).copy(),
+
+                "orientation_matrix": np.asarray(
+                    runtime_camera_calibration[
+                        "orientation_matrix"
+                    ],
+                    dtype=np.float64,
+                ).copy(),
+            },
+
+            "T_base_table": (
+                T_base_table
+            ),
+        }
+
+    def _record_nut_visual_debug_actions(
+        self,
+        primitive_name: str,
+        actions,
+    ) -> None:
+        """
+        Save a copy of the actions already produced by MotionLayer.
+
+        This does not alter or regenerate the trajectory.
+        """
+
+        if self.action_plan is None:
+            return
+
+        if (
+            str(
+                self.action_plan.task_type
+            )
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            return
+
+        normalized_name = (
+            str(
+                primitive_name
+            )
+            .strip()
+            .lower()
+        )
+
+        if (
+            normalized_name
+            not in self._nut_visual_debug_action_groups
+        ):
+            return
+
+        if actions is None:
+            return
+
+        for action in actions:
+
+            self._nut_visual_debug_action_groups[
+                normalized_name
+            ].append(
+                np.asarray(
+                    action,
+                    dtype=np.float64,
+                ).copy()
+            )
+
+    def _resolve_nut_place_refinement(
+        self,
+        target: str,
+    ) -> dict[str, Any]:
+        """
+        Return the frozen peg refinement associated with the
+        runtime destination currently being assembled.
+        """
+
+        normalized_target = (
+            str(
+                target
+            )
+            .strip()
+            .casefold()
+        )
+
+        matches = [
+            refinement
+            for object_id, refinement
+            in self.nut_place_refinements.items()
+            if (
+                str(
+                    object_id
+                )
+                .strip()
+                .casefold()
+                == normalized_target
+            )
+        ]
+
+        if len(matches) != 1:
+            raise RuntimeError(
+                "Could not uniquely resolve Nut-Assembly "
+                f"place refinement for {target!r}. "
+                f"Matches: {len(matches)}."
+            )
+
+        return matches[
+            0
+        ]
+
+    def _export_current_nut_visual_debug(
+        self,
+        *,
+        place_target: str,
+    ) -> None:
+        """
+        Export diagnostics for the Nut-Assembly cycle that has just
+        completed INSERTING.
+
+        No model inference is performed by this method.
+        """
+
+        if self.action_plan is None:
+            return
+
+        if (
+            str(
+                self.action_plan.task_type
+            )
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            return
+
+        if self.artifacts_dir is None:
+            return
+
+        if (
+            self._nut_visual_debug_scene_context
+            is None
+        ):
+            raise RuntimeError(
+                "Nut visual-debug initial scene context "
+                "is not available."
+            )
+
+        if self.grasp_plan is None:
+            raise RuntimeError(
+                "Nut visual-debug export requires a "
+                "completed grasp plan."
+            )
+
+        if self.grasp_plan_target is None:
+            raise RuntimeError(
+                "Nut visual-debug export requires the "
+                "active grasp target."
+            )
+
+        pick_target = str(
+            self.grasp_plan_target
+        )
+
+        place_target = str(
+            place_target
+        ).strip()
+
+        if not place_target:
+            raise RuntimeError(
+                "Nut visual-debug export received an "
+                "empty place target."
+            )
+
+        pick_refinement = (
+            self._resolve_nut_pick_refinement(
+                pick_target
+            )
+        )
+
+        place_refinement = (
+            self._resolve_nut_place_refinement(
+                place_target
+            )
+        )
+
+        raw_pick_object = (
+            self._resolve_raw_object_for_runtime_target(
+                pick_target
+            )
+        )
+
+        if raw_pick_object.mask is None:
+            raise RuntimeError(
+                "Nut visual-debug export requires the "
+                "raw SAM mask of the picked object."
+            )
+
+        assembly_object_mask = np.asarray(
+            raw_pick_object.mask,
+            dtype=bool,
+        )
+
+        hole_top = np.asarray(
+            pick_refinement[
+                "hole_center_base"
+            ],
+            dtype=np.float64,
+        )
+
+        hole_bottom = np.asarray(
+            pick_refinement[
+                "hole_bottom_center_base"
+            ],
+            dtype=np.float64,
+        )
+
+        hole_axis = np.asarray(
+            pick_refinement[
+                "hole_axis_base"
+            ],
+            dtype=np.float64,
+        )
+
+        hole_axis /= np.linalg.norm(
+            hole_axis
+        )
+
+        peg_support = np.asarray(
+            place_refinement[
+                "peg_support_point_base"
+            ],
+            dtype=np.float64,
+        )
+
+        peg_tip = np.asarray(
+            place_refinement[
+                "peg_tip_point_base"
+            ],
+            dtype=np.float64,
+        )
+
+        peg_axis = np.asarray(
+            place_refinement[
+                "axis_direction_base"
+            ],
+            dtype=np.float64,
+        )
+
+        peg_axis /= np.linalg.norm(
+            peg_axis
+        )
+
+        motion = self.motion_layer
+
+        if motion._nut_hole_top_local is None:
+            raise RuntimeError(
+                "Nut visual-debug export requires "
+                "grasp-relative hole geometry."
+            )
+
+        if motion._nut_hole_bottom_local is None:
+            raise RuntimeError(
+                "Nut visual-debug export requires "
+                "grasp-relative hole geometry."
+            )
+
+        if motion._nut_hole_axis_local is None:
+            raise RuntimeError(
+                "Nut visual-debug export requires "
+                "grasp-relative hole geometry."
+            )
+
+        hole_top_local = np.asarray(
+            motion._nut_hole_top_local,
+            dtype=np.float64,
+        )
+
+        hole_bottom_local = np.asarray(
+            motion._nut_hole_bottom_local,
+            dtype=np.float64,
+        )
+
+        hole_axis_local = np.asarray(
+            motion._nut_hole_axis_local,
+            dtype=np.float64,
+        )
+
+        hole_axis_local /= np.linalg.norm(
+            hole_axis_local
+        )
+
+        nut_config = (
+            motion.nut_assembly_config
+        )
+
+        peg_clearance_m = float(
+            nut_config[
+                "peg_clearance_m"
+            ]
+        )
+
+        initial_entry_m = float(
+            nut_config[
+                "initial_entry_m"
+            ]
+        )
+
+        release_bottom_height_m = float(
+            nut_config[
+                "release_bottom_height_m"
+            ]
+        )
+
+        auto_release = bool(
+            nut_config.get(
+                "auto_release",
+                False,
+            )
+        )
+
+        align_target_hole_bottom = (
+            peg_tip
+            + peg_clearance_m
+            * peg_axis
+        )
+
+        initial_entry_hole_bottom = (
+            peg_tip
+            - initial_entry_m
+            * peg_axis
+        )
+
+        final_release_hole_bottom = (
+            peg_support
+            + release_bottom_height_m
+            * peg_axis
+        )
+
+        (
+            final_hole_top,
+            final_hole_bottom,
+            final_hole_axis,
+        ) = (
+            motion
+            ._nut_current_hole_geometry()
+        )
+
+        final_hole_top = np.asarray(
+            final_hole_top,
+            dtype=np.float64,
+        )
+
+        final_hole_bottom = np.asarray(
+            final_hole_bottom,
+            dtype=np.float64,
+        )
+
+        final_hole_axis = np.asarray(
+            final_hole_axis,
+            dtype=np.float64,
+        )
+
+        final_hole_axis /= np.linalg.norm(
+            final_hole_axis
+        )
+
+        final_tcp_position = np.asarray(
+            motion.current_pose.position,
+            dtype=np.float64,
+        )
+
+        final_tcp_orientation = np.asarray(
+            motion.current_pose.orientation,
+            dtype=np.float64,
+        )
+
+        lift_actions = (
+            self
+            ._nut_visual_debug_action_groups
+            .get(
+                "lift_up",
+                [],
+            )
+        )
+
+        if lift_actions:
+
+            lift_tcp = np.asarray(
+                lift_actions[
+                    -1
+                ][
+                    :3
+                ],
+                dtype=np.float64,
+            )
+
+        else:
+
+            lift_tcp = (
+                final_tcp_position.copy()
+            )
+
+        scene_context = (
+            self._nut_visual_debug_scene_context
+        )
+
+        action_index = (
+            self._nut_visual_debug_export_index
+        )
+
+        output_dir = (
+            self.artifacts_dir
+            / "nut_visual_debug"
+            / (
+                f"action_"
+                f"{action_index:02d}"
+            )
+        )
+
+        paths = (
+            export_nut_visual_debug_artifacts(
+                output_dir=(
+                    output_dir
+                ),
+
+                front_rgb=(
+                    scene_context[
+                        "front_rgb"
+                    ]
+                ),
+
+                front_depth=(
+                    scene_context[
+                        "front_depth"
+                    ]
+                ),
+
+                front_K=(
+                    scene_context[
+                        "front_K"
+                    ]
+                ),
+
+                front_camera_calibration=(
+                    scene_context[
+                        "front_camera_calibration"
+                    ]
+                ),
+
+                T_base_table=(
+                    scene_context[
+                        "T_base_table"
+                    ]
+                ),
+
+                assembly_object_mask=(
+                    assembly_object_mask
+                ),
+
+                pick_target=(
+                    pick_target
+                ),
+
+                place_target=(
+                    place_target
+                ),
+
+                real_grasp_tcp=np.asarray(
+                    self.grasp_plan
+                    .tcp_position_base,
+                    dtype=np.float64,
+                ),
+
+                real_grasp_quaternion=np.asarray(
+                    self.grasp_plan
+                    .tcp_orientation_base,
+                    dtype=np.float64,
+                ),
+
+                final_tcp_position=(
+                    final_tcp_position
+                ),
+
+                final_tcp_orientation=(
+                    final_tcp_orientation
+                ),
+
+                hole_top_initial=(
+                    hole_top
+                ),
+
+                hole_bottom_initial=(
+                    hole_bottom
+                ),
+
+                hole_axis_initial=(
+                    hole_axis
+                ),
+
+                peg_support=(
+                    peg_support
+                ),
+
+                peg_tip=(
+                    peg_tip
+                ),
+
+                peg_axis=(
+                    peg_axis
+                ),
+
+                align_target_hole_bottom=(
+                    align_target_hole_bottom
+                ),
+
+                initial_entry_hole_bottom=(
+                    initial_entry_hole_bottom
+                ),
+
+                final_release_hole_bottom=(
+                    final_release_hole_bottom
+                ),
+
+                final_hole_top=(
+                    final_hole_top
+                ),
+
+                final_hole_bottom=(
+                    final_hole_bottom
+                ),
+
+                final_hole_axis=(
+                    final_hole_axis
+                ),
+
+                lift_tcp=(
+                    lift_tcp
+                ),
+
+                object_sweep_radius_m=float(
+                    motion
+                    ._nut_object_sweep_radius_m
+                ),
+
+                object_thickness_m=float(
+                    pick_refinement[
+                        "nut_thickness_estimate_m"
+                    ]
+                ),
+
+                peg_height_m=float(
+                    place_refinement[
+                        "peg_height_estimate_m"
+                    ]
+                ),
+
+                action_groups=(
+                    self
+                    ._nut_visual_debug_action_groups
+                ),
+
+                hole_top_local=(
+                    hole_top_local
+                ),
+
+                hole_bottom_local=(
+                    hole_bottom_local
+                ),
+
+                hole_axis_local=(
+                    hole_axis_local
+                ),
+
+                auto_release=(
+                    auto_release
+                ),
+            )
+        )
+
+        print(
+            "[NUT DEBUG] Visual artifacts exported:",
+            flush=True,
+        )
+
+        for name, path in paths.items():
+            print(
+                f"  - {name}: {path}",
+                flush=True,
+            )
+
+        self._nut_visual_debug_export_index += 1
+
+        self._clear_nut_visual_debug_actions()
+
+    def _refine_nut_pick_targets(
+        self,
+        *,
+        depth_image,
+        camera_info,
+    ) -> None:
+        """
+        Refine the internal hole geometry of every object actually
+        picked by a Nut-Assembly plan.
+        """
+
+        if self.action_plan is None:
+            raise RuntimeError(
+                "Action plan is not available during "
+                "Nut-Assembly pick refinement."
+            )
+
+        if (
+            str(self.action_plan.task_type)
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            self.nut_pick_refinements = {}
+            return
+
+        targets = (
+            self._resolve_nut_pick_targets()
+        )
+
+        camera_matrix = (
+            self.scene_perceiver
+            .camera_matrix_from_info(
+                camera_info
+            )
+        )
+
+        refinements: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for target in targets:
+
+            raw_object = (
+                self._resolve_raw_object_for_runtime_target(
+                    target
+                )
+            )
+
+            if raw_object.mask is None:
+                raise RuntimeError(
+                    "Nut-Assembly pick target "
+                    f"{target!r} does not have a SAM mask."
+                )
+
+            print(
+                "[NUT] Refining picked-object hole:",
+                target,
+                flush=True,
+            )
+
+            refinement = (
+                self.scene_perceiver
+                .refine_nut_hole(
+                    mask=raw_object.mask,
+                    depth_image=depth_image,
+                    camera_matrix=camera_matrix,
+                )
+            )
+
+            if not refinement["accepted"]:
+                raise RuntimeError(
+                    "Nut-hole refinement rejected "
+                    f"{target!r}."
+                )
+
+            refinements[target] = (
+                refinement
+            )
+
+            print(
+                "[NUT] Pick geometry accepted | "
+                f"target={target} | "
+                f"center="
+                f"{refinement['hole_center_base']} | "
+                f"axis="
+                f"{refinement['hole_axis_base']} | "
+                f"thickness="
+                f"{refinement['nut_thickness_estimate_m'] * 1000.0:.2f} mm",
+                flush=True,
+            )
+
+        self.nut_pick_refinements = (
+            refinements
+        )
+
+        if self.artifacts_dir is not None:
+
+            output_path = (
+                self.artifacts_dir
+                / "scene_perceiver"
+                / "nut_pick_refinements.json"
+            )
+
+            with output_path.open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+
+                json.dump(
+                    refinements,
+                    stream,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+    def _refine_nut_place_targets(
+        self,
+        *,
+        depth_image,
+        camera_info,
+    ) -> None:
+        """
+        Refine the peg axis for every destination actually used by
+        Nut-Assembly place primitives.
+
+        Refinement failure is fatal for Nut-Assembly: the controller
+        must never silently fall back to the biased SceneState centroid.
+        """
+
+        if self.action_plan is None:
+            raise RuntimeError(
+                "Action plan is not available during "
+                "Nut-Assembly place refinement."
+            )
+
+        if (
+            str(self.action_plan.task_type)
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            self.nut_place_refinements = {}
+            return
+
+        targets = (
+            self._resolve_nut_place_targets()
+        )
+
+        camera_matrix = (
+            self.scene_perceiver
+            .camera_matrix_from_info(
+                camera_info
+            )
+        )
+
+        refinements: dict[
+            str,
+            dict[str, Any],
+        ] = {}
+
+        for target in targets:
+
+            raw_object = (
+                self._resolve_raw_object_for_runtime_target(
+                    target
+                )
+            )
+
+            if raw_object.mask is None:
+                raise RuntimeError(
+                    "Nut-Assembly destination "
+                    f"{target!r} does not have a SAM mask."
+                )
+
+            print(
+                "[NUT] Refining assembly destination:",
+                target,
+                flush=True,
+            )
+
+            refinement = (
+                self.scene_perceiver
+                .refine_peg_axis(
+                    mask=raw_object.mask,
+                    depth_image=depth_image,
+                    camera_matrix=camera_matrix,
+                )
+            )
+
+            if not refinement["accepted"]:
+                raise RuntimeError(
+                    "Nut-Assembly peg-axis refinement rejected "
+                    f"destination {target!r}: "
+                    f"reasons="
+                    f"{refinement['rejection_reasons']}, "
+                    f"rms="
+                    f"{refinement['rms_m'] * 1000.0:.2f} mm, "
+                    f"inlier_fraction="
+                    f"{refinement['inlier_fraction']:.3f}, "
+                    f"arc="
+                    f"{refinement['arc_coverage_deg']:.1f} deg."
+                )
+
+            refinements[target] = refinement
+
+            print(
+                "[NUT] Destination accepted | "
+                f"target={target} | "
+                f"axis_xy_base="
+                f"{refinement['axis_xy_base']} | "
+                f"rms="
+                f"{refinement['rms_m'] * 1000.0:.2f} mm | "
+                f"inliers="
+                f"{refinement['inlier_fraction']:.3f} | "
+                f"arc="
+                f"{refinement['arc_coverage_deg']:.1f} deg",
+                flush=True,
+            )
+
+        self.nut_place_refinements = (
+            refinements
+        )
+
+        # ---------------------------------------------------------
+        # Diagnostics artifact.
+        # ---------------------------------------------------------
+
+        if self.artifacts_dir is not None:
+
+            refinement_dir = (
+                self.artifacts_dir
+                / "scene_perceiver"
+            )
+
+            refinement_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            output_path = (
+                refinement_dir
+                / "nut_place_refinements.json"
+            )
+
+            with output_path.open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+
+                json.dump(
+                    refinements,
+                    stream,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
     def inference(
         self,
         input_data: Any,
@@ -1053,6 +2505,30 @@ class SeeDoController(AIController):
                             self.artifacts_dir
                             / "scene_perceiver"
                         ),
+                    )
+
+                if (
+                    str(
+                        self.action_plan.task_type
+                    )
+                    .strip()
+                    .lower()
+                    == "nut_assembly"
+                ):
+                    self._reset_nut_visual_debug_state()
+
+                    self._cache_nut_visual_debug_scene_context(
+                        rgb_image=processed_input[
+                            "rgb"
+                        ],
+
+                        depth_image=processed_input[
+                            "depth"
+                        ],
+
+                        camera_info=processed_input[
+                            "camera_info"
+                        ],
                     )
 
                 self.execution_status = "interpreting_scene"
@@ -1148,6 +2624,36 @@ class SeeDoController(AIController):
                         ),
                     )
 
+                if (
+                    str(self.action_plan.task_type)
+                    .strip()
+                    .lower()
+                    == "nut_assembly"
+                ):
+                    with TIMING.measure(
+                        "nut_place_refinement"
+                    ):
+                        self._refine_nut_place_targets(
+                            depth_image=processed_input[
+                                "depth"
+                            ],
+                            camera_info=processed_input[
+                                "camera_info"
+                            ],
+                        )
+
+                    with TIMING.measure(
+                        "nut_pick_refinement"
+                    ):
+                        self._refine_nut_pick_targets(
+                            depth_image=processed_input[
+                                "depth"
+                            ],
+                            camera_info=processed_input[
+                                "camera_info"
+                            ],
+                        )
+
             except Exception as exc:
                 self.execution_status = "failed"
                 self.execution_error = str(exc)
@@ -1209,6 +2715,11 @@ class SeeDoController(AIController):
                     f"{EEF_QUAT_NAME!r}."
                 )
 
+            if self.action_plan is None:
+                raise RuntimeError(
+                    "Action plan unavailable before Motion Layer reset"
+                )
+
             self.motion_layer.reset(
                 current_position=current_position,
                 current_orientation=current_orientation,
@@ -1216,7 +2727,24 @@ class SeeDoController(AIController):
                     self.artifacts_dir
                     / "motion_layer"
                 ),
+                task_type=self.action_plan.task_type,
             )
+
+            if (
+                str(self.action_plan.task_type)
+                .strip()
+                .lower()
+                == "nut_assembly"
+            ):
+                if not self.nut_place_refinements:
+                    raise RuntimeError(
+                        "Nut-Assembly Motion Layer initialization "
+                        "requires refined place geometry."
+                    )
+
+                self.motion_layer.set_nut_place_refinements(
+                    self.nut_place_refinements
+                )
 
         primitive_step = self.primitive_plan.steps[
             primitive_index
@@ -1405,6 +2933,46 @@ class SeeDoController(AIController):
                     ),
                 )
 
+                if (
+                    str(self.action_plan.task_type)
+                    .strip()
+                    .lower()
+                    == "nut_assembly"
+                ):
+                    nut_pick_refinement = (
+                        self._resolve_nut_pick_refinement(
+                            grasp_target
+                        )
+                    )
+
+                    self.motion_layer.set_nut_grasp_geometry(
+                        target_id=grasp_target,
+
+                        hole_center_base=(
+                            nut_pick_refinement[
+                                "hole_center_base"
+                            ]
+                        ),
+
+                        hole_bottom_center_base=(
+                            nut_pick_refinement[
+                                "hole_bottom_center_base"
+                            ]
+                        ),
+
+                        hole_axis_base=(
+                            nut_pick_refinement[
+                                "hole_axis_base"
+                            ]
+                        ),
+
+                        object_radius_from_hole_m=(
+                            nut_pick_refinement[
+                                "object_radius_from_hole_m"
+                            ]
+                        ),
+                    )
+
                 self.grasp_plan_target = (
                     grasp_target
                 )
@@ -1454,6 +3022,81 @@ class SeeDoController(AIController):
                     primitive_step=primitive_step,
                     scene_state=self.scene_state,
                 )
+
+            if (
+                str(
+                    self.action_plan.task_type
+                )
+                .strip()
+                .lower()
+                == "nut_assembly"
+            ):
+                primitive_name = (
+                    str(
+                        primitive_step.name
+                    )
+                    .strip()
+                    .lower()
+                )
+
+                self._record_nut_visual_debug_actions(
+                    primitive_name=(
+                        primitive_name
+                    ),
+                    actions=(
+                        actions
+                    ),
+                )
+
+                if primitive_name == "inserting":
+
+                    place_target = (
+                        primitive_step.arguments.get(
+                            "target"
+                        )
+                    )
+
+                    if not isinstance(
+                        place_target,
+                        str,
+                    ):
+                        raise RuntimeError(
+                            "Nut-Assembly INSERTING primitive "
+                            "does not contain a valid target."
+                        )
+
+                    place_target = (
+                        place_target.strip()
+                    )
+
+                    if not place_target:
+                        raise RuntimeError(
+                            "Nut-Assembly INSERTING target "
+                            "is empty."
+                        )
+
+                    #
+                    # Visual diagnostics are deliberately
+                    # non-critical.
+                    #
+                    # A plotting/filesystem problem must not turn
+                    # a successfully generated robot trajectory
+                    # into a failed task execution.
+                    #
+                    try:
+                        self._export_current_nut_visual_debug(
+                            place_target=(
+                                place_target
+                            )
+                        )
+
+                    except Exception as debug_exc:
+                        print(
+                            "[NUT DEBUG] WARNING: "
+                            "could not export visual artifacts: "
+                            f"{debug_exc}",
+                            flush=True,
+                        )
 
         except Exception as exc:
             self.execution_status = "failed"
@@ -1557,6 +3200,9 @@ class SeeDoController(AIController):
             self.primitive_plan = None
             self.grasp_plan = None
             self.grasp_plan_target = None
+            self.nut_place_refinements = {}
+            self._reset_nut_visual_debug_state()
+            self.nut_pick_refinements = {}
             self.demo_structured_scene = None
             self.runtime_structured_scene = None
             self.structural_matching_result = None
@@ -1597,6 +3243,9 @@ class SeeDoController(AIController):
         self.primitive_plan = None
         self.grasp_plan = None
         self.grasp_plan_target = None
+        self.nut_place_refinements = {}
+        self._reset_nut_visual_debug_state()
+        self.nut_pick_refinements = {}
         self.demo_structured_scene = None
         self.runtime_structured_scene = None
         self.structural_matching_result = None

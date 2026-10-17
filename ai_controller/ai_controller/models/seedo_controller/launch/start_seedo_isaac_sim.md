@@ -100,6 +100,7 @@ docker run --rm -it \
   -v "$(pwd)/../scene_capture":/scene_capture:ro \
   -v "$(pwd)/../test_isaac":/test_isaac \
   -v "$(pwd)/../test_real":/test_real \
+  -v "$(pwd)/../full_nut_case":/full_nut_case \
   -v "$(pwd)/saved_trajectories":/home/saved_trajectories \
   -v "$(pwd)/../Experiments":/Experiments \
   -e RMW_IMPLEMENTATION=rmw_fastrtps_cpp \

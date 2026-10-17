@@ -40,6 +40,14 @@ def _motion_layer(
         "object_y_offset": -0.06,
         "assembly_alignment_z_offset": 0.135,
         "assembly_insertion_z_offset": -0.11,
+        "nut_assembly_config": {
+            "peg_clearance_m": 0.020,
+            "initial_entry_m": 0.005,
+            "insertion_step_m": 0.005,
+            "release_bottom_height_m": 0.010,
+            "rotation_step_deg": 5.0,
+            "auto_release": False,
+        },
     }
 
     kwargs.update(
@@ -48,6 +56,139 @@ def _motion_layer(
 
     return SeeDoMotionLayer(
         **kwargs
+    )
+
+NUT_TARGET = "gray_ring_0"
+PEG_TARGET = "wooden_peg_2"
+
+
+def _nut_scene_state() -> SceneState:
+    """
+    SceneState positions are intentionally NOT equal to the refined
+    assembly geometry.
+
+    This verifies that Nut-Assembly placement never falls back to
+    SceneObject.position_base.
+    """
+
+    nut = _scene_object(
+        NUT_TARGET,
+        position_base=(
+            0.20,
+            0.40,
+            0.12,
+        ),
+    )
+
+    peg = _scene_object(
+        PEG_TARGET,
+        position_base=(
+            0.62,
+            0.38,
+            0.25,
+        ),
+    )
+
+    return _scene_state(
+        nut,
+        peg,
+    )
+
+
+def _install_test_nut_geometry(
+    layer: SeeDoMotionLayer,
+) -> None:
+    """
+    Install a fully deterministic assembly geometry.
+
+    Planned grasp TCP:
+        [0.20, 0.40, 0.12]
+
+    Hole bottom at grasp:
+        [0.23, 0.40, 0.07]
+
+    Therefore:
+        TCP -> hole_bottom = [0.03, 0.00, -0.05]
+
+    Peg:
+        support = [0.50, 0.30, 0.10]
+        tip     = [0.50, 0.30, 0.30]
+        axis    = +Z
+    """
+
+    layer.set_grasp_pose(
+        position=(
+            0.20,
+            0.40,
+            0.12,
+        ),
+        orientation=(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
+        approach_direction=(
+            0.0,
+            0.0,
+            -1.0,
+        ),
+        backend_name="graspgenx",
+    )
+
+    layer.set_nut_place_refinements(
+        {
+            PEG_TARGET: {
+                "accepted": True,
+
+                "axis_xy_base": (
+                    0.50,
+                    0.30,
+                ),
+
+                "axis_direction_base": (
+                    0.0,
+                    0.0,
+                    1.0,
+                ),
+
+                "peg_tip_point_base": (
+                    0.50,
+                    0.30,
+                    0.30,
+                ),
+
+                "peg_support_point_base": (
+                    0.50,
+                    0.30,
+                    0.10,
+                ),
+            }
+        }
+    )
+
+    layer.set_nut_grasp_geometry(
+        target_id=NUT_TARGET,
+
+        hole_center_base=(
+            0.23,
+            0.40,
+            0.09,
+        ),
+
+        hole_bottom_center_base=(
+            0.23,
+            0.40,
+            0.07,
+        ),
+
+        hole_axis_base=(
+            0.0,
+            0.0,
+            1.0,
+        ),
+
+        object_radius_from_hole_m=0.040,
     )
 
 
@@ -93,11 +234,13 @@ def _reset(
     position=(0.1, 0.2, 0.3),
     orientation=(0.0, 0.0, 0.0, 1.0),
     artifacts_dir=None,
+    task_type="pick_and_place",
 ):
     layer.reset(
         current_position=position,
         current_orientation=orientation,
         artifacts_dir=artifacts_dir,
+        task_type=task_type
     )
 
 
@@ -172,7 +315,7 @@ def test_constructor_rejects_invalid_grasp_orientation(
 ):
     with pytest.raises(
         ValueError,
-        match="grasp_orientation must contain exactly 4 values",
+        match="grasp_orientation must contain",
     ):
         _motion_layer(
             grasp_orientation=orientation,
@@ -1069,115 +1212,6 @@ def test_placing_moves_above_destination_and_opens_gripper(
     )
 
 
-def test_aligning_uses_assembly_alignment_offset(
-    monkeypatch,
-):
-    layer = _motion_layer(
-        assembly_alignment_z_offset=0.135,
-    )
-
-    _reset(layer)
-
-    captured = {}
-
-    _install_fake_move_linear(
-        monkeypatch,
-        layer,
-        captured,
-    )
-
-    layer.translate(
-        primitive_step=_primitive(
-            "aligning"
-        ),
-        scene_state=_scene_state(
-            _scene_object(
-                "target",
-                position_base=(
-                    0.4,
-                    0.5,
-                    0.6,
-                ),
-            )
-        ),
-    )
-
-    assert np.allclose(
-        captured["target_position"],
-        np.array(
-            [
-                0.4,
-                0.5,
-                0.735,
-            ]
-        ),
-    )
-
-
-def test_inserting_uses_insertion_offset_and_opens_gripper(
-    monkeypatch,
-):
-    layer = _motion_layer(
-        assembly_insertion_z_offset=-0.11,
-    )
-
-    _reset(layer)
-
-    layer.current_gripper_position = (
-        layer.gripper_closed_position
-    )
-
-    captured = {}
-
-    _install_fake_move_linear(
-        monkeypatch,
-        layer,
-        captured,
-    )
-
-    actions = layer.translate(
-        primitive_step=_primitive(
-            "inserting"
-        ),
-        scene_state=_scene_state(
-            _scene_object(
-                "target",
-                position_base=(
-                    0.4,
-                    0.5,
-                    0.6,
-                ),
-            )
-        ),
-    )
-
-    assert np.allclose(
-        captured["target_position"],
-        np.array(
-            [
-                0.4,
-                0.5,
-                0.49,
-            ]
-        ),
-    )
-
-    assert len(actions) == 2
-
-    assert actions[0][7] == pytest.approx(
-        0.2
-    )
-
-    assert actions[1][7] == pytest.approx(
-        0.8
-    )
-
-    assert (
-        layer.current_gripper_position
-        == pytest.approx(0.8)
-    )
-
-
 # ---------------------------------------------------------------------
 # Linear motion and action format
 # ---------------------------------------------------------------------
@@ -2011,4 +2045,547 @@ def test_graspgenx_pick_closes_without_retreat(
         layer.current_pose.position,
         tcp_position,
         atol=1e-9,
+    )
+
+def test_nut_grasp_geometry_is_frozen_in_tcp_frame():
+    layer = _motion_layer()
+
+    _reset(
+        layer,
+        position=(
+            0.20,
+            0.40,
+            0.12,
+        ),
+        orientation=(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
+        task_type="nut_assembly",
+    )
+
+    _install_test_nut_geometry(
+        layer
+    )
+
+    np.testing.assert_allclose(
+        layer._nut_hole_top_local,
+        np.array(
+            [
+                0.03,
+                0.00,
+                -0.03,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer._nut_hole_bottom_local,
+        np.array(
+            [
+                0.03,
+                0.00,
+                -0.05,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer._nut_hole_axis_local,
+        np.array(
+            [
+                0.0,
+                0.0,
+                1.0,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    expected_sweep_radius = (
+        max(
+            np.linalg.norm(
+                np.array(
+                    [
+                        0.03,
+                        0.0,
+                        -0.03,
+                    ]
+                )
+            ),
+            np.linalg.norm(
+                np.array(
+                    [
+                        0.03,
+                        0.0,
+                        -0.05,
+                    ]
+                )
+            ),
+        )
+        + 0.040
+    )
+
+    assert (
+        layer._nut_object_sweep_radius_m
+        == pytest.approx(
+            expected_sweep_radius,
+            abs=1e-9,
+        )
+    )
+
+    # Simulate reaching the planned grasp TCP.
+    layer.current_pose = SimpleNamespace(
+        position=np.array(
+            [
+                0.20,
+                0.40,
+                0.12,
+            ],
+            dtype=np.float64,
+        ),
+        orientation=np.array(
+            [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+            ],
+            dtype=np.float64,
+        ),
+    )
+
+    (
+        hole_top,
+        hole_bottom,
+        hole_axis,
+    ) = layer._nut_current_hole_geometry()
+
+    np.testing.assert_allclose(
+        hole_top,
+        np.array(
+            [
+                0.23,
+                0.40,
+                0.09,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        hole_bottom,
+        np.array(
+            [
+                0.23,
+                0.40,
+                0.07,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        hole_axis,
+        np.array(
+            [
+                0.0,
+                0.0,
+                1.0,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+def test_rotation_between_vectors_aligns_source_with_target():
+    source = np.array(
+        [
+            1.0,
+            0.0,
+            0.0,
+        ],
+        dtype=np.float64,
+    )
+
+    target = np.array(
+        [
+            0.0,
+            0.0,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    rotation = (
+        SeeDoMotionLayer
+        ._rotation_between_vectors(
+            source,
+            target,
+        )
+    )
+
+    rotated = rotation.apply(
+        source
+    )
+
+    np.testing.assert_allclose(
+        rotated,
+        target,
+        atol=1e-9,
+    )
+
+    assert (
+        rotation.magnitude()
+        == pytest.approx(
+            np.pi / 2.0,
+            abs=1e-9,
+        )
+    )
+
+def test_rotation_between_vectors_handles_antiparallel_axes():
+    source = np.array(
+        [
+            0.0,
+            0.0,
+            -1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    target = np.array(
+        [
+            0.0,
+            0.0,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    rotation = (
+        SeeDoMotionLayer
+        ._rotation_between_vectors(
+            source,
+            target,
+        )
+    )
+
+    np.testing.assert_allclose(
+        rotation.apply(source),
+        target,
+        atol=1e-9,
+    )
+
+    assert (
+        rotation.magnitude()
+        == pytest.approx(
+            np.pi,
+            abs=1e-9,
+        )
+    )
+
+def test_complete_nut_assembly_geometry_is_numerically_consistent():
+    layer = _motion_layer(
+        min_step=0.01,
+        lift_height=0.15,
+    )
+
+    scene_state = (
+        _nut_scene_state()
+    )
+
+    _reset(
+        layer,
+        position=(
+            0.20,
+            0.40,
+            0.12,
+        ),
+        orientation=(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
+        task_type="nut_assembly",
+    )
+
+    _install_test_nut_geometry(
+        layer
+    )
+
+    # The test starts immediately after a successful PICK.
+    layer.current_gripper_position = (
+        layer.gripper_closed_position
+    )
+
+    # ============================================================
+    # LIFT_UP
+    # ============================================================
+
+    lift_actions = layer.translate(
+        primitive_step=_primitive(
+            "lift_up",
+            target=NUT_TARGET,
+        ),
+        scene_state=scene_state,
+    )
+
+    assert lift_actions
+
+    expected_sweep_radius = (
+        max(
+            np.linalg.norm(
+                np.array(
+                    [
+                        0.03,
+                        0.0,
+                        -0.03,
+                    ]
+                )
+            ),
+            np.linalg.norm(
+                np.array(
+                    [
+                        0.03,
+                        0.0,
+                        -0.05,
+                    ]
+                )
+            ),
+        )
+        + 0.040
+    )
+
+    expected_lift_z = (
+        0.30
+        + 0.020
+        + expected_sweep_radius
+    )
+
+    assert (
+        layer.current_pose.position[2]
+        == pytest.approx(
+            expected_lift_z,
+            abs=1e-9,
+        )
+    )
+
+    # ============================================================
+    # MOVING
+    # ============================================================
+
+    moving_actions = layer.translate(
+        primitive_step=_primitive(
+            "moving",
+            target=PEG_TARGET,
+        ),
+        scene_state=scene_state,
+    )
+
+    assert moving_actions
+
+    expected_moving_tcp = np.array(
+        [
+            0.47,
+            0.30,
+            expected_lift_z,
+        ],
+        dtype=np.float64,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        expected_moving_tcp,
+        atol=1e-9,
+    )
+
+    (
+        _,
+        moving_hole_bottom,
+        moving_hole_axis,
+    ) = layer._nut_current_hole_geometry()
+
+    # Hole must be exactly on the refined peg axis.
+    np.testing.assert_allclose(
+        moving_hole_bottom[:2],
+        np.array(
+            [
+                0.50,
+                0.30,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        moving_hole_axis,
+        np.array(
+            [
+                0.0,
+                0.0,
+                1.0,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    # IMPORTANT:
+    # SceneState deliberately says that the peg is elsewhere.
+    scene_peg = next(
+        obj
+        for obj in scene_state.objects
+        if obj.object_id == PEG_TARGET
+    )
+
+    assert not np.allclose(
+        moving_hole_bottom[:2],
+        np.asarray(
+            scene_peg.position_base[:2]
+        ),
+        atol=1e-6,
+    )
+
+    # ============================================================
+    # ALIGNING
+    # ============================================================
+
+    aligning_actions = layer.translate(
+        primitive_step=_primitive(
+            "aligning",
+            target=PEG_TARGET,
+        ),
+        scene_state=scene_state,
+    )
+
+    assert aligning_actions
+
+    (
+        _,
+        aligned_hole_bottom,
+        aligned_hole_axis,
+    ) = layer._nut_current_hole_geometry()
+
+    expected_aligned_hole_bottom = (
+        np.array(
+            [
+                0.50,
+                0.30,
+                0.30,
+            ],
+            dtype=np.float64,
+        )
+        + np.array(
+            [
+                0.0,
+                0.0,
+                0.020,
+            ],
+            dtype=np.float64,
+        )
+    )
+
+    np.testing.assert_allclose(
+        aligned_hole_bottom,
+        expected_aligned_hole_bottom,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        aligned_hole_axis,
+        np.array(
+            [
+                0.0,
+                0.0,
+                1.0,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        np.array(
+            [
+                0.47,
+                0.30,
+                0.37,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    # ============================================================
+    # INSERTING
+    # ============================================================
+
+    inserting_actions = layer.translate(
+        primitive_step=_primitive(
+            "inserting",
+            target=PEG_TARGET,
+        ),
+        scene_state=scene_state,
+    )
+
+    assert inserting_actions
+
+    (
+        _,
+        final_hole_bottom,
+        final_hole_axis,
+    ) = layer._nut_current_hole_geometry()
+
+    expected_final_hole_bottom = np.array(
+        [
+            0.50,
+            0.30,
+            0.11,
+        ],
+        dtype=np.float64,
+    )
+
+    np.testing.assert_allclose(
+        final_hole_bottom,
+        expected_final_hole_bottom,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        final_hole_axis,
+        np.array(
+            [
+                0.0,
+                0.0,
+                1.0,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        np.array(
+            [
+                0.47,
+                0.30,
+                0.16,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    # auto_release=False in the test configuration.
+    assert (
+        layer.current_gripper_position
+        == pytest.approx(
+            layer.gripper_closed_position
+        )
+    )
+
+    assert (
+        layer._nut_phase
+        == "inserted"
     )

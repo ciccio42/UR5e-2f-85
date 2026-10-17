@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from ai_controller.models.seedo_controller.motion_layer import (
     SeeDoMotionLayer,
@@ -83,6 +84,73 @@ CURRENT_ORIENTATION = np.array(
     dtype=np.float64,
 )
 
+NUT_TARGET_ID = "gray_ring_0"
+PEG_TARGET_ID = "wooden_peg_2"
+
+PEG_AXIS_BASE = np.array(
+    [
+        0.0,
+        0.0,
+        1.0,
+    ],
+    dtype=np.float64,
+)
+
+# Coherent with the real setup:
+# table_0 around z=-0.12 m, peg approximately 20 cm high.
+#
+# IMPORTANT:
+# these are NOT configuration values used by production.
+# They are frozen refinement outputs used only by this test.
+PEG_SUPPORT_BASE = np.array(
+    [
+        0.06170433,
+        0.38406133,
+        -0.12000000,
+    ],
+    dtype=np.float64,
+)
+
+PEG_TIP_BASE = np.array(
+    [
+        0.06170433,
+        0.38406133,
+        0.08000000,
+    ],
+    dtype=np.float64,
+)
+
+# Geometry of the ring relative to the REAL GraspGen-X TCP.
+#
+# The current real grasp quaternion turns local -Z into base +Z.
+HOLE_BOTTOM_LOCAL = np.array(
+    [
+        0.030,
+        0.000,
+        -0.030,
+    ],
+    dtype=np.float64,
+)
+
+HOLE_TOP_LOCAL = np.array(
+    [
+        0.030,
+        0.000,
+        -0.050,
+    ],
+    dtype=np.float64,
+)
+
+HOLE_AXIS_LOCAL = np.array(
+    [
+        0.0,
+        0.0,
+        -1.0,
+    ],
+    dtype=np.float64,
+)
+
+OBJECT_RADIUS_FROM_HOLE_M = 0.040
 
 class FakeGraspGenXPlanner:
     backend_name = "graspgenx"
@@ -104,6 +172,368 @@ class FakeGraspGenXPlanner:
 
         return self.result
 
+def _make_nut_action_plan() -> ActionPlanningResult:
+    step = ActionStep(
+        pick_keyframe=0,
+        place_keyframe=1,
+
+        picked_track_id=0,
+        picked_category="ring",
+        picked_color="gray",
+
+        destination_track_id=1,
+        destination_category="peg",
+        destination_ordinal_from_left=0,
+
+        relation="on",
+
+        action=(
+            "Pick the gray ring and insert it "
+            "onto the destination peg."
+        ),
+
+        picked_detector_label="ring",
+
+        grasp_instruction=(
+            "Pick up the gray ring by grasping "
+            "its handle, not the circular ring body."
+        ),
+    )
+
+    return ActionPlanningResult(
+        steps=(
+            step,
+        ),
+        status="completed",
+        ambiguities=(),
+        natural_language_plan=step.action,
+        task_type="nut_assembly",
+    )
+
+def _make_nut_scene_state() -> SceneState:
+
+    ring = SceneObject(
+        object_id=NUT_TARGET_ID,
+        label="ring",
+        pixel_coordinates=(
+            269,
+            217,
+        ),
+        position_camera=(
+            -0.0347,
+            0.0317,
+            0.2889,
+        ),
+        position_base=tuple(
+            TCP_POSITION
+        ),
+        category="ring",
+        attributes={
+            "color": "gray",
+        },
+    )
+
+    # Deliberately WRONG geometric center.
+    #
+    # Placement must use the refinement below,
+    # never this SceneState centroid.
+    peg = SceneObject(
+        object_id=PEG_TARGET_ID,
+        label="peg",
+        pixel_coordinates=(
+            400,
+            190,
+        ),
+        position_camera=(
+            0.0,
+            0.0,
+            0.4,
+        ),
+        position_base=(
+            0.30,
+            0.60,
+            0.20,
+        ),
+        category="peg",
+        attributes={},
+    )
+
+    return SceneState(
+        objects=(
+            ring,
+            peg,
+        )
+    )
+
+def _make_nut_primitive_plan() -> PrimitivePlan:
+    return PrimitivePlan(
+        steps=(
+            PrimitiveStep(
+                name="reach",
+                arguments={
+                    "target": NUT_TARGET_ID,
+                },
+            ),
+            PrimitiveStep(
+                name="approaching",
+                arguments={
+                    "target": NUT_TARGET_ID,
+                },
+            ),
+            PrimitiveStep(
+                name="pick",
+                arguments={
+                    "target": NUT_TARGET_ID,
+                },
+            ),
+            PrimitiveStep(
+                name="lift_up",
+                arguments={
+                    "target": NUT_TARGET_ID,
+                },
+            ),
+            PrimitiveStep(
+                name="moving",
+                arguments={
+                    "target": PEG_TARGET_ID,
+                },
+            ),
+            PrimitiveStep(
+                name="aligning",
+                arguments={
+                    "target": PEG_TARGET_ID,
+                },
+            ),
+            PrimitiveStep(
+                name="inserting",
+                arguments={
+                    "target": PEG_TARGET_ID,
+                },
+            ),
+        ),
+        source_code="",
+    )
+
+def _make_nut_place_refinements():
+    return {
+        PEG_TARGET_ID: {
+            "accepted": True,
+
+            "axis_xy_base": tuple(
+                PEG_TIP_BASE[:2]
+            ),
+
+            "axis_point_base": tuple(
+                PEG_TIP_BASE
+            ),
+
+            "axis_direction_base": tuple(
+                PEG_AXIS_BASE
+            ),
+
+            "peg_tip_point_base": tuple(
+                PEG_TIP_BASE
+            ),
+
+            "peg_support_point_base": tuple(
+                PEG_SUPPORT_BASE
+            ),
+
+            "peg_height_estimate_m": float(
+                np.linalg.norm(
+                    PEG_TIP_BASE
+                    - PEG_SUPPORT_BASE
+                )
+            ),
+        }
+    }
+
+def _make_nut_pick_refinements():
+
+    grasp_rotation = Rotation.from_quat(
+        TCP_ORIENTATION
+        / np.linalg.norm(
+            TCP_ORIENTATION
+        )
+    )
+
+    hole_bottom_base = (
+        TCP_POSITION
+        + grasp_rotation.apply(
+            HOLE_BOTTOM_LOCAL
+        )
+    )
+
+    hole_top_base = (
+        TCP_POSITION
+        + grasp_rotation.apply(
+            HOLE_TOP_LOCAL
+        )
+    )
+
+    hole_axis_base = (
+        grasp_rotation.apply(
+            HOLE_AXIS_LOCAL
+        )
+    )
+
+    return {
+        NUT_TARGET_ID: {
+            "accepted": True,
+
+            "hole_center_base": tuple(
+                hole_top_base
+            ),
+
+            "hole_bottom_center_base": tuple(
+                hole_bottom_base
+            ),
+
+            "hole_axis_base": tuple(
+                hole_axis_base
+            ),
+
+            "nut_thickness_estimate_m": 0.020,
+
+            "object_radius_from_hole_m": (
+                OBJECT_RADIUS_FROM_HOLE_M
+            ),
+        }
+    }
+
+def _make_nut_motion_layer() -> SeeDoMotionLayer:
+    return SeeDoMotionLayer(
+        grasp_orientation=np.array(
+            [
+                0.9994452044624775,
+                0.03161651380119412,
+                0.0021438049655468088,
+                0.010251021036213035,
+            ],
+            dtype=np.float64,
+        ),
+
+        min_step=0.02,
+        reach_hover_height=0.18,
+        approach_z_offset=0.0,
+        release_height_offset=0.10,
+        lift_height=0.15,
+
+        gripper_open_position=0.1,
+        gripper_closed_position=0.8,
+
+        object_y_offset=-0.04,
+
+        grasp_planning_enabled=True,
+
+        pregrasp_distance=0.08,
+        grasp_depth_offset=0.005,
+        retreat_distance=0.04,
+
+        nut_assembly_config={
+            "peg_clearance_m": 0.020,
+            "initial_entry_m": 0.005,
+            "insertion_step_m": 0.005,
+            "release_bottom_height_m": 0.010,
+            "rotation_step_deg": 5.0,
+            "auto_release": False,
+        },
+    )
+
+def _make_nut_controller(
+    tmp_path: Path,
+) -> tuple[
+    SeeDoController,
+    FakeGraspGenXPlanner,
+]:
+
+    result = GraspGenXPlanResult(
+        grasp_instruction=(
+            "Pick up the gray ring by grasping "
+            "its handle, not the circular ring body."
+        ),
+
+        semantic_point_px=(
+            SEMANTIC_POINT.copy()
+        ),
+
+        tcp_position_base=(
+            TCP_POSITION.copy()
+        ),
+
+        tcp_orientation_base=(
+            TCP_ORIENTATION.copy()
+        ),
+
+        approach_direction_base=(
+            APPROACH_DIRECTION.copy()
+        ),
+
+        confidence=CONFIDENCE,
+    )
+
+    planner = FakeGraspGenXPlanner(
+        result
+    )
+
+    controller = SeeDoController.__new__(
+        SeeDoController
+    )
+
+    controller.action_plan = (
+        _make_nut_action_plan()
+    )
+
+    controller.scene_state = (
+        _make_nut_scene_state()
+    )
+
+    controller.primitive_plan = (
+        _make_nut_primitive_plan()
+    )
+
+    controller.perception_mode = (
+        "prior_guided"
+    )
+
+    controller.grasp_planning_enabled = True
+    controller.grasp_planner = planner
+
+    controller.motion_layer = (
+        _make_nut_motion_layer()
+    )
+
+    controller.nut_place_refinements = (
+        _make_nut_place_refinements()
+    )
+
+    controller.nut_pick_refinements = (
+        _make_nut_pick_refinements()
+    )
+
+    controller.artifacts_dir = (
+        tmp_path
+        / "nut_handoff"
+    )
+
+    controller.artifacts_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    controller.execution_status = (
+        "plan_ready"
+    )
+
+    controller.execution_error = None
+
+    controller.grasp_plan = None
+    controller.grasp_plan_target = None
+
+    return (
+        controller,
+        planner,
+    )
 
 def _make_action_plan() -> ActionPlanningResult:
     step = ActionStep(
@@ -134,7 +564,7 @@ def _make_action_plan() -> ActionPlanningResult:
         status="completed",
         ambiguities=(),
         natural_language_plan=step.action,
-        task_type=None,
+        task_type="pick_and_place",
     )
 
 
@@ -677,4 +1107,378 @@ def test_graspgenx_controller_motion_handoff(
         "LIFT final:",
         lift_final[:3],
     )
+    print("=" * 78)
+
+def test_nut_assembly_complete_controller_motion_handoff(
+    tmp_path,
+):
+
+    (
+        controller,
+        planner,
+    ) = _make_nut_controller(
+        tmp_path
+    )
+
+    # ------------------------------------------------------------
+    # t=1 REACH
+    # ------------------------------------------------------------
+
+    reach_actions = controller.inference(
+        input_data={
+            "robot_state": _robot_state(),
+        },
+        t=1,
+    )
+
+    assert reach_actions
+    assert len(planner.calls) == 0
+
+    # ------------------------------------------------------------
+    # t=2 APPROACHING + real GraspGen-X result handoff
+    # ------------------------------------------------------------
+
+    approaching_actions = (
+        controller.inference(
+            input_data={
+                "robot_state": (
+                    _robot_state()
+                ),
+                "grasp_input": (
+                    _grasp_input()
+                ),
+            },
+            t=2,
+        )
+    )
+
+    assert approaching_actions
+    assert len(planner.calls) == 1
+
+    np.testing.assert_allclose(
+        approaching_actions[-1][:3],
+        TCP_POSITION,
+        atol=1e-9,
+    )
+
+    # Controller must have reconstructed the original
+    # grasp-relative geometry.
+    np.testing.assert_allclose(
+        controller.motion_layer
+        ._nut_hole_bottom_local,
+        HOLE_BOTTOM_LOCAL,
+        atol=1e-8,
+    )
+
+    np.testing.assert_allclose(
+        controller.motion_layer
+        ._nut_hole_top_local,
+        HOLE_TOP_LOCAL,
+        atol=1e-8,
+    )
+
+    np.testing.assert_allclose(
+        controller.motion_layer
+        ._nut_hole_axis_local,
+        HOLE_AXIS_LOCAL,
+        atol=1e-8,
+    )
+
+    # ------------------------------------------------------------
+    # t=3 PICK
+    # ------------------------------------------------------------
+
+    pick_actions = controller.inference(
+        input_data={},
+        t=3,
+    )
+
+    assert len(pick_actions) == 1
+
+    # ------------------------------------------------------------
+    # t=4 LIFT_UP
+    # ------------------------------------------------------------
+
+    lift_actions = controller.inference(
+        input_data={},
+        t=4,
+    )
+
+    assert lift_actions
+
+    lift_tcp = (
+        controller.motion_layer
+        .current_pose.position.copy()
+    )
+
+    # ------------------------------------------------------------
+    # t=5 MOVING
+    # ------------------------------------------------------------
+
+    moving_actions = controller.inference(
+        input_data={},
+        t=5,
+    )
+
+    assert moving_actions
+
+    (
+        _,
+        moving_hole_bottom,
+        moving_hole_axis,
+    ) = (
+        controller.motion_layer
+        ._nut_current_hole_geometry()
+    )
+
+    moving_delta = (
+        moving_hole_bottom
+        - PEG_TIP_BASE
+    )
+
+    moving_lateral_error = float(
+        np.linalg.norm(
+            moving_delta
+            - np.dot(
+                moving_delta,
+                PEG_AXIS_BASE,
+            )
+            * PEG_AXIS_BASE
+        )
+    )
+
+    moving_axis_dot = float(
+        np.dot(
+            moving_hole_axis,
+            PEG_AXIS_BASE,
+        )
+    )
+
+    assert moving_lateral_error < 1e-8
+    assert moving_axis_dot > 0.999999
+
+    # ------------------------------------------------------------
+    # t=6 ALIGNING
+    # ------------------------------------------------------------
+
+    aligning_actions = controller.inference(
+        input_data={},
+        t=6,
+    )
+
+    assert aligning_actions
+
+    (
+        _,
+        aligned_hole_bottom,
+        aligned_hole_axis,
+    ) = (
+        controller.motion_layer
+        ._nut_current_hole_geometry()
+    )
+
+    expected_aligned_bottom = (
+        PEG_TIP_BASE
+        + 0.020
+        * PEG_AXIS_BASE
+    )
+
+    np.testing.assert_allclose(
+        aligned_hole_bottom,
+        expected_aligned_bottom,
+        atol=1e-8,
+    )
+
+    aligned_axis_dot = float(
+        np.dot(
+            aligned_hole_axis,
+            PEG_AXIS_BASE,
+        )
+    )
+
+    assert aligned_axis_dot > 0.999999
+
+    # ------------------------------------------------------------
+    # t=7 INSERTING
+    # ------------------------------------------------------------
+
+    inserting_actions = controller.inference(
+        input_data={},
+        t=7,
+    )
+
+    assert inserting_actions
+
+    (
+        _,
+        final_hole_bottom,
+        final_hole_axis,
+    ) = (
+        controller.motion_layer
+        ._nut_current_hole_geometry()
+    )
+
+    expected_final_bottom = (
+        PEG_SUPPORT_BASE
+        + 0.010
+        * PEG_AXIS_BASE
+    )
+
+    np.testing.assert_allclose(
+        final_hole_bottom,
+        expected_final_bottom,
+        atol=1e-8,
+    )
+
+    final_axis_dot = float(
+        np.dot(
+            final_hole_axis,
+            PEG_AXIS_BASE,
+        )
+    )
+
+    assert final_axis_dot > 0.999999
+
+    # SceneState centroid must NOT have been used.
+    scene_peg = next(
+        obj
+        for obj in controller.scene_state.objects
+        if obj.object_id == PEG_TARGET_ID
+    )
+
+    assert not np.allclose(
+        final_hole_bottom[:2],
+        np.asarray(
+            scene_peg.position_base[:2]
+        ),
+        atol=1e-4,
+    )
+
+    assert (
+        controller.motion_layer._nut_phase
+        == "inserted"
+    )
+
+    assert (
+        controller.execution_error
+        is None
+    )
+
+    # ------------------------------------------------------------
+    # NUMERICAL REPORT
+    # ------------------------------------------------------------
+
+    peg_height = float(
+        np.dot(
+            PEG_TIP_BASE
+            - PEG_SUPPORT_BASE,
+            PEG_AXIS_BASE,
+        )
+    )
+
+    moving_clearance = float(
+        np.dot(
+            moving_hole_bottom
+            - PEG_TIP_BASE,
+            PEG_AXIS_BASE,
+        )
+    )
+
+    final_support_height = float(
+        np.dot(
+            final_hole_bottom
+            - PEG_SUPPORT_BASE,
+            PEG_AXIS_BASE,
+        )
+    )
+
+    print()
+    print("=" * 78)
+    print("NUT-ASSEMBLY COMPLETE CONTROLLER HANDOFF")
+    print("=" * 78)
+
+    print(
+        "GraspGen-X TCP:",
+        TCP_POSITION,
+    )
+
+    print(
+        "Peg support:",
+        PEG_SUPPORT_BASE,
+    )
+
+    print(
+        "Peg tip:",
+        PEG_TIP_BASE,
+    )
+
+    print(
+        "Observed peg height:",
+        f"{peg_height * 1000.0:.2f} mm",
+    )
+
+    print(
+        "LIFT TCP:",
+        lift_tcp,
+    )
+
+    print(
+        "MOVING hole bottom:",
+        moving_hole_bottom,
+    )
+
+    print(
+        "MOVING lateral error:",
+        f"{moving_lateral_error * 1000.0:.6f} mm",
+    )
+
+    print(
+        "MOVING axial clearance:",
+        f"{moving_clearance * 1000.0:.2f} mm",
+    )
+
+    print(
+        "ALIGNING hole bottom:",
+        aligned_hole_bottom,
+    )
+
+    print(
+        "ALIGNING axis dot:",
+        f"{aligned_axis_dot:.9f}",
+    )
+
+    print(
+        "FINAL hole bottom:",
+        final_hole_bottom,
+    )
+
+    print(
+        "FINAL height above support:",
+        f"{final_support_height * 1000.0:.2f} mm",
+    )
+
+    print(
+        "FINAL axis dot:",
+        f"{final_axis_dot:.9f}",
+    )
+
+    print(
+        "Primitive action counts:",
+        {
+            "reach": len(reach_actions),
+            "approaching": len(
+                approaching_actions
+            ),
+            "pick": len(pick_actions),
+            "lift_up": len(lift_actions),
+            "moving": len(moving_actions),
+            "aligning": len(
+                aligning_actions
+            ),
+            "inserting": len(
+                inserting_actions
+            ),
+        },
+    )
+
     print("=" * 78)
