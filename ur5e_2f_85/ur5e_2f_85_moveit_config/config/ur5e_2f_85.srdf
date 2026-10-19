@@ -574,6 +574,7 @@
     <disable_collisions link1="upper_block_gripper" link2="wrist_3_link" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="zed_camera" reason="Never"/>
     <disable_collisions link1="upper_block_gripper" link2="zed_mini_camera_attach_back_base_with_external_rack" reason="Adjacent"/>
+    <disable_collisions link1="upper_block_gripper" link2="zed_mini_camera_center" reason="Never"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="vertical_front_dx_1" reason="Never"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="vertical_front_sx_1" reason="Never"/>
     <disable_collisions link1="ur_to_robotiq_link" link2="world" reason="Never"/>

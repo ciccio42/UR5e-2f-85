@@ -2,295 +2,1025 @@
 
 set -o pipefail
 
-source /home/ros2_ws/install/setup.bash
+
+# =============================================================================
+# SCRIPT MARKERS
+# =============================================================================
+
+SCRIPT_NAME="RUN SEEDO ISAAC TEST"
+
+
+print_start_marker() {
+    echo
+    echo "===================================================================================================="
+    echo "START: ${SCRIPT_NAME}"
+    echo "===================================================================================================="
+    echo
+}
+
+
+print_end_marker() {
+    local exit_code=$?
+
+    echo
+    echo "===================================================================================================="
+    echo "END: ${SCRIPT_NAME}"
+    echo "Exit code: ${exit_code}"
+    echo "===================================================================================================="
+    echo
+}
+
+
+fail() {
+    echo
+    echo "ERROR: $*" >&2
+    exit 1
+}
+
+
+trap print_end_marker EXIT
+
+print_start_marker
+
+
+# =============================================================================
+# ROS / PYTHON ENVIRONMENT
+# =============================================================================
+
+ROS_SETUP="/home/ros2_ws/install/setup.bash"
+
+if [[ ! -f "${ROS_SETUP}" ]]; then
+    fail "ROS setup not found: ${ROS_SETUP}"
+fi
+
+source "${ROS_SETUP}"
 
 export PYTHONPATH="${PYTHONPATH:-}:/opt/seedo-venv/lib/python3.12/site-packages"
+
+
+# =============================================================================
+# PATHS
+# =============================================================================
 
 REPO_ROOT="/home/ros2_ws/src/UR5e-2f-85"
 
 SCRIPT_DIR="${REPO_ROOT}/ai_controller/ai_controller/models/seedo_controller"
+
 SCENE_CONFIGURATOR="${SCRIPT_DIR}/configure_isaac_scene.py"
+
+CONFIG_PATH="${SCRIPT_DIR}/config/seedo_controller.yaml"
 
 REAL_TEST_ROOT="/test_isaac"
 
-TASK=""
-TRAJECTORY=""
-CONFIGURE_SCENE=false
+ACTION_PLAN_SOURCE="/seedo_tests/ai_controller_node_interactive/action_planning"
 
-# ============================================================
-# OPTIONAL ISAAC SCENE CONFIGURATION ARGUMENTS
-# ============================================================
+
+if [[ ! -f "${SCENE_CONFIGURATOR}" ]]; then
+    fail "Scene configurator not found: ${SCENE_CONFIGURATOR}"
+fi
+
+if [[ ! -f "${CONFIG_PATH}" ]]; then
+    fail "SeeDo configuration not found: ${CONFIG_PATH}"
+fi
+
+
+# =============================================================================
+# SUPPORTED ENVIRONMENTS
+# =============================================================================
+
+ENV_PICK_PLACE="pick_place"
+ENV_NUT_ASSEMBLY="nut_assembly"
+
+ENV_TYPE=""
+
+CONFIGURE_SCENE=""
+
+SCENE_TASK=""
+SCENE_TRAJECTORY=""
+
+DEMO_TASK=""
+DEMO_PATH=""
+
+PRECOMPUTED_PLAN=""
+PRECOMPUTED_DEMO_SCENE=""
+PRECOMPUTED_MODE=false
+
+
+# =============================================================================
+# CAMERA TOPICS
+# =============================================================================
+
+CAMERA_TOPICS="['/zed_front/zed_node/rgb/color/rect/image','/zed_left/zed_node/rgb/color/rect/image','/zed_right/zed_node/rgb/color/rect/image','/zed_gripper/zed_node/rgb/color/rect/image']"
+
+DEPTH_TOPICS="['/zed_front/zed_node/depth/depth_registered','/zed_left/zed_node/depth/depth_registered','/zed_right/zed_node/depth/depth_registered','/zed_gripper/zed_node/depth/depth_registered']"
+
+
+# =============================================================================
+# HELP
+# =============================================================================
+
+print_usage() {
+    cat <<EOF
+
+Usage:
+
+  $0 [options]
+
+Environment:
+
+  --env-type pick_place|nut_assembly
+
+Scene configuration:
+
+  --configure-scene
+  --skip-scene-config
+
+  --scene-task N
+  --scene-trajectory N
+
+Backward-compatible aliases:
+
+  --task N
+  --trajectory N
+
+Demonstration:
+
+  --demo-task N
+  --demo-path PATH
+
+Optional:
+
+  --precomputed-plan PATH
+  --precomputed-demo-scene PATH
+
+Examples:
+
+  Pick-and-Place:
+
+    $0 \
+      --env-type pick_place \
+      --scene-task 0 \
+      --scene-trajectory 3 \
+      --demo-task 0
+
+  Nut Assembly:
+
+    $0 \
+      --env-type nut_assembly \
+      --scene-task 4 \
+      --demo-task 4 \
+      --demo-path /path/to/nut/video.mp4
+
+  Reuse current Isaac scene:
+
+    $0 \
+      --env-type nut_assembly \
+      --skip-scene-config \
+      --demo-task 4 \
+      --demo-path /path/to/nut/video.mp4
+
+EOF
+}
+
+
+# =============================================================================
+# ARGUMENT PARSING
+# =============================================================================
 
 while [[ $# -gt 0 ]]; do
+
     case "$1" in
-        --task)
+
+        --env-type)
+
             if [[ $# -lt 2 ]]; then
-                echo "ERROR: --task requires a value."
-                exit 1
+                fail "--env-type requires a value."
             fi
 
-            TASK="$2"
-            CONFIGURE_SCENE=true
+            ENV_TYPE="$2"
+
             shift 2
             ;;
 
-        --trajectory)
+
+        --configure-scene)
+
+            CONFIGURE_SCENE=true
+
+            shift
+            ;;
+
+
+        --skip-scene-config)
+
+            CONFIGURE_SCENE=false
+
+            shift
+            ;;
+
+
+        --scene-task|--task)
+
             if [[ $# -lt 2 ]]; then
-                echo "ERROR: --trajectory requires a value."
-                exit 1
+                fail "$1 requires a value."
             fi
 
-            TRAJECTORY="$2"
-            CONFIGURE_SCENE=true
+            SCENE_TASK="$2"
+
             shift 2
+            ;;
+
+
+        --scene-trajectory|--trajectory)
+
+            if [[ $# -lt 2 ]]; then
+                fail "$1 requires a value."
+            fi
+
+            SCENE_TRAJECTORY="$2"
+
+            shift 2
+            ;;
+
+
+        --demo-task)
+
+            if [[ $# -lt 2 ]]; then
+                fail "--demo-task requires a value."
+            fi
+
+            DEMO_TASK="$2"
+
+            shift 2
+            ;;
+
+
+        --demo-path)
+
+            if [[ $# -lt 2 ]]; then
+                fail "--demo-path requires a value."
+            fi
+
+            DEMO_PATH="$2"
+
+            shift 2
+            ;;
+
+
+        --precomputed-plan)
+
+            if [[ $# -lt 2 ]]; then
+                fail "--precomputed-plan requires a value."
+            fi
+
+            PRECOMPUTED_PLAN="$2"
+
+            shift 2
+            ;;
+
+        --precomputed-demo-scene)
+
+            if [[ $# -lt 2 ]]; then
+                fail "--precomputed-demo-scene requires a value."
+            fi
+
+            PRECOMPUTED_DEMO_SCENE="$2"
+
+            shift 2
+            ;;
+
+
+        -h|--help)
+
+            print_usage
+            exit 0
+            ;;
+
+
+        *)
+
+            echo "Unknown argument: $1" >&2
+
+            print_usage
+
+            exit 1
+            ;;
+
+    esac
+
+done
+
+
+# =============================================================================
+# GENERIC INPUT UTILITIES
+# =============================================================================
+
+normalize_env_type() {
+
+    case "$1" in
+
+        pick_place|pick|p|P)
+            echo "${ENV_PICK_PLACE}"
+            ;;
+
+        nut_assembly|nut|n|N)
+            echo "${ENV_NUT_ASSEMBLY}"
             ;;
 
         *)
-            echo "Unknown argument: $1"
-            echo "Usage: $0 [--task 00-15] [--trajectory 000-039]"
-            exit 1
+            return 1
             ;;
+
     esac
-done
+}
 
-# ============================================================
-# SCENE CONFIGURATION SELECTION
-# ============================================================
 
-if [[ "${CONFIGURE_SCENE}" == false ]]; then
-    read -rp "Do you want to configure the scene? [y/n]: " CONFIGURE_REPLY
+validate_unsigned_integer() {
+
+    local value="$1"
+
+    [[ "${value}" =~ ^[0-9]+$ ]]
+}
+
+
+validate_range() {
+
+    local value="$1"
+    local minimum="$2"
+    local maximum="$3"
+    local label="$4"
+
+    if ! validate_unsigned_integer "${value}"; then
+        fail "${label} must be numeric."
+    fi
+
+    local numeric_value=$((10#${value}))
+
+    if (( numeric_value < minimum || numeric_value > maximum )); then
+
+        fail "${label} must be between ${minimum} and ${maximum}."
+
+    fi
+}
+
+
+# =============================================================================
+# SELECT ENVIRONMENT
+# =============================================================================
+
+if [[ -z "${ENV_TYPE}" ]]; then
+
+    echo "Select SeeDo environment:"
+    echo
+    echo "  1) pick_place"
+    echo "  2) nut_assembly"
+    echo
+
+    read -rp "Environment [1/2]: " ENV_REPLY
+
+    case "${ENV_REPLY}" in
+
+        1)
+            ENV_TYPE="${ENV_PICK_PLACE}"
+            ;;
+
+        2)
+            ENV_TYPE="${ENV_NUT_ASSEMBLY}"
+            ;;
+
+        *)
+
+            NORMALIZED_ENV="$(
+                normalize_env_type "${ENV_REPLY}"
+            )" || fail "Invalid environment '${ENV_REPLY}'."
+
+            ENV_TYPE="${NORMALIZED_ENV}"
+            ;;
+
+    esac
+
+else
+
+    NORMALIZED_ENV="$(
+        normalize_env_type "${ENV_TYPE}"
+    )" || fail "Invalid environment '${ENV_TYPE}'."
+
+    ENV_TYPE="${NORMALIZED_ENV}"
+
+fi
+
+
+echo
+echo "Selected environment: ${ENV_TYPE}"
+echo
+
+
+# =============================================================================
+# DETERMINE WHETHER ISAAC SCENE MUST BE CONFIGURED
+# =============================================================================
+
+if [[ -n "${SCENE_TASK}" || -n "${SCENE_TRAJECTORY}" ]]; then
+
+    if [[ "${CONFIGURE_SCENE}" == "false" ]]; then
+        fail \
+            "Scene task/trajectory was provided together with " \
+            "--skip-scene-config."
+    fi
+
+    CONFIGURE_SCENE=true
+
+fi
+
+
+if [[ -z "${CONFIGURE_SCENE}" ]]; then
+
+    read -rp \
+        "Do you want to configure the Isaac scene? [y/n]: " \
+        CONFIGURE_REPLY
 
     case "${CONFIGURE_REPLY}" in
+
         y|Y|yes|YES|Yes|s|S|si|SI|Si)
             CONFIGURE_SCENE=true
             ;;
+
         *)
             CONFIGURE_SCENE=false
             ;;
+
     esac
+
 fi
 
-# ============================================================
-# ISAAC SCENE TASK / TRAJECTORY
-# ============================================================
+
+# =============================================================================
+# ISAAC SCENE CONFIGURATION
+# =============================================================================
 
 if [[ "${CONFIGURE_SCENE}" == true ]]; then
 
-    if [[ -z "${TASK}" ]]; then
-        read -rp "Isaac scene task [00-15]: " TASK
+    echo
+    echo "----------------------------------------------------------------------------------------------------"
+    echo "ISAAC SCENE CONFIGURATION"
+    echo "----------------------------------------------------------------------------------------------------"
+    echo
+
+    # -------------------------------------------------------------------------
+    # Scene task
+    # -------------------------------------------------------------------------
+
+    if [[ -z "${SCENE_TASK}" ]]; then
+
+        if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
+
+            read -rp \
+                "Isaac scene task [00-15]: " \
+                SCENE_TASK
+
+        else
+
+            read -rp \
+                "Isaac scene task [00-08]: " \
+                SCENE_TASK
+
+        fi
+
     fi
 
-    if [[ -z "${TRAJECTORY}" ]]; then
-        read -rp "Isaac scene trajectory [000-039]: " TRAJECTORY
+
+    # -------------------------------------------------------------------------
+    # Scene trajectory
+    # -------------------------------------------------------------------------
+
+    if [[ -z "${SCENE_TRAJECTORY}" ]]; then
+
+        if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
+
+            read -rp \
+                "Isaac scene trajectory [000-039]: " \
+                SCENE_TRAJECTORY
+
+        else
+
+            SCENE_TRAJECTORY="0"
+
+            echo \
+                "[INFO] Nut Assembly currently has only trajectory 000."
+
+        fi
+
     fi
 
-    if ! [[ "${TASK}" =~ ^[0-9]{1,2}$ ]] || (( 10#${TASK} > 15 )); then
-        echo "ERROR: task must be between 00 and 15."
-        exit 1
+
+    # -------------------------------------------------------------------------
+    # Environment-specific validation
+    # -------------------------------------------------------------------------
+
+    if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
+
+        validate_range \
+            "${SCENE_TASK}" \
+            0 \
+            15 \
+            "Pick-and-Place scene task"
+
+        validate_range \
+            "${SCENE_TRAJECTORY}" \
+            0 \
+            39 \
+            "Pick-and-Place scene trajectory"
+
+    else
+
+        validate_range \
+            "${SCENE_TASK}" \
+            0 \
+            8 \
+            "Nut-Assembly scene task"
+
+        validate_range \
+            "${SCENE_TRAJECTORY}" \
+            0 \
+            0 \
+            "Nut-Assembly scene trajectory"
+
     fi
 
-    if ! [[ "${TRAJECTORY}" =~ ^[0-9]{1,3}$ ]] || (( 10#${TRAJECTORY} > 39 )); then
-        echo "ERROR: trajectory must be between 000 and 039."
-        exit 1
-    fi
 
-    printf -v TASK "%02d" "$((10#${TASK}))"
-    printf -v TRAJECTORY "%03d" "$((10#${TRAJECTORY}))"
+    SCENE_TASK_NUM="$((10#${SCENE_TASK}))"
+    SCENE_TRAJECTORY_NUM="$((10#${SCENE_TRAJECTORY}))"
 
+    printf -v SCENE_TASK "%02d" \
+        "${SCENE_TASK_NUM}"
+
+    printf -v SCENE_TRAJECTORY "%03d" \
+        "${SCENE_TRAJECTORY_NUM}"
+
+
+    echo
     echo "================================================="
     echo "Configuring Isaac scene"
-    echo "Task:       ${TASK}"
-    echo "Trajectory: ${TRAJECTORY}"
     echo "================================================="
+    echo "Environment: ${ENV_TYPE}"
+    echo "Task:        ${SCENE_TASK}"
+    echo "Trajectory:  ${SCENE_TRAJECTORY}"
+    echo "================================================="
+    echo
+
 
     python3 "${SCENE_CONFIGURATOR}" \
-        --task "$((10#${TASK}))" \
-        --trajectory "$((10#${TRAJECTORY}))"
+        --env-type "${ENV_TYPE}" \
+        --task "${SCENE_TASK_NUM}" \
+        --trajectory "${SCENE_TRAJECTORY_NUM}"
 
     SCENE_CONFIG_EXIT_CODE=$?
 
+
     if [[ ${SCENE_CONFIG_EXIT_CODE} -ne 0 ]]; then
-        echo
-        echo "ERROR: Isaac scene configuration failed."
-        echo "SeeDo test will NOT be started."
-        exit "${SCENE_CONFIG_EXIT_CODE}"
+
+        fail \
+            "Isaac scene configuration failed. " \
+            "SeeDo test will NOT be started."
+
     fi
 
+
     echo
-    echo "Isaac scene configured successfully."
+    echo "[PASS] Isaac scene configured successfully."
     echo
 
 else
 
+    echo
     echo "================================================="
     echo "Isaac scene configuration SKIPPED"
-    echo "Using the current scene."
+    echo "Environment: ${ENV_TYPE}"
+    echo "Using the current Isaac scene."
     echo "================================================="
     echo
 
 fi
 
-# ============================================================
+
+# =============================================================================
 # SELECT DEMONSTRATION TASK
 #
-# This is intentionally independent from the Isaac scene task.
-# It determines:
-#   - demonstration video
-#   - test folder name
+# Deliberately independent from the Isaac scene task.
 #
-# Examples:
-#   first run task 00  -> test_task00_1
-#   second run task 00 -> test_task00_2
-#   first run task 03  -> test_task03_1
-# ============================================================
+# This allows:
+#
+#   - same demonstration on different simulated layouts;
+#   - generalization experiments;
+#   - explicit mismatch tests when desired.
+# =============================================================================
 
-read -rp "Enter demonstration task ID [00-15]: " TASK_ID_INPUT
+if [[ -z "${DEMO_TASK}" ]]; then
 
-if ! [[ "${TASK_ID_INPUT}" =~ ^[0-9]+$ ]]; then
-    echo "ERROR: task ID must be numeric."
-    exit 1
+    if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
+
+        read -rp \
+            "Enter Pick-and-Place demonstration task ID [00-15]: " \
+            DEMO_TASK
+
+    else
+
+        read -rp \
+            "Enter Nut-Assembly demonstration task ID [00-08]: " \
+            DEMO_TASK
+
+    fi
+
 fi
 
-TASK_ID_NUM="$((10#${TASK_ID_INPUT}))"
 
-if (( TASK_ID_NUM < 0 || TASK_ID_NUM > 15 )); then
-    echo "ERROR: task ID must be between 00 and 15."
-    exit 1
+if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
+
+    validate_range \
+        "${DEMO_TASK}" \
+        0 \
+        15 \
+        "Pick-and-Place demonstration task"
+
+else
+
+    validate_range \
+        "${DEMO_TASK}" \
+        0 \
+        8 \
+        "Nut-Assembly demonstration task"
+
 fi
 
-TASK_ID="$(printf '%02d' "${TASK_ID_NUM}")"
 
-DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
+DEMO_TASK_NUM="$((10#${DEMO_TASK}))"
+
+printf -v DEMO_TASK_ID "%02d" \
+    "${DEMO_TASK_NUM}"
+
+
+# =============================================================================
+# DEMONSTRATION VIDEO
+# =============================================================================
+
+if [[ -z "${DEMO_PATH}" ]]; then
+
+    if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
+
+        DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
+
+    else
+
+        DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj_000_camera_front.mp4"
+
+    fi
+
+fi
+
+
+if [[ -z "${DEMO_PATH}" ]]; then
+    fail "Demonstration video path is empty."
+fi
+
 
 if [[ ! -f "${DEMO_PATH}" ]]; then
-    echo "ERROR: demonstration video not found:"
-    echo "${DEMO_PATH}"
-    exit 1
+
+    echo
+    echo "Demonstration video not found:"
+    echo
+    echo "  ${DEMO_PATH}"
+    echo
+
+    fail "Invalid demonstration video."
+
 fi
 
-# ============================================================
+
+echo
+echo "[PASS] Demonstration video found:"
+echo "       ${DEMO_PATH}"
+echo
+
+
+# =============================================================================
+# OPTIONAL PRECOMPUTED DEMONSTRATION ARTIFACTS
+# =============================================================================
+
+if [[ -n "${PRECOMPUTED_PLAN}" || -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+
+    if [[ -z "${PRECOMPUTED_PLAN}" ]]; then
+        fail \
+            "Precomputed mode requires --precomputed-plan."
+    fi
+
+    if [[ -z "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+        fail \
+            "Precomputed mode requires --precomputed-demo-scene."
+    fi
+
+    if [[ ! -f "${PRECOMPUTED_PLAN}" ]]; then
+        fail \
+            "Precomputed action plan not found: ${PRECOMPUTED_PLAN}"
+    fi
+
+    if [[ ! -f "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+        fail \
+            "Precomputed demo structured scene not found: ${PRECOMPUTED_DEMO_SCENE}"
+    fi
+
+    PRECOMPUTED_MODE=true
+
+    echo
+    echo "[INFO] Precomputed demonstration mode enabled."
+    echo "[INFO] Action plan:"
+    echo "       ${PRECOMPUTED_PLAN}"
+    echo "[INFO] Demo structured scene:"
+    echo "       ${PRECOMPUTED_DEMO_SCENE}"
+    echo
+
+else
+
+    PRECOMPUTED_MODE=false
+
+    echo
+    echo "[INFO] Demonstration pipeline will be executed normally."
+    echo
+
+fi
+
+
+# =============================================================================
 # AUTOMATIC TEST NUMBER
-# ============================================================
+# =============================================================================
 
 TEST_INDEX=1
 
-while [[ -e "${REAL_TEST_ROOT}/test_task${TASK_ID}_${TEST_INDEX}" ]]; do
+TEST_PREFIX="test_${ENV_TYPE}_task${DEMO_TASK_ID}"
+
+
+while [[ -e "${REAL_TEST_ROOT}/${TEST_PREFIX}_${TEST_INDEX}" ]]; do
+
     ((TEST_INDEX++))
+
 done
 
-TEST_NAME="test_task${TASK_ID}_${TEST_INDEX}"
+
+TEST_NAME="${TEST_PREFIX}_${TEST_INDEX}"
+
 RUN_DIR="${REAL_TEST_ROOT}/${TEST_NAME}"
 
-TIMESTAMP="$(date '+%Y%m%d_%H%M%S_%3N')"
 
-ACTION_PLAN_SOURCE="/seedo_tests/ai_controller_node_interactive/action_planning"
+TIMESTAMP="$(
+    date '+%Y%m%d_%H%M%S_%3N'
+)"
 
-CONFIG_PATH="${REPO_ROOT}/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml"
-
-PRECOMPUTED_PLAN="${ACTION_PLAN_SOURCE}/action_plan.json"
 
 mkdir -p "${RUN_DIR}"
 mkdir -p "${RUN_DIR}/action_planning"
+mkdir -p "${RUN_DIR}/demo_structured_scene"
 mkdir -p "${RUN_DIR}/rollouts"
 
-echo "================================================="
-echo "SeeDo Isaac Sim test"
-echo "Demo task ID: ${TASK_ID}"
-echo "Test number: ${TEST_INDEX}"
-echo "Test name: ${TEST_NAME}"
-echo "Run directory: ${RUN_DIR}"
-echo "Demo video: ${DEMO_PATH}"
+
+# =============================================================================
+# TEST SUMMARY
+# =============================================================================
+
+echo
+echo "===================================================================================================="
+echo "SEEDO ISAAC SIM TEST"
+echo "===================================================================================================="
+
+echo "Environment:       ${ENV_TYPE}"
+echo "Demo task ID:      ${DEMO_TASK_ID}"
+echo "Test number:       ${TEST_INDEX}"
+echo "Test name:         ${TEST_NAME}"
+echo "Run directory:     ${RUN_DIR}"
+echo "Demo video:        ${DEMO_PATH}"
 
 if [[ "${CONFIGURE_SCENE}" == true ]]; then
-    echo "Isaac scene task: ${TASK}"
-    echo "Isaac trajectory: ${TRAJECTORY}"
+
+    echo "Isaac scene task:  ${SCENE_TASK}"
+    echo "Isaac trajectory:  ${SCENE_TRAJECTORY}"
+
 else
-    echo "Isaac scene: current scene"
+
+    echo "Isaac scene:       current scene"
+
 fi
 
-echo "================================================="
 
-# ============================================================
-# SAVE ACTION PLANNING ARTIFACTS
-# ============================================================
+if [[ "${PRECOMPUTED_MODE}" == true ]]; then
 
-cp -a \
-    "${ACTION_PLAN_SOURCE}/." \
-    "${RUN_DIR}/action_planning/"
+    echo "Precomputed mode:  enabled"
+    echo "Action plan:       ${PRECOMPUTED_PLAN}"
+    echo "Demo scene:        ${PRECOMPUTED_DEMO_SCENE}"
 
-# ============================================================
-# SAVE CONFIGURATION
-# ============================================================
+else
+
+    echo "Precomputed mode:  disabled"
+    echo "Demo pipeline:     generated at runtime"
+
+fi
+
+
+echo "===================================================================================================="
+echo
+
+
+# =============================================================================
+# SAVE PRE-RUN ARTIFACTS
+# =============================================================================
+
+if [[ -d "${ACTION_PLAN_SOURCE}" ]]; then
+
+    cp -a \
+        "${ACTION_PLAN_SOURCE}/." \
+        "${RUN_DIR}/action_planning/"
+
+    echo \
+        "[PASS] Existing action-planning artifacts copied."
+
+else
+
+    echo \
+        "[INFO] No existing action-planning directory to copy:"
+    echo \
+        "       ${ACTION_PLAN_SOURCE}"
+
+fi
+
+if [[ "${PRECOMPUTED_MODE}" == true ]]; then
+
+    cp \
+        "${PRECOMPUTED_PLAN}" \
+        "${RUN_DIR}/action_planning/action_plan.json"
+
+    cp \
+        "${PRECOMPUTED_DEMO_SCENE}" \
+        "${RUN_DIR}/demo_structured_scene/demo_structured_scene.json"
+
+    echo "[PASS] Precomputed action plan copied into run artifacts."
+    echo "[PASS] Precomputed demo structured scene copied into run artifacts."
+
+fi
+
 
 cp \
     "${CONFIG_PATH}" \
     "${RUN_DIR}/seedo_controller.yaml"
 
-# ============================================================
+
+# Save the launcher used for the experiment when possible.
+
+if [[ -f "$0" ]]; then
+
+    cp \
+        "$0" \
+        "${RUN_DIR}/run_seedo_isaac_test.sh"
+
+fi
+
+
+# =============================================================================
+# BUILD ROS PARAMETERS
+# =============================================================================
+
+ROS_ARGS=(
+
+    --ros-args
+
+    -p
+    "ai_controller_target:=seedo_controller"
+
+    -p
+    "model_config_path:=${CONFIG_PATH}"
+
+    -p
+    "task_name:=${ENV_TYPE}"
+
+    -p
+    "demo_path:=${DEMO_PATH}"
+
+    -p
+    "seedo_artifacts_dir:=${RUN_DIR}"
+
+    -p
+    "save_rollout_path:=${RUN_DIR}/rollouts"
+
+    -p
+    "move_robot:=true"
+
+    -p
+    "seedo_execute_gripper:=true"
+
+    -p
+    "camera_topic:=${CAMERA_TOPICS}"
+
+    -p
+    "seedo_record_depth_topics:=${DEPTH_TOPICS}"
+)
+
+
+if [[ "${PRECOMPUTED_MODE}" == true ]]; then
+
+    ROS_ARGS+=(
+
+        -p
+        "seedo_precomputed_action_plan_path:=${PRECOMPUTED_PLAN}"
+
+        -p
+        "seedo_precomputed_demo_structured_scene_path:=${PRECOMPUTED_DEMO_SCENE}"
+
+    )
+
+fi
+
+
+# =============================================================================
 # RUN SEEDO
-# ============================================================
+# =============================================================================
+
+echo
+echo "----------------------------------------------------------------------------------------------------"
+echo "STARTING SEEDO CONTROLLER"
+echo "----------------------------------------------------------------------------------------------------"
+echo
+
+echo "task_name: ${ENV_TYPE}"
+echo "demo_path: ${DEMO_PATH}"
+echo
+
+echo "RGB cameras:"
+echo "  /zed_front/zed_node/rgb/color/rect/image"
+echo "  /zed_left/zed_node/rgb/color/rect/image"
+echo "  /zed_right/zed_node/rgb/color/rect/image"
+echo "  /zed_gripper/zed_node/rgb/color/rect/image"
+
+echo
+
+echo "Depth cameras:"
+echo "  /zed_front/zed_node/depth/depth_registered"
+echo "  /zed_left/zed_node/depth/depth_registered"
+echo "  /zed_right/zed_node/depth/depth_registered"
+echo "  /zed_gripper/zed_node/depth/depth_registered"
+
+echo
+
 
 set +e
 
-# Precomputed action-plan version:
-# 
-# ros2 run ai_controller ai_controller_node \
-#     --ros-args \
-#     -p ai_controller_target:=seedo_controller \
-#     -p model_config_path:="${CONFIG_PATH}" \
-#     -p task_name:=pick_place \
-#     -p demo_path:="${DEMO_PATH}" \
-#     -p seedo_precomputed_action_plan_path:=/test_isaac/test_task00_1/action_planning/action_plan.json \
-#     -p seedo_artifacts_dir:="${RUN_DIR}" \
-#     -p save_rollout_path:="${RUN_DIR}/rollouts" \
-#     -p move_robot:=true \
-#     -p seedo_execute_gripper:=true \
-#     -p camera_topic:="['/zed_front/zed_node/rgb/color/rect/image','/zed_left/zed_node/rgb/color/rect/image','/zed_right/zed_node/rgb/color/rect/image','/zed_front/zed_node/rgb/color/rect/image']" \
-#     -p seedo_record_depth_topics:="['/zed_front/zed_node/depth/depth_registered','/zed_left/zed_node/depth/depth_registered','/zed_right/zed_node/depth/depth_registered','/zed_front/zed_node/depth/depth_registered']" \
-#     2>&1 | tee "${RUN_DIR}/console.log"
 
-ros2 run ai_controller ai_controller_node \
-    --ros-args \
-    -p ai_controller_target:=seedo_controller \
-    -p model_config_path:="${CONFIG_PATH}" \
-    -p task_name:=pick_place \
-    -p demo_path:="${DEMO_PATH}" \
-    -p seedo_artifacts_dir:="${RUN_DIR}" \
-    -p save_rollout_path:="${RUN_DIR}/rollouts" \
-    -p move_robot:=true \
-    -p seedo_execute_gripper:=true \
-    -p camera_topic:="['/zed_front/zed_node/rgb/color/rect/image','/zed_left/zed_node/rgb/color/rect/image','/zed_right/zed_node/rgb/color/rect/image','/zed_front/zed_node/rgb/color/rect/image']" \
-    -p seedo_record_depth_topics:="['/zed_front/zed_node/depth/depth_registered','/zed_left/zed_node/depth/depth_registered','/zed_right/zed_node/depth/depth_registered','/zed_front/zed_node/depth/depth_registered']" \
+ros2 run \
+    ai_controller \
+    ai_controller_node \
+    "${ROS_ARGS[@]}" \
     2>&1 | tee "${RUN_DIR}/console.log"
+
 
 EXIT_CODE=${PIPESTATUS[0]}
 
+
 set -e
 
-# ============================================================
+
+# =============================================================================
 # SAVE RUN STATUS
-# ============================================================
+# =============================================================================
 
 cat > "${RUN_DIR}/run_status.json" <<EOF
 {
     "timestamp": "${TIMESTAMP}",
     "test_name": "${TEST_NAME}",
-    "task_id": "${TASK_ID}",
-    "test_index": ${TEST_INDEX},
+    "env_type": "${ENV_TYPE}",
+    "demo_task_id": "${DEMO_TASK_ID}",
     "demo_path": "${DEMO_PATH}",
     "isaac_scene_configured": ${CONFIGURE_SCENE},
-    "isaac_scene_task": "${TASK}",
-    "isaac_scene_trajectory": "${TRAJECTORY}",
+    "isaac_scene_task": "${SCENE_TASK}",
+    "isaac_scene_trajectory": "${SCENE_TRAJECTORY}",
+    "precomputed_mode": ${PRECOMPUTED_MODE},
+    "precomputed_action_plan": "${PRECOMPUTED_PLAN}",
+    "precomputed_demo_structured_scene": "${PRECOMPUTED_DEMO_SCENE}",
     "exit_code": ${EXIT_CODE},
     "mode": "isaac_sim"
 }
 EOF
 
+
+# =============================================================================
+# FINAL SUMMARY
+# =============================================================================
+
 echo
-echo "================================================="
-echo "Test finished with exit code: ${EXIT_CODE}"
-echo "Artifacts saved in:"
-echo "${RUN_DIR}"
-echo "================================================="
+echo "===================================================================================================="
+echo "SEEDO TEST FINISHED"
+echo "===================================================================================================="
+
+echo "Environment: ${ENV_TYPE}"
+echo "Exit code:   ${EXIT_CODE}"
+echo "Artifacts:"
+echo "  ${RUN_DIR}"
+
+echo "===================================================================================================="
+echo
+
 
 exit "${EXIT_CODE}"

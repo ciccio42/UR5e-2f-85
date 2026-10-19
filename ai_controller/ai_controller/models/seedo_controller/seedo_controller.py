@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 import json
 import numpy as np
+import os
 
 from ai_controller.utils.ai_controller import AIController
 
@@ -2918,9 +2919,55 @@ class SeeDoController(AIController):
                         )
                     )
 
+                # ---------------------------------------------------------
+                # TEMPORARY ISAAC-ONLY POST-PLANNING GRASP Z OFFSET
+                #
+                # The grasp planner and all of its validation checks operate
+                # on the original pose. The optional offset is applied only
+                # afterwards, immediately before sending the grasp pose to
+                # the Motion Layer.
+                # ---------------------------------------------------------
+
+                executed_grasp_position = np.asarray(
+                    self.grasp_plan.tcp_position_base,
+                    dtype=np.float64,
+                ).copy()
+
+                isaac_grasp_z_offset_m = float(
+                    os.environ.get(
+                        "SEEDO_ISAAC_GRASP_Z_OFFSET_M",
+                        "0.0",
+                    )
+                )
+
+                if abs(isaac_grasp_z_offset_m) > 1e-12:
+
+                    executed_grasp_position[2] += (
+                        isaac_grasp_z_offset_m
+                    )
+
+                    print(
+                        "[ISAAC TEMP] Post-planning grasp Z offset:",
+                        f"{isaac_grasp_z_offset_m * 1000.0:+.1f} mm",
+                        flush=True,
+                    )
+
+                    print(
+                        "[ISAAC TEMP] Planner TCP position:",
+                        self.grasp_plan.tcp_position_base,
+                        flush=True,
+                    )
+
+                    print(
+                        "[ISAAC TEMP] Executed TCP position:",
+                        executed_grasp_position,
+                        flush=True,
+                    )
+
+
                 self.motion_layer.set_grasp_pose(
                     position=(
-                        self.grasp_plan.tcp_position_base
+                        executed_grasp_position
                     ),
                     orientation=(
                         self.grasp_plan.tcp_orientation_base

@@ -186,6 +186,7 @@ Open a new terminal:
 ```bash
 docker exec -it seedo_ros2_container bash
 
+unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh
 ```

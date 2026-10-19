@@ -114,6 +114,20 @@ class AIControllerNode(Node):
             'seedo_execute_gripper',
             False,
         )
+        self.declare_parameter(
+            'seedo_gripper_settle_timeout_sec',
+            2.0,
+        )
+
+        self.declare_parameter(
+            'seedo_gripper_settle_delta',
+            0.002,
+        )
+
+        self.declare_parameter(
+            'seedo_gripper_settle_samples',
+            4,
+        )
 
         # SeeDo-specific parameters
         self.declare_parameter(
@@ -184,6 +198,30 @@ class AIControllerNode(Node):
         self.seedo_execute_gripper = self.get_parameter(
             'seedo_execute_gripper'
         ).get_parameter_value().bool_value
+
+        self.seedo_gripper_settle_timeout_sec = (
+            self.get_parameter(
+                'seedo_gripper_settle_timeout_sec'
+            )
+            .get_parameter_value()
+            .double_value
+        )
+
+        self.seedo_gripper_settle_delta = (
+            self.get_parameter(
+                'seedo_gripper_settle_delta'
+            )
+            .get_parameter_value()
+            .double_value
+        )
+
+        self.seedo_gripper_settle_samples = (
+            self.get_parameter(
+                'seedo_gripper_settle_samples'
+            )
+            .get_parameter_value()
+            .integer_value
+        )
 
         self.seedo_depth_topic = self.get_parameter(
             'seedo_depth_topic'
@@ -845,6 +883,170 @@ class AIControllerNode(Node):
         self.latest_joint_state = msg
         self.joint_state_event.set()
 
+    def _get_current_gripper_joint_position(self):
+        """
+        Return the latest measured Robotiq master-joint position.
+
+        The SeeDo setup currently uses:
+            robotiq_85_left_knuckle_joint
+
+        as the single published gripper joint.
+        """
+
+        joint_state = self.latest_joint_state
+
+        if joint_state is None:
+            return None
+
+        if not self.gripper_robot_names:
+            raise RuntimeError(
+                "No gripper joint names are configured."
+            )
+
+        gripper_joint_name = self.gripper_robot_names[0]
+
+        try:
+            joint_index = joint_state.name.index(
+                gripper_joint_name
+            )
+        except ValueError:
+            raise RuntimeError(
+                f"Gripper joint {gripper_joint_name!r} "
+                "is not present in /joint_states."
+            )
+
+        if joint_index >= len(joint_state.position):
+            raise RuntimeError(
+                f"Missing position for gripper joint "
+                f"{gripper_joint_name!r}."
+            )
+
+        return float(
+            joint_state.position[joint_index]
+        )
+
+
+    def _wait_for_gripper_settled(
+        self,
+        commanded_position,
+    ):
+        """
+        Wait until the physical/simulated gripper has actually stopped.
+
+        Do NOT require the measured position to equal the commanded
+        position: during a successful grasp the fingers may stop before
+        the requested closed position because they contact the object.
+
+        Instead, require the measured master-joint position to remain
+        approximately unchanged for several consecutive fresh
+        /joint_states samples.
+        """
+
+        timeout_sec = float(
+            self.seedo_gripper_settle_timeout_sec
+        )
+
+        delta_tolerance = float(
+            self.seedo_gripper_settle_delta
+        )
+
+        required_stable_samples = int(
+            self.seedo_gripper_settle_samples
+        )
+
+        if timeout_sec <= 0.0:
+            raise ValueError(
+                "seedo_gripper_settle_timeout_sec must be > 0."
+            )
+
+        if delta_tolerance <= 0.0:
+            raise ValueError(
+                "seedo_gripper_settle_delta must be > 0."
+            )
+
+        if required_stable_samples < 1:
+            raise ValueError(
+                "seedo_gripper_settle_samples must be >= 1."
+            )
+
+        deadline = time.monotonic() + timeout_sec
+
+        previous_position = None
+        stable_samples = 0
+
+        self.get_logger().info(
+            "Waiting for measured gripper motion to settle..."
+        )
+
+        while time.monotonic() < deadline:
+
+            self.joint_state_event.clear()
+
+            remaining = (
+                deadline
+                - time.monotonic()
+            )
+
+            if remaining <= 0.0:
+                break
+
+            received = self.joint_state_event.wait(
+                timeout=min(
+                    0.2,
+                    remaining,
+                )
+            )
+
+            if not received:
+                continue
+
+            current_position = (
+                self._get_current_gripper_joint_position()
+            )
+
+            if current_position is None:
+                continue
+
+            if previous_position is not None:
+
+                position_delta = abs(
+                    current_position
+                    - previous_position
+                )
+
+                if position_delta <= delta_tolerance:
+                    stable_samples += 1
+                else:
+                    stable_samples = 0
+
+                if stable_samples >= required_stable_samples:
+
+                    target_error = abs(
+                        current_position
+                        - float(commanded_position)
+                    )
+
+                    self.get_logger().info(
+                        "Gripper motion settled: "
+                        f"measured={current_position:.4f}, "
+                        f"commanded={float(commanded_position):.4f}, "
+                        f"target_error={target_error:.4f}"
+                    )
+
+                    return current_position
+
+            previous_position = current_position
+
+        current_position = (
+            self._get_current_gripper_joint_position()
+        )
+
+        raise RuntimeError(
+            "Timed out waiting for gripper motion to settle. "
+            f"Last measured position: {current_position}; "
+            f"commanded position: {float(commanded_position):.4f}."
+        )
+
 
     def _capture_robot_state(self, timeout_sec=1.0):
         """Spin briefly to receive a fresh /joint_states + TF, then build a robot-state obs dict.
@@ -1056,6 +1258,12 @@ class AIControllerNode(Node):
                     raise RuntimeError(
                         'Timed out waiting for initial gripper result.'
                     )
+
+                self._wait_for_gripper_settled(
+                    commanded_position=(
+                        gripper_goal.command.position
+                    ),
+                )
 
                 self.get_logger().info(
                     'Gripper opened successfully before first inference.'
@@ -1821,17 +2029,24 @@ class AIControllerNode(Node):
                                         )
 
                                     self.get_logger().info(
-                                        f'Gripper command completed '
+                                        f'Gripper action result received '
                                         f'at step {step}, action {indx}'
+                                    )
+
+                                    self._wait_for_gripper_settled(
+                                        commanded_position=(
+                                            desired_gripper_position
+                                        ),
                                     )
 
                                     self.previous_gripper_position = (
                                         desired_gripper_position
                                     )
 
-                                    # Allow the physical/simulated gripper state feedback
-                                    # to settle before recording the rollout observation.
-                                    time.sleep(0.5)
+                                    self.get_logger().info(
+                                        f'Gripper command completed '
+                                        f'at step {step}, action {indx}'
+                                    )
 
                                 else:
                                     rclpy.spin_until_future_complete(

@@ -98,7 +98,7 @@ ros2 run ai_controller ai_controller_node \
     -p ai_controller_target:=seedo_controller \
     -p model_config_path:="${CONFIG_PATH}" \
     -p task_name:=pick_place \
-    -p demo_path:="${DEMO_PATH}" \
+    -p demo_path:="${DEMO_PATH_NUT}" \
     -p seedo_precomputed_action_plan_path:=/test_real/test_task00_1/action_planning/action_plan.json \
     -p seedo_precomputed_demo_structured_scene_path:=/test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json \
     -p seedo_artifacts_dir:="${RUN_DIR}" \
