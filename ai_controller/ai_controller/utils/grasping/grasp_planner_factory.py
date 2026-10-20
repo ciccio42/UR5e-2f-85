@@ -11,7 +11,6 @@ from ai_controller.utils.grasping.grasp_planner_base import (
 from ai_controller.utils.grasping.graspgenx.planner import (
     GraspGenXPlanner,
 )
-from ai_controller.utils.grasping.graspgenx_v2.backend import GraspGenXV2Planner
 
 
 def build_grasp_planner(
@@ -156,32 +155,20 @@ def build_grasp_planner(
             ),
         )
 
-    if backend in ("graspgenx", "graspgenx_v2"):
-        is_v2 = backend == "graspgenx_v2"
-        planner_class = GraspGenXV2Planner if is_v2 else GraspGenXPlanner
-        v2_options = ({
-            "v2_driver_urdf": str(grasp_config.get(
-                "graspgenx_v2_driver_urdf",
-                "/test_real/urdf_audit/ur5e_driver_installed_audit.urdf",
-            )),
-            "v2_robotiq_mesh_share": str(grasp_config.get(
-                "graspgenx_v2_robotiq_mesh_share",
-                "/home/ros2_ws/install/robotiq_description/share/robotiq_description",
-            )),
-            "v2_worker_python": str(grasp_config.get(
-                "graspgenx_v2_worker_python", "/opt/graspgenx_venv/bin/python",
-            )),
-            "v2_gripper_open_q": float(grasp_config.get("graspgenx_v2_gripper_open_q", 0.1)),
-            "v2_table_margin_mm": float(grasp_config.get("graspgenx_v2_table_margin_mm", 5.0)),
-            "v2_max_expensive_checks": int(grasp_config.get("graspgenx_v2_max_expensive_checks", 0)),
-            "v2_validation_mode": str(grasp_config.get("graspgenx_v2_validation_mode", "detailed")),
-            "v2_semantic_radius_px": float(grasp_config.get("semantic_radius_px", 100.0)),
-            "v2_unsafe_enable_robot_commands": bool(grasp_config.get(
-                "graspgenx_v2_unsafe_enable_robot_commands", False,
-            )),
-        } if is_v2 else {})
-        return planner_class(
-            **v2_options,
+    if backend == "graspgenx":
+        return GraspGenXPlanner(
+            worker_python=str(
+                grasp_config.get(
+                    "graspgenx_worker_python",
+                    "/opt/graspgenx_venv/bin/python",
+                )
+            ),
+            table_margin_mm=float(
+                grasp_config.get(
+                    "graspgenx_table_margin_mm",
+                    0.0,
+                )
+            ),
             server_host=str(
                 grasp_config.get(
                     "graspgenx_server_host",
@@ -229,12 +216,6 @@ def build_grasp_planner(
                     42,
                 )
             ),
-            table_surface_offset_m=float(
-                grasp_config.get(
-                    "graspgenx_table_surface_offset_m",
-                    0.0,
-                )
-            ),
             semantic_radius_px=float(
                 grasp_config.get(
                     "semantic_radius_px",
@@ -243,8 +224,8 @@ def build_grasp_planner(
             ),
             grasp_depth_offset_m=float(
                 grasp_config.get(
-                    "graspgenx_v2_depth_offset_m" if is_v2 else "graspgenx_depth_offset_m",
-                    0.0 if is_v2 else 0.005,
+                    "graspgenx_depth_offset_m",
+                    0.005,
                 )
             ),
         )
@@ -252,5 +233,5 @@ def build_grasp_planner(
     raise ValueError(
         "Unsupported grasp-planning backend: "
         f"{backend!r}. "
-        "Supported backends are 'm2t2', 'graspgenx', and 'graspgenx_v2'."
+        "Supported backends are 'm2t2' and 'graspgenx'."
     )

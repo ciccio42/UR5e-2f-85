@@ -1,172 +1,226 @@
 from __future__ import annotations
 
 import numpy as np
+from scipy.spatial.transform import Rotation
 
+from ai_controller.utils.grasping.grasp_planner_factory import (
+    build_grasp_planner,
+)
+from ai_controller.utils.grasping.graspgenx import (
+    inference_core,
+)
+from ai_controller.utils.grasping.graspgenx.geometry_selector import (
+    GraspGenXGeometrySelector,
+)
+from ai_controller.utils.grasping.graspgenx.geometry_utils import (
+    GraspGenXGeometryConfig,
+)
 from ai_controller.utils.grasping.graspgenx.planner import (
     GraspGenXPlanner,
 )
 
-import pytest
 
-from scipy.spatial.transform import Rotation
-
-
-def test_generate_grasp_candidates_base(
+def test_factory_builds_single_graspgenx_backend(
     monkeypatch,
 ):
-    planner = GraspGenXPlanner()
+    """
+    The public factory must construct the final GraspGenXPlanner
+    without exposing any of the removed V2/unsafe configuration.
+    """
 
-    target_camera = np.array(
-        [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-        ],
-        dtype=np.float32,
+    monkeypatch.setattr(
+        inference_core,
+        "GraspMolmoClient",
+        lambda *args, **kwargs: object(),
     )
 
-    T_base_camera = np.eye(
+    monkeypatch.setattr(
+        inference_core,
+        "GraspGenXRemoteClient",
+        lambda *args, **kwargs: object(),
+    )
+
+    planner = build_grasp_planner(
+        {
+            "backend": "graspgenx",
+            "semantic_radius_px": 50.0,
+            "graspgenx_table_margin_mm": 0.0,
+        }
+    )
+
+    assert isinstance(
+        planner,
+        GraspGenXPlanner,
+    )
+
+    assert planner.backend_name == "graspgenx"
+
+    assert (
+        planner.semantic_radius_px
+        == 50.0
+    )
+
+    assert (
+        planner.geometry_semantic_radius_px
+        == 50.0
+    )
+
+    forbidden_attributes = (
+        "v2_validation_mode",
+        "v2_unsafe_enable_robot_commands",
+        "v2_worker_python",
+        "v2_table_margin_mm",
+        "v2_semantic_radius_px",
+    )
+
+    for name in forbidden_attributes:
+        assert not hasattr(
+            planner,
+            name,
+        )
+
+
+def test_geometry_selector_prefers_valid_target_grasp():
+    """
+    A high-confidence grasp away from the semantic target must
+    lose against a lower-confidence grasp that actually surrounds
+    the requested target region.
+
+    The scene is completely synthetic:
+      - horizontal table at z=0
+      - target around z=0.23 m
+      - good gripper origin at z=0.10 m
+      - second candidate displaced 20 cm along X
+    """
+
+    config = GraspGenXGeometryConfig(
+        table_margin_m=0.005,
+        semantic_radius_px=50.0,
+    )
+
+    selector = GraspGenXGeometrySelector(
+        cfg=config,
+    )
+
+    # ---------------------------------------------------------
+    # Synthetic table: 2500 perfectly horizontal observations.
+    # ---------------------------------------------------------
+
+    table_x = np.linspace(
+        -0.20,
+        0.20,
+        50,
+    )
+
+    table_y = np.linspace(
+        -0.20,
+        0.20,
+        50,
+    )
+
+    grid_x, grid_y = np.meshgrid(
+        table_x,
+        table_y,
+    )
+
+    background = np.column_stack(
+        (
+            grid_x.ravel(),
+            grid_y.ravel(),
+            np.zeros(
+                grid_x.size,
+                dtype=np.float64,
+            ),
+        )
+    )
+
+    # ---------------------------------------------------------
+    # Synthetic target centered in the Robotiq sweep region.
+    #
+    # Candidate origin z = 0.10 m
+    # sweep center     z = 0.13 m local
+    # target center    z = 0.23 m world
+    # ---------------------------------------------------------
+
+    target_x = np.linspace(
+        -0.010,
+        0.010,
+        5,
+    )
+
+    target_y = np.linspace(
+        -0.005,
+        0.005,
+        5,
+    )
+
+    target_grid_x, target_grid_y = (
+        np.meshgrid(
+            target_x,
+            target_y,
+        )
+    )
+
+    target = np.column_stack(
+        (
+            target_grid_x.ravel(),
+            target_grid_y.ravel(),
+            np.full(
+                target_grid_x.size,
+                0.230,
+                dtype=np.float64,
+            ),
+        )
+    )
+
+    good_grasp = np.eye(
         4,
         dtype=np.float64,
     )
 
-    T_base_camera[
+    good_grasp[
         :3,
         3,
     ] = [
-        10.0,
-        20.0,
-        30.0,
+        0.0,
+        0.0,
+        0.100,
     ]
 
-    expected_base = np.array(
-        [
-            [11.0, 22.0, 33.0],
-            [14.0, 25.0, 36.0],
-        ],
-        dtype=np.float32,
-    )
+    bad_grasp = good_grasp.copy()
 
-    fake_grasps = np.stack(
-        [
-            np.eye(
-                4,
-                dtype=np.float32,
-            ),
-            np.eye(
-                4,
-                dtype=np.float32,
-            ),
-        ],
+    bad_grasp[
+        0,
+        3,
+    ] = 0.200
+
+    grasps = np.stack(
+        (
+            good_grasp,
+            bad_grasp,
+        ),
         axis=0,
     )
 
-    fake_confidences = np.array(
+    confidences = np.array(
         [
-            0.8,
-            0.6,
+            0.60,
+            0.99,
         ],
-        dtype=np.float32,
+        dtype=np.float64,
     )
 
-    fake_tags = np.array(
+    branch_tags = np.array(
         [
-            "diff",
             "obb",
-        ]
-    )
-
-    def fake_predict_object_grasps(
-        *,
-        point_cloud,
-        sweep_volume_params,
-        planner,
-        num_grasps,
-        grasp_threshold,
-        topk_num_grasps,
-        timeout,
-    ):
-        np.testing.assert_allclose(
-            point_cloud,
-            expected_base,
-        )
-
-        assert planner == "graspmoe"
-        assert num_grasps == 200
-        assert grasp_threshold == -1.0
-        assert topk_num_grasps == -1
-        assert timeout == 180.0
-
-        assert (
-            sweep_volume_params[
-                "fingertip_depth"
-            ]
-            == 0.136
-        )
-
-        return (
-            fake_grasps,
-            fake_confidences,
-            fake_tags,
-        )
-
-    monkeypatch.setattr(
-        planner.client,
-        "predict_object_grasps",
-        fake_predict_object_grasps,
-    )
-
-    (
-        grasps,
-        confidences,
-        tags,
-        target_base,
-    ) = planner._generate_grasp_candidates_base(
-        target_point_cloud_camera=(
-            target_camera
-        ),
-        T_base_camera=T_base_camera,
-    )
-
-    np.testing.assert_allclose(
-        target_base,
-        expected_base,
-    )
-
-    np.testing.assert_allclose(
-        grasps,
-        fake_grasps,
-    )
-
-    np.testing.assert_allclose(
-        confidences,
-        fake_confidences,
-    )
-
-    np.testing.assert_array_equal(
-        tags,
-        fake_tags,
-    )
-
-def test_plan_end_to_end_unit(
-    monkeypatch,
-):
-    planner = GraspGenXPlanner()
-
-    rgb = np.zeros(
-        (4, 4, 3),
-        dtype=np.uint8,
-    )
-
-    depth = np.full(
-        (4, 4),
-        0.20,
-        dtype=np.float32,
+            "diff",
+        ],
     )
 
     K = np.array(
         [
-            [100.0, 0.0, 1.5],
-            [0.0, 100.0, 1.5],
+            [500.0, 0.0, 320.0],
+            [0.0, 500.0, 240.0],
             [0.0, 0.0, 1.0],
         ],
         dtype=np.float64,
@@ -182,360 +236,125 @@ def test_plan_end_to_end_unit(
         dtype=np.float64,
     )
 
-    semantic_point = np.array(
-        [1.0, 1.0],
-        dtype=np.float32,
-    )
-
-    mask = np.zeros(
-        (4, 4),
-        dtype=bool,
-    )
-
-    mask[
-        1:3,
-        1:3,
-    ] = True
-
-    monkeypatch.setattr(
-        planner,
-        "_predict_semantic_point",
-        lambda **kwargs: (
-            semantic_point
+    choice = selector.select(
+        grasps_base=grasps,
+        confidences=confidences,
+        branch_tags=branch_tags,
+        semantic_point_px=np.array(
+            [
+                320.0,
+                240.0,
+            ],
+            dtype=np.float64,
         ),
-    )
-
-    monkeypatch.setattr(
-        planner,
-        "_segment_target",
-        lambda **kwargs: mask,
-    )
-
-    # --------------------------------------------------------
-    # Safe top-down OBB grasp.
-    #
-    # gripper base z = 0.20
-    # tcp z = 0.20 - 0.136 = 0.064
-    #
-    # bbox lowest point:
-    # 0.20 - 0.149074 ~= 0.0509 m
-    # safely above the z=0 table.
-    # --------------------------------------------------------
-
-    grasp_obb = np.eye(
-        4,
-        dtype=np.float32,
-    )
-
-    grasp_obb[
-        :3,
-        :3,
-    ] = np.array(
-        [
-            [1.0, 0.0, 0.0],
-            [0.0, -1.0, 0.0],
-            [0.0, 0.0, -1.0],
-        ],
-        dtype=np.float32,
-    )
-
-    grasp_obb[
-        :3,
-        3,
-    ] = [
-        0.01,
-        0.02,
-        0.20,
-    ]
-
-    # Unsafe higher-confidence diffusion grasp.
-    grasp_diff = grasp_obb.copy()
-
-    grasp_diff[
-        2,
-        3,
-    ] = 0.10
-
-    fake_grasps = np.stack(
-        [
-            grasp_diff,
-            grasp_obb,
-        ],
-        axis=0,
-    )
-
-    fake_confidences = np.array(
-        [
-            0.95,
-            0.70,
-        ],
-        dtype=np.float32,
-    )
-
-    fake_tags = np.array(
-        [
-            "diff",
-            "obb",
-        ],
-    )
-
-    def fake_generate(
-        *,
-        target_point_cloud_camera,
-        T_base_camera,
-    ):
-        return (
-            fake_grasps,
-            fake_confidences,
-            fake_tags,
-            target_point_cloud_camera,
-        )
-
-    monkeypatch.setattr(
-        planner,
-        "_generate_grasp_candidates_base",
-        fake_generate,
-    )
-
-    result = planner.plan(
-        rgb_image=rgb,
-        depth_image=depth,
-        camera_matrix=K,
         T_base_camera=T_base_camera,
+        camera_matrix=K,
         T_base_table=T_base_table,
-        current_tcp_position=np.zeros(
+        target_points_base=target,
+        background_points_base=background,
+        current_tcp_orientation=None,
+    )
+
+    assert choice.index == 0
+    assert choice.branch == "obb"
+
+    assert choice.confidence == 0.60
+
+    np.testing.assert_allclose(
+        choice.T_base_gripper[
+            :3,
             3,
-            dtype=np.float64,
-        ),
-        current_tcp_orientation=np.array(
-            [
-                0.0,
-                0.0,
-                0.0,
-                1.0,
-            ],
-            dtype=np.float64,
-        ),
-        grasp_instruction=(
-            "grasp the handle"
-        ),
-    )
-
-    np.testing.assert_allclose(
-        result.semantic_point_px,
-        semantic_point,
-    )
-
-    np.testing.assert_allclose(
-        result.tcp_position_base,
-        np.array(
-            [
-                0.01,
-                0.02,
-                0.064,
-            ],
-            dtype=np.float64,
-        ),
-        atol=1e-6,
-    )
-
-    np.testing.assert_allclose(
-        result.approach_direction_base,
-        np.array(
-            [
-                0.0,
-                0.0,
-                -1.0,
-            ],
-            dtype=np.float64,
-        ),
-        atol=1e-6,
-    )
-
-    assert result.confidence == pytest.approx(
-        0.70
+        ],
+        good_grasp[
+            :3,
+            3,
+        ],
+        atol=1e-9,
     )
 
     assert (
-        result.grasp_instruction
-        == "grasp the handle"
+        choice.table_clearance_m
+        >= config.table_margin_m
     )
 
-    rotation = Rotation.from_quat(
-        result.tcp_orientation_base
-    ).as_matrix()
+    assert (
+        choice.approach_table_clearance_m
+        >= config.table_margin_m
+    )
 
+
+def test_planner_uses_geometry_selected_orientation():
+    """
+    The geometry selector resolves the parallel-jaw symmetry.
+
+    The planner must use exactly that selected orientation and
+    must not recompute or alter it during the final handoff.
+    """
+
+    # Avoid __init__: this method only depends on the orientation
+    # previously supplied by the geometry worker.
+    planner = object.__new__(
+        GraspGenXPlanner
+    )
+
+    raw_rotation = (
+        Rotation.from_euler(
+            "z",
+            10.0,
+            degrees=True,
+        )
+        .as_matrix()
+    )
+
+    selected_rotation = (
+        Rotation.from_euler(
+            "z",
+            190.0,
+            degrees=True,
+        )
+        .as_matrix()
+    )
+
+    # Both orientations have the same approach axis (+Z), as
+    # required for the 180-degree parallel-jaw symmetry.
     np.testing.assert_allclose(
-        rotation,
-        grasp_obb[
-            :3,
-            :3,
-        ],
-        atol=1e-6,
+        raw_rotation[:, 2],
+        selected_rotation[:, 2],
+        atol=1e-10,
     )
 
-def test_sam_mask_selection_prefers_compact_mask():
-    masks = np.zeros(
-        (
-            3,
-            120,
-            120,
-        ),
-        dtype=bool,
+    planner._selected_rotation = (
+        selected_rotation.copy()
     )
 
-    # Compact handle-like mask.
-    masks[
-        0,
-        10:41,
-        10:82,
-    ] = True
-    # area ~= 2232
-
-    # Whole-object alternatives.
-    masks[
-        1,
-        5:108,
-        0:120,
-    ] = True
-
-    masks[
-        2,
-        0:109,
-        0:120,
-    ] = True
-
-    scores = np.array(
-        [
-            0.9601,
-            0.9700,
-            0.9293,
-        ],
-        dtype=np.float64,
-    )
-
-    selected = (
-        GraspGenXPlanner
-        ._select_sam_mask_index(
-            masks=masks,
-            scores=scores,
-        )
-    )
-
-    assert selected == 0
-
-def test_sam_mask_selection_keeps_best_when_area_difference_is_small():
-    masks = np.zeros(
-        (
-            3,
-            100,
-            100,
-        ),
-        dtype=bool,
-    )
-
-    # Areas approximately representative
-    # of the cube case.
-    masks[
-        0
-    ].flat[
-        :7008
-    ] = True
-
-    masks[
-        1
-    ].flat[
-        :8688
-    ] = True
-
-    masks[
-        2
-    ].flat[
-        :8761
-    ] = True
-
-    scores = np.array(
-        [
-            0.96,
-            0.97,
-            0.98,
-        ],
-        dtype=np.float64,
-    )
-
-    selected = (
-        GraspGenXPlanner
-        ._select_sam_mask_index(
-            masks=masks,
-            scores=scores,
-        )
-    )
-
-    assert selected == 2
-
-def test_parallel_gripper_symmetry_selects_nearest_orientation():
-    current = Rotation.from_euler(
-        "z",
-        10.0,
-        degrees=True,
-    ).as_quat()
-
-    predicted = Rotation.from_euler(
-        "z",
-        190.0,
-        degrees=True,
-    ).as_matrix()
-
-    resolved = (
-        GraspGenXPlanner
+    resolved_rotation = (
+        planner
         ._resolve_parallel_gripper_symmetry(
-            grasp_rotation_base=predicted,
-            current_tcp_orientation=current,
-        )
-    )
-
-    relative = (
-        Rotation.from_quat(
-            current
-        ).inv()
-        * Rotation.from_matrix(
-            resolved
-        )
-    )
-
-    assert np.degrees(
-        relative.magnitude()
-    ) < 1e-6
-
-def test_parallel_gripper_symmetry_preserves_approach_axis():
-    current = Rotation.identity().as_quat()
-
-    predicted = Rotation.from_euler(
-        "xyz",
-        [
-            180.0,
-            0.0,
-            170.0,
-        ],
-        degrees=True,
-    ).as_matrix()
-
-    resolved = (
-        GraspGenXPlanner
-        ._resolve_parallel_gripper_symmetry(
-            grasp_rotation_base=predicted,
-            current_tcp_orientation=current,
+            grasp_rotation_base=(
+                raw_rotation
+            ),
+            current_tcp_orientation=np.array(
+                [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ],
+                dtype=np.float64,
+            ),
         )
     )
 
     np.testing.assert_allclose(
-        resolved[
-            :,
-            2,
-        ],
-        predicted[
-            :,
-            2,
-        ],
-        atol=1e-8,
+        resolved_rotation,
+        selected_rotation,
+        atol=1e-10,
+    )
+
+    # The method deliberately returns a copy.
+    resolved_rotation[0, 0] = 123.0
+
+    assert (
+        planner._selected_rotation[0, 0]
+        != 123.0
     )

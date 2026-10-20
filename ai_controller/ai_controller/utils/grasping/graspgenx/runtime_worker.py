@@ -1,8 +1,7 @@
 
-"""Offline GraspGen-X V2 geometry worker.
+"""GraspGen-X geometry-selection worker.
 
-Input/output paths are supplied by the existing SeeDo V2 backend.
-No ROS calls or physical robot commands.
+No ROS calls or physical robot commands are performed here.
 """
 from __future__ import annotations
 
@@ -12,20 +11,19 @@ from pathlib import Path
 
 import numpy as np
 
-from .runtime_core import GraspGenXV2Geometry, V2Config
-from .lightweight_core import GraspGenXV2LightweightGeometry
+from .geometry_utils import (
+    GraspGenXGeometryConfig,
+)
+from .geometry_selector import (
+    GraspGenXGeometrySelector,
+)
 
 
 def run(
     input_path: Path,
     output_path: Path,
-    urdf: Path,
-    mesh_share: Path,
-    open_q: float,
     table_margin_mm: float,
-    max_expensive_checks: int,
-    validation_mode: str = "detailed",
-    semantic_radius_px: float = 100.0,
+    semantic_radius_px: float = 50.0,
 ) -> None:
     with np.load(
         input_path,
@@ -36,21 +34,20 @@ def run(
             for key in src.files
         }
 
-    cfg = V2Config(
-        open_q_rad=float(open_q),
-        table_margin_m=float(table_margin_mm) / 1000.0,
-        max_expensive_checks=int(max_expensive_checks),
-        semantic_radius_px=float(semantic_radius_px),
+    cfg = GraspGenXGeometryConfig(
+        table_margin_m=float(
+            table_margin_mm
+        ) / 1000.0,
+        semantic_radius_px=float(
+            semantic_radius_px
+        ),
     )
 
-    if validation_mode not in {"lightweight", "detailed"}:
-        raise ValueError(f"Unknown V2 validation mode: {validation_mode}")
-    selector_class = (
-        GraspGenXV2LightweightGeometry
-        if validation_mode == "lightweight"
-        else GraspGenXV2Geometry
+    selector = (
+        GraspGenXGeometrySelector(
+            cfg=cfg,
+        )
     )
-    selector = selector_class(urdf, mesh_share, cfg)
 
     choice = selector.select(
         grasps_base=data["grasps_base"],
@@ -68,7 +65,6 @@ def run(
     )
 
     result = {
-        "validation_mode": validation_mode,
         "index": int(choice.index),
         "T_base_gripper": choice.T_base_gripper.tolist(),
         "confidence": float(choice.confidence),
@@ -159,9 +155,7 @@ def run(
         "closure_postcontact_table_risk": False,
         "closure_postcontact_first_risk": None,
 
-        "status": ("LIGHTWEIGHT_POSE_ONLY_NOT_ROBOT_SAFE"
-                   if validation_mode == "lightweight"
-                   else "GEOMETRY_PREFILTERED_NOT_ROBOT_SAFE"),
+        "status": "OK",
     }
 
     output_path.write_text(
@@ -184,33 +178,9 @@ def main():
         required=True,
     )
     parser.add_argument(
-        "--urdf",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "--mesh-share",
-        type=Path,
-        required=True,
-    )
-    parser.add_argument(
-        "--open-q",
-        type=float,
-        default=0.1,
-    )
-    parser.add_argument(
         "--table-margin-mm",
         type=float,
         default=5.0,
-    )
-    parser.add_argument(
-        "--max-expensive-checks",
-        type=int,
-        default=0,
-    )
-    parser.add_argument(
-        "--validation-mode", choices=("detailed", "lightweight"),
-        default="detailed",
     )
     parser.add_argument(
         "--semantic-radius-px", type=float, default=100.0,
@@ -221,12 +191,7 @@ def main():
     run(
         args.input,
         args.output,
-        args.urdf,
-        args.mesh_share,
-        args.open_q,
         args.table_margin_mm,
-        args.max_expensive_checks,
-        args.validation_mode,
         args.semantic_radius_px,
     )
 

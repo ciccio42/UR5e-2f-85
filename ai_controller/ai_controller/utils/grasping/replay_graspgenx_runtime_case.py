@@ -18,7 +18,6 @@ Use --live-molmo to query GraspMolmo again instead.
 from __future__ import annotations
 
 import argparse
-import inspect
 import json
 import sys
 from pathlib import Path
@@ -217,80 +216,27 @@ def find_matching_rollout_step(
     return int(best_step), float(best_error)
 
 
-def build_current_planner(args):
-    from ai_controller.utils.grasping.graspgenx.planner import (
-        GraspGenXPlanner,
-    )
-
-    requested_kwargs = {
-        "server_host": args.server_host,
-        "server_port": args.server_port,
-        "gripper_name": args.gripper_name,
-        "num_grasps": args.num_grasps,
-        "grasp_threshold": args.grasp_threshold,
-        "topk_num_grasps": -1,
-        "seed": args.seed,
-        "semantic_radius_px": args.semantic_radius_px,
-        "table_surface_offset_m": args.table_surface_offset_m,
-    }
-
-    signature = inspect.signature(
-        GraspGenXPlanner.__init__
-    )
-
-    supported_kwargs = {
-        key: value
-        for key, value in requested_kwargs.items()
-        if key in signature.parameters
-    }
-
-    planner = GraspGenXPlanner(
-        **supported_kwargs
-    )
-
-    # Keep the replay usable while the local implementation is evolving.
-    # If a parameter has been added as an attribute rather than an __init__
-    # argument, set it explicitly here.
-    if hasattr(planner, "semantic_radius_px"):
-        planner.semantic_radius_px = float(
-            args.semantic_radius_px
-        )
-
-    if hasattr(planner, "table_surface_offset_m"):
-        planner.table_surface_offset_m = float(
-            args.table_surface_offset_m
-        )
-
-    print(
-        "[PLANNER] semantic radius:",
-        getattr(
-            planner,
-            "semantic_radius_px",
-            "<not implemented>",
-        ),
-    )
-    print(
-        "[PLANNER] table surface offset:",
-        getattr(
-            planner,
-            "table_surface_offset_m",
-            "<not implemented>",
-        ),
-    )
-
-    return planner
-
-
-def maybe_reuse_semantic_point(
-    planner,
+def load_saved_semantic_point(
     case_dir: Path,
     live_molmo: bool,
 ) -> np.ndarray | None:
+    """
+    Load the semantic point recorded during the real robot run.
+
+    When available, this lets the replay isolate the downstream
+    GraspGen-X pipeline without requiring a live GraspMolmo server.
+    """
+
     if live_molmo:
-        print("[MOLMO] Live GraspMolmo inference enabled.")
+        print(
+            "[MOLMO] Live GraspMolmo inference enabled."
+        )
         return None
 
-    plan_json = case_dir / "grasp_plan.json"
+    plan_json = (
+        case_dir
+        / "grasp_plan.json"
+    )
 
     if not plan_json.exists():
         print(
@@ -327,17 +273,12 @@ def maybe_reuse_semantic_point(
             f"has invalid shape: {point.shape}"
         )
 
-    def fixed_predict_semantic_point(
-        *,
-        rgb_image,
-        grasp_instruction,
-    ):
-        del rgb_image, grasp_instruction
-        return point.copy()
-
-    planner._predict_semantic_point = (
-        fixed_predict_semantic_point
-    )
+    if not np.isfinite(
+        point
+    ).all():
+        raise RuntimeError(
+            "semantic_point_px contains non-finite values."
+        )
 
     print(
         "[MOLMO] Reusing real-run semantic point:",
@@ -345,6 +286,124 @@ def maybe_reuse_semantic_point(
     )
 
     return point
+
+
+def build_current_planner(
+    args,
+    saved_semantic_point: np.ndarray | None,
+):
+    """
+    Construct the current production GraspGenXPlanner.
+
+    All shared inference arguments are passed directly because the
+    final planner exposes them through **v1_kwargs.
+
+    If a semantic point from the real run is available, GraspMolmo
+    construction is bypassed for this offline replay only.
+    """
+
+    from ai_controller.utils.grasping.graspgenx.planner import (
+        GraspGenXPlanner,
+    )
+
+    planner_kwargs = {
+        "server_host": args.server_host,
+        "server_port": args.server_port,
+        "gripper_name": args.gripper_name,
+        "num_grasps": args.num_grasps,
+        "grasp_threshold": args.grasp_threshold,
+        "topk_num_grasps": -1,
+        "seed": args.seed,
+        "semantic_radius_px": args.semantic_radius_px,
+    }
+
+    if saved_semantic_point is None:
+        # Full replay, including live GraspMolmo.
+        planner = GraspGenXPlanner(
+            **planner_kwargs
+        )
+
+    else:
+        # GraspMolmoClient currently performs a server check during
+        # construction. For a replay using the already-recorded
+        # semantic point, there is no reason to require that server.
+        from unittest.mock import patch
+
+        from ai_controller.utils.grasping.graspgenx import (
+            inference_core,
+        )
+
+        class OfflineGraspMolmoClient:
+            def __init__(
+                self,
+                *args,
+                **kwargs,
+            ):
+                del args, kwargs
+
+        with patch.object(
+            inference_core,
+            "GraspMolmoClient",
+            OfflineGraspMolmoClient,
+        ):
+            planner = GraspGenXPlanner(
+                **planner_kwargs
+            )
+
+        point = np.asarray(
+            saved_semantic_point,
+            dtype=np.float32,
+        ).copy()
+
+        def fixed_predict_semantic_point(
+            *,
+            rgb_image,
+            grasp_instruction,
+        ):
+            del rgb_image
+            del grasp_instruction
+
+            return point.copy()
+
+        planner._predict_semantic_point = (
+            fixed_predict_semantic_point
+        )
+
+    print(
+        "[PLANNER] server:",
+        f"{args.server_host}:{args.server_port}",
+    )
+
+    print(
+        "[PLANNER] num grasps:",
+        planner.num_grasps,
+    )
+
+    print(
+        "[PLANNER] grasp threshold:",
+        planner.grasp_threshold,
+    )
+
+    print(
+        "[PLANNER] seed:",
+        planner.seed,
+    )
+
+    print(
+        "[PLANNER] semantic radius:",
+        planner.semantic_radius_px,
+    )
+
+    print(
+        "[PLANNER] semantic source:",
+        (
+            "saved real-run point"
+            if saved_semantic_point is not None
+            else "live GraspMolmo"
+        ),
+    )
+
+    return planner
 
 
 def main() -> None:
@@ -404,12 +463,6 @@ def main() -> None:
         "--semantic-radius-px",
         type=float,
         default=50.0,
-    )
-
-    parser.add_argument(
-        "--table-surface-offset-m",
-        type=float,
-        default=0.040,
     )
 
     # Production table_0 used in the current real setup:
@@ -486,8 +539,7 @@ def main() -> None:
             args.case_dir
             / (
                 "offline_replay_"
-                f"r{args.semantic_radius_px:g}px_"
-                f"table{args.table_surface_offset_m:.3f}m"
+                f"r{args.semantic_radius_px:g}px"
             )
         )
 
@@ -660,16 +712,18 @@ def main() -> None:
         ],
     )
 
-    planner = build_current_planner(
-        args
-    )
-
     reused_semantic_point = (
-        maybe_reuse_semantic_point(
-            planner=planner,
+        load_saved_semantic_point(
             case_dir=args.case_dir,
             live_molmo=args.live_molmo,
         )
+    )
+
+    planner = build_current_planner(
+        args=args,
+        saved_semantic_point=(
+            reused_semantic_point
+        ),
     )
 
     result = planner.plan(
@@ -707,9 +761,6 @@ def main() -> None:
         ),
         "semantic_radius_px": float(
             args.semantic_radius_px
-        ),
-        "table_surface_offset_m": float(
-            args.table_surface_offset_m
         ),
         "T_base_table": (
             T_base_table.tolist()

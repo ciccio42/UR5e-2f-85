@@ -1,4 +1,4 @@
-"""Lightweight GraspGen-X V2 selector, with local semantic centering.
+"""GraspGen-X geometry selector with local semantic centering.
 
 This module is shared by offline and real SeeDo inference through the same
 runtime_worker. A small 3D region around the GraspMolmo point helps prefer
@@ -12,10 +12,10 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .runtime_core import (
+from .geometry_utils import (
     NoValidGrasp,
-    V2Choice,
-    V2Config,
+    GraspGenXGeometryChoice,
+    GraspGenXGeometryConfig,
     _distance_to_box,
     _project,
     _table_clearances,
@@ -24,7 +24,7 @@ from .runtime_core import (
 )
 
 
-# Exact V1 Robotiq conservative outer envelope. This is a bounding box, NOT
+# Conservative Robotiq outer envelope. This is a bounding box, NOT
 # a finger contact model. Source: graspgenx/planner.py, ROBOTIQ_BBOX_MIN/MAX.
 _V1_BBOX_MIN = np.array([-0.07421507382649573, -0.037499999999747013, -0.004])
 _V1_BBOX_MAX = np.array([0.07421507382649821, 0.037499999999747013, 0.14907399999999998])
@@ -35,7 +35,7 @@ _BBOX_VERTICES = np.array([
     for z in (_V1_BBOX_MIN[2], _V1_BBOX_MAX[2])
 ], dtype=float)
 
-# V1 sweep/contact region, NOT the entire gripper volume.
+# Sweep/contact region, NOT the entire gripper volume.
 _SWEEP_CENTER = np.array([0.0, 0.0, 0.130], dtype=float)
 _SWEEP_HALF = np.array([0.085, 0.032, 0.036], dtype=float) / 2.0
 
@@ -48,14 +48,14 @@ _CENTER_SCORE_TIEBREAK = 0.12
 _MIN_CENTER_IMPROVEMENT = 0.06
 
 
-class GraspGenXV2LightweightGeometry:
-    """Evaluate every V1-like grasp variant, including both jaw symmetries."""
+class GraspGenXGeometrySelector:
+    """Evaluate every grasp candidate, including both jaw symmetries."""
 
     def __init__(self, driver_urdf=None, robotiq_mesh_share=None, cfg=None):
         # Accepted only for signature compatibility with the existing worker.
-        # Neither the URDF nor Trimesh is instantiated in lightweight mode.
+        # Neither the URDF nor Trimesh is required by this geometry selector.
         del driver_urdf, robotiq_mesh_share
-        self.cfg = cfg or V2Config()
+        self.cfg = cfg or GraspGenXGeometryConfig()
         if self.cfg.table_margin_m < 0 or self.cfg.semantic_radius_px <= 0:
             raise ValueError("Invalid table margin or semantic radius")
 
@@ -63,7 +63,7 @@ class GraspGenXV2LightweightGeometry:
         self, *, grasps_base, confidences, branch_tags, semantic_point_px,
         T_base_camera, camera_matrix, T_base_table, target_points_base,
         background_points_base, current_tcp_orientation=None,
-    ) -> V2Choice:
+    ) -> GraspGenXGeometryChoice:
         c = self.cfg
         grasps = np.asarray(grasps_base, dtype=float)
         conf = np.asarray(confidences, dtype=float).reshape(-1)
@@ -93,7 +93,7 @@ class GraspGenXV2LightweightGeometry:
             background, table_T, c
         )
         print(
-            "[V2 LIGHT] tabletop: "
+            "[GRASPGENX GEOMETRY] tabletop: "
             f"offset={table_fit['offset_from_nominal_m']*1000:.2f}mm "
             f"rms={table_fit['rms_m']*1000:.2f}mm "
             f"inliers={table_fit['inlier_fraction']*100:.1f}%",
@@ -127,7 +127,7 @@ class GraspGenXV2LightweightGeometry:
         else:
             semantic_anchor = semantic_point.copy()
         print(
-            "[V2 LIGHT CENTER] local region: "
+            "[GRASPGENX CENTER] local region: "
             f"points={int(semantic_neighborhood.sum())} "
             f"radius={_SEMANTIC_PATCH_RADIUS_M*1000:.1f}mm",
             flush=True,
@@ -152,7 +152,7 @@ class GraspGenXV2LightweightGeometry:
         sweep_min = _SWEEP_CENTER - _SWEEP_HALF
         sweep_max = _SWEEP_CENTER + _SWEEP_HALF
 
-        # Exact V1 bounding-box clearance, but against the *observed* table.
+        # Conservative bounding-box clearance against the *observed* table.
         # Both jaw symmetries are evaluated; no branch is discarded merely
         # because at least one OBB candidate passed.
         for symmetry, flip in (
@@ -190,7 +190,7 @@ class GraspGenXV2LightweightGeometry:
                     rejected["sweep"] += 1
                     continue
 
-                # V1 semantics: choose an OBSERVED point inside the open
+                # Choose an OBSERVED point inside the open
                 # sweep volume nearest its center, then reproject to RGB.
                 points = target[inside]
                 grasp_center = t + R @ _SWEEP_CENTER
@@ -206,7 +206,7 @@ class GraspGenXV2LightweightGeometry:
 
                 rotation_deg = None
                 if rotation0 is not None:
-                    # V1's gripper rotation equals TCP rotation (fixed
+                    # Gripper rotation equals TCP rotation (fixed
                     # gripper->TCP rotational transform is identity).
                     relative = rotation0.inv() * Rotation.from_matrix(R)
                     rotation_deg = float(np.degrees(relative.magnitude()))
@@ -252,14 +252,14 @@ class GraspGenXV2LightweightGeometry:
         if len(accepted) + sum(rejected.values()) != total:
             raise AssertionError("Candidate accounting mismatch")
         print(
-            f"[V2 LIGHT] evaluated={total}/{total} "
+            f"[GRASPGENX GEOMETRY] evaluated={total}/{total} "
             f"valid={len(accepted)} rejected={rejected} "
             f"branches={evaluated_branches}; NOT ROBOT-SAFE",
             flush=True,
         )
         if not accepted:
             raise NoValidGrasp(
-                f"No V1-style table/semantic-valid grasp: {rejected}"
+                f"No table/semantic-valid grasp: {rejected}"
             )
         # Keep the original score and selection unchanged for grasps whose
         # intended contact region is already fairly centered. This protects
@@ -290,7 +290,7 @@ class GraspGenXV2LightweightGeometry:
                 if proposed[10] + _MIN_CENTER_IMPROVEMENT < baseline[10]:
                     best = proposed
             print(
-                "[V2 LIGHT CENTER] original idx="
+                "[GRASPGENX CENTER] original idx="
                 f"{baseline[1]} centerXYmm="
                 f"{np.round(baseline[11]*1000, 2).tolist()} "
                 f"norm={baseline[10]:.3f}; "
@@ -302,20 +302,20 @@ class GraspGenXV2LightweightGeometry:
             )
             if best[10] > 0.75:
                 print(
-                    "[V2 LIGHT CENTER] WARNING: selected region remains "
+                    "[GRASPGENX CENTER] WARNING: selected region remains "
                     "far from jaw center; review offline before robot use",
                     flush=True,
                 )
 
         score, index, symmetry, pose, final_h, approach_h, px, gap, rotation, npts, center_cost, center_xy = best
         print(
-            f"[V2 LIGHT] selected branch={tags[index]} idx={index} "
+            f"[GRASPGENX GEOMETRY] selected branch={tags[index]} idx={index} "
             f"symmetry={symmetry} score={score:.3f} "
             f"sweep_points={npts} rotation={rotation}; "
             "APPROACH/TARGET/CLOSURE UNCHECKED",
             flush=True,
         )
-        return V2Choice(
+        return GraspGenXGeometryChoice(
             index=int(index), T_base_gripper=pose,
             confidence=float(conf[index]), branch=str(tags[index]),
             symmetry=str(symmetry), table_clearance_m=final_h,
@@ -335,7 +335,7 @@ class GraspGenXV2LightweightGeometry:
             contact_inward_normal_dot=None,
             max_approach_penetration_m=0.0,
             max_precontact_penetration_m=0.0,
-            contact_assessment="LIGHTWEIGHT_SWEEP_OCCUPANCY_NOT_PHYSICAL_CONTACT",
+            contact_assessment="SWEEP_OCCUPANCY_NOT_PHYSICAL_CONTACT",
             geometry_limitations=(
                 "NO fingertip or target-mesh collision checks",
                 "NO closure/force/contact verification",
