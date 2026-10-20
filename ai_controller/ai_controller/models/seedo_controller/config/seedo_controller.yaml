@@ -162,12 +162,15 @@ motion_layer:
     # Initial penetration of the peg into the hole.
     initial_entry_m: 0.005
 
+    initial_entry_step_m: 0.003
+    insertion_slide_step_m: 0.015
+
     # Maximum Cartesian increment during precision insertion.
     insertion_step_m: 0.005
 
     # Desired final distance between the bottom of the nut
     # and the supporting surface.
-    release_bottom_height_m: 0.05
+    release_bottom_height_m: 0.085
 
     # Maximum orientation increment while aligning the
     # grasped nut with the peg axis.

@@ -2761,6 +2761,1310 @@ class ScenePerceiver:
 
         return k.reshape(3, 3)
 
+    def refine_post_grasp_nut_hole(
+        self,
+        *,
+        mask: np.ndarray,
+        depth_image: np.ndarray,
+        camera_matrix: np.ndarray,
+        T_base_camera: np.ndarray,
+        T_base_table: np.ndarray,
+        known_thickness_m: float,
+        artifacts_dir: str | Path | None = None,
+        min_hole_area_px: float = 40.0,
+        top_surface_band_m: float = 0.008,
+        plane_inlier_threshold_m: float = 0.003,
+        min_plane_points: int = 80,
+        max_plane_rms_m: float = 0.003,
+        hole_support_tolerance_m: float = 0.006,
+        min_thickness_m: float = 0.002,
+        max_thickness_m: float = 0.080,
+        max_points: int = 12000,
+    ) -> dict[str, Any]:
+        """
+        Re-estimate the grasped ring/nut hole before LIFT_UP.
+
+        SAM provides only the external target region.
+
+        The hole itself is recovered geometrically from depth:
+        pixels inside the target external silhouette whose 3D position lies
+        approximately one previously-measured object thickness below the
+        observed top plane are interpreted as support/table visible through
+        the internal hole.
+        """
+
+        mask = np.asarray(
+            mask,
+            dtype=bool,
+        )
+
+        depth = np.asarray(
+            depth_image,
+            dtype=np.float64,
+        )
+
+        K = np.asarray(
+            camera_matrix,
+            dtype=np.float64,
+        )
+
+        T_base_camera = np.asarray(
+            T_base_camera,
+            dtype=np.float64,
+        )
+
+        T_base_table = np.asarray(
+            T_base_table,
+            dtype=np.float64,
+        )
+
+        known_thickness_m = float(
+            known_thickness_m
+        )
+
+        if mask.ndim != 2:
+            raise ValueError(
+                "Post-grasp mask must be 2D."
+            )
+
+        if depth.ndim != 2:
+            raise ValueError(
+                "Post-grasp depth image must be 2D."
+            )
+
+        if mask.shape != depth.shape:
+            raise ValueError(
+                "Post-grasp mask and depth must "
+                "have identical shape."
+            )
+
+        if K.shape != (3, 3):
+            raise ValueError(
+                "camera_matrix must have shape (3, 3)."
+            )
+
+        if T_base_camera.shape != (4, 4):
+            raise ValueError(
+                "T_base_camera must have shape (4, 4)."
+            )
+
+        if T_base_table.shape != (4, 4):
+            raise ValueError(
+                "T_base_table must have shape (4, 4)."
+            )
+
+        if not (
+            min_thickness_m
+            <= known_thickness_m
+            <= max_thickness_m
+        ):
+            raise ValueError(
+                "Invalid pre-grasp measured thickness: "
+                f"{known_thickness_m * 1000.0:.2f} mm."
+            )
+
+        fx = float(K[0, 0])
+        fy = float(K[1, 1])
+        cx = float(K[0, 2])
+        cy = float(K[1, 2])
+
+        if (
+            not np.isfinite(fx)
+            or not np.isfinite(fy)
+            or fx <= 0.0
+            or fy <= 0.0
+        ):
+            raise ValueError(
+                "Invalid eye-in-hand intrinsics."
+            )
+
+        # ---------------------------------------------------------
+        # base <- camera
+        # base <- table
+        #
+        # therefore:
+        #
+        # table <- camera =
+        # inv(base <- table) @ (base <- camera)
+        # ---------------------------------------------------------
+
+        try:
+            T_table_base = np.linalg.inv(
+                T_base_table
+            )
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "T_base_table is not invertible."
+            ) from exc
+
+        T_table_camera = (
+            T_table_base
+            @ T_base_camera
+        )
+
+        R_table_camera = np.asarray(
+            T_table_camera[:3, :3],
+            dtype=np.float64,
+        )
+
+        t_table_camera = np.asarray(
+            T_table_camera[:3, 3],
+            dtype=np.float64,
+        )
+
+        # ---------------------------------------------------------
+        # 1. Build the FILLED EXTERNAL SILHOUETTE.
+        #
+        # SAM may fill the real internal hole, therefore we deliberately
+        # ignore SAM's internal topology.
+        # ---------------------------------------------------------
+
+        mask_uint8 = (
+            mask.astype(np.uint8)
+            * 255
+        )
+
+        external_contours, _ = (
+            cv2.findContours(
+                mask_uint8,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_NONE,
+            )
+        )
+
+        if not external_contours:
+            raise RuntimeError(
+                "Post-grasp SAM mask contains no "
+                "external contour."
+            )
+
+        outer_contour = max(
+            external_contours,
+            key=cv2.contourArea,
+        )
+
+        silhouette_mask = np.zeros(
+            mask.shape,
+            dtype=np.uint8,
+        )
+
+        cv2.drawContours(
+            silhouette_mask,
+            [outer_contour],
+            -1,
+            255,
+            thickness=cv2.FILLED,
+        )
+
+        silhouette = (
+            silhouette_mask > 0
+        )
+
+        valid_region = (
+            silhouette
+            & np.isfinite(depth)
+            & (depth > 0.0)
+        )
+
+        all_indices = np.flatnonzero(
+            valid_region
+        )
+
+        if len(
+            all_indices
+        ) < min_plane_points:
+            raise RuntimeError(
+                "Too few valid depth points inside "
+                "the post-grasp target silhouette."
+            )
+
+        all_v, all_u = np.unravel_index(
+            all_indices,
+            depth.shape,
+        )
+
+        all_z_camera = depth[
+            all_v,
+            all_u,
+        ]
+
+        all_x_camera = (
+            (
+                all_u.astype(
+                    np.float64
+                )
+                - cx
+            )
+            * all_z_camera
+            / fx
+        )
+
+        all_y_camera = (
+            (
+                all_v.astype(
+                    np.float64
+                )
+                - cy
+            )
+            * all_z_camera
+            / fy
+        )
+
+        all_points_camera = np.column_stack(
+            (
+                all_x_camera,
+                all_y_camera,
+                all_z_camera,
+            )
+        )
+
+        all_points_table = (
+            all_points_camera
+            @ R_table_camera.T
+            + t_table_camera
+        )
+
+        # ---------------------------------------------------------
+        # 2. Estimate the top plane.
+        #
+        # Even if SAM fills the hole, the support/table samples are
+        # lower than the ring top. The upper percentile therefore
+        # isolates the actual upper ring surface.
+        # ---------------------------------------------------------
+
+        if len(
+            all_points_table
+        ) > max_points:
+
+            sample_ids = np.linspace(
+                0,
+                len(all_points_table) - 1,
+                max_points,
+                dtype=np.int64,
+            )
+
+            fitting_points = (
+                all_points_table[
+                    sample_ids
+                ]
+            )
+
+        else:
+            fitting_points = (
+                all_points_table
+            )
+
+        object_z = fitting_points[
+            :,
+            2,
+        ]
+
+        top_seed_z = float(
+            np.percentile(
+                object_z,
+                90.0,
+            )
+        )
+
+        top_points = fitting_points[
+            object_z
+            >= (
+                top_seed_z
+                - top_surface_band_m
+            )
+        ]
+
+        if len(top_points) < min_plane_points:
+            raise RuntimeError(
+                "Too few points on the post-grasp "
+                "ring upper surface."
+            )
+
+        def fit_plane(
+            points: np.ndarray,
+        ) -> tuple[
+            np.ndarray,
+            np.ndarray,
+        ]:
+
+            centroid = np.mean(
+                points,
+                axis=0,
+            )
+
+            centered = (
+                points
+                - centroid
+            )
+
+            _, _, vh = np.linalg.svd(
+                centered,
+                full_matrices=False,
+            )
+
+            normal = np.asarray(
+                vh[-1],
+                dtype=np.float64,
+            )
+
+            norm = float(
+                np.linalg.norm(
+                    normal
+                )
+            )
+
+            if norm <= 1e-12:
+                raise RuntimeError(
+                    "Degenerate post-grasp top plane."
+                )
+
+            normal /= norm
+
+            return centroid, normal
+
+        (
+            top_plane_point,
+            top_plane_normal,
+        ) = fit_plane(
+            top_points
+        )
+
+        if top_plane_normal[2] < 0.0:
+            top_plane_normal = (
+                -top_plane_normal
+            )
+
+        top_distances = np.abs(
+            (
+                fitting_points
+                - top_plane_point
+            )
+            @ top_plane_normal
+        )
+
+        plane_inliers = fitting_points[
+            top_distances
+            <= plane_inlier_threshold_m
+        ]
+
+        if len(
+            plane_inliers
+        ) < min_plane_points:
+            raise RuntimeError(
+                "Too few post-grasp top-plane inliers."
+            )
+
+        (
+            top_plane_point,
+            top_plane_normal,
+        ) = fit_plane(
+            plane_inliers
+        )
+
+        if top_plane_normal[2] < 0.0:
+            top_plane_normal = (
+                -top_plane_normal
+            )
+
+        residuals = (
+            (
+                plane_inliers
+                - top_plane_point
+            )
+            @ top_plane_normal
+        )
+
+        top_plane_rms_m = float(
+            np.sqrt(
+                np.mean(
+                    residuals ** 2
+                )
+            )
+        )
+
+        if (
+            top_plane_rms_m
+            > max_plane_rms_m
+        ):
+            raise RuntimeError(
+                "Post-grasp top plane is too noisy: "
+                f"{top_plane_rms_m * 1000.0:.2f} mm."
+            )
+
+        # ---------------------------------------------------------
+        # 3. Find depth samples approximately one ring thickness
+        #    BELOW the top plane.
+        #
+        # Those samples are the table/support seen THROUGH the hole.
+        # ---------------------------------------------------------
+
+        signed_plane_distance = (
+            (
+                all_points_table
+                - top_plane_point
+            )
+            @ top_plane_normal
+        )
+
+        depth_below_top = (
+            -signed_plane_distance
+        )
+
+        effective_hole_tolerance_m = max(
+            float(
+                hole_support_tolerance_m
+            ),
+            float(
+                known_thickness_m
+                * 0.25
+            ),
+        )
+
+        support_like = (
+            np.abs(
+                depth_below_top
+                - known_thickness_m
+            )
+            <= effective_hole_tolerance_m
+        )
+
+        hole_candidate_mask = np.zeros(
+            depth.shape,
+            dtype=np.uint8,
+        )
+
+        hole_candidate_mask[
+            all_v[
+                support_like
+            ],
+            all_u[
+                support_like
+            ],
+        ] = 255
+
+        # Remove isolated depth noise.
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (3, 3),
+        )
+
+        hole_candidate_mask = cv2.morphologyEx(
+            hole_candidate_mask,
+            cv2.MORPH_OPEN,
+            kernel,
+        )
+
+        hole_candidate_mask = cv2.morphologyEx(
+            hole_candidate_mask,
+            cv2.MORPH_CLOSE,
+            kernel,
+        )
+
+        # ---------------------------------------------------------
+        # 4. Reject support-like regions touching the OUTER target
+        #    boundary.
+        #
+        # The actual ring hole is enclosed inside the object.
+        # Side/background leakage normally reaches the external boundary.
+        # ---------------------------------------------------------
+
+        eroded_silhouette = cv2.erode(
+            silhouette_mask,
+            kernel,
+            iterations=1,
+        )
+
+        silhouette_boundary = (
+            (silhouette_mask > 0)
+            & (eroded_silhouette == 0)
+        )
+
+        (
+            component_count,
+            component_labels,
+            component_stats,
+            _,
+        ) = cv2.connectedComponentsWithStats(
+            (
+                hole_candidate_mask > 0
+            ).astype(np.uint8),
+            connectivity=8,
+        )
+
+        component_candidates = []
+
+        for label_index in range(
+            1,
+            component_count,
+        ):
+
+            area = int(
+                component_stats[
+                    label_index,
+                    cv2.CC_STAT_AREA,
+                ]
+            )
+
+            if area < min_hole_area_px:
+                continue
+
+            component = (
+                component_labels
+                == label_index
+            )
+
+            if np.any(
+                component
+                & silhouette_boundary
+            ):
+                continue
+
+            component_candidates.append(
+                (
+                    label_index,
+                    area,
+                )
+            )
+
+        if not component_candidates:
+            raise RuntimeError(
+                "Depth-based post-grasp refinement could not "
+                "find an enclosed support region corresponding "
+                "to the ring hole."
+            )
+
+        hole_component_label, _ = max(
+            component_candidates,
+            key=lambda item:
+            item[1],
+        )
+
+        hole_mask = (
+            component_labels
+            == hole_component_label
+        )
+
+        hole_contours, _ = cv2.findContours(
+            hole_mask.astype(
+                np.uint8
+            ),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_NONE,
+        )
+
+        if not hole_contours:
+            raise RuntimeError(
+                "Depth-based hole region has no contour."
+            )
+
+        hole_contour = max(
+            hole_contours,
+            key=cv2.contourArea,
+        )
+
+        hole_area_px = float(
+            cv2.contourArea(
+                hole_contour
+            )
+        )
+
+        if len(hole_contour) < 5:
+            raise RuntimeError(
+                "Depth-based hole contour has too "
+                "few points for ellipse fitting."
+            )
+
+        ellipse = cv2.fitEllipse(
+            hole_contour
+        )
+
+        (
+            (hole_u, hole_v),
+            (
+                ellipse_width_px,
+                ellipse_height_px,
+            ),
+            ellipse_angle_deg,
+        ) = ellipse
+
+        ellipse_area_px = float(
+            np.pi
+            * 0.25
+            * ellipse_width_px
+            * ellipse_height_px
+        )
+
+        hole_fit_fill_ratio = (
+            hole_area_px
+            / ellipse_area_px
+            if ellipse_area_px > 1e-9
+            else 0.0
+        )
+
+        if not (
+            0.40
+            <= hole_fit_fill_ratio
+            <= 1.60
+        ):
+            raise RuntimeError(
+                "Depth-based hole candidate is poorly "
+                "represented by an ellipse: "
+                f"fill_ratio={hole_fit_fill_ratio:.3f}."
+            )
+
+        # ---------------------------------------------------------
+        # 5. Hole center = image ray intersected with current top plane.
+        # ---------------------------------------------------------
+
+        ray_camera = np.array(
+            [
+                (hole_u - cx) / fx,
+                (hole_v - cy) / fy,
+                1.0,
+            ],
+            dtype=np.float64,
+        )
+
+        ray_camera /= np.linalg.norm(
+            ray_camera
+        )
+
+        ray_table = (
+            R_table_camera
+            @ ray_camera
+        )
+
+        ray_table /= np.linalg.norm(
+            ray_table
+        )
+
+        camera_origin_table = (
+            t_table_camera
+        )
+
+        denominator = float(
+            np.dot(
+                top_plane_normal,
+                ray_table,
+            )
+        )
+
+        if abs(
+            denominator
+        ) <= 1e-8:
+            raise RuntimeError(
+                "Post-grasp hole-center ray is "
+                "parallel to the ring top plane."
+            )
+
+        ray_distance = float(
+            np.dot(
+                top_plane_normal,
+                (
+                    top_plane_point
+                    - camera_origin_table
+                ),
+            )
+            / denominator
+        )
+
+        if ray_distance <= 0.0:
+            raise RuntimeError(
+                "Post-grasp hole center lies "
+                "behind the eye-in-hand camera."
+            )
+
+        hole_center_table = (
+            camera_origin_table
+            + ray_distance
+            * ray_table
+        )
+
+        hole_bottom_center_table = (
+            hole_center_table
+            - known_thickness_m
+            * top_plane_normal
+        )
+
+        # ---------------------------------------------------------
+        # 6. table_0 -> base_link.
+        # ---------------------------------------------------------
+
+        R_base_table = np.asarray(
+            T_base_table[:3, :3],
+            dtype=np.float64,
+        )
+
+        t_base_table = np.asarray(
+            T_base_table[:3, 3],
+            dtype=np.float64,
+        )
+
+        hole_center_base = (
+            R_base_table
+            @ hole_center_table
+            + t_base_table
+        )
+
+        hole_bottom_center_base = (
+            R_base_table
+            @ hole_bottom_center_table
+            + t_base_table
+        )
+
+        hole_axis_base = (
+            R_base_table
+            @ top_plane_normal
+        )
+
+        hole_axis_base /= np.linalg.norm(
+            hole_axis_base
+        )
+
+        # ---------------------------------------------------------
+        # Diagnostics.
+        # ---------------------------------------------------------
+
+        if artifacts_dir is not None:
+
+            output_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            output_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "post_grasp_depth_hole_mask.png"
+                ),
+                (
+                    hole_mask.astype(
+                        np.uint8
+                    )
+                    * 255
+                ),
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "post_grasp_depth_candidates.png"
+                ),
+                hole_candidate_mask,
+            )
+
+            overlay = np.zeros(
+                (
+                    depth.shape[0],
+                    depth.shape[1],
+                    3,
+                ),
+                dtype=np.uint8,
+            )
+
+            overlay[
+                silhouette
+            ] = (
+                80,
+                80,
+                80,
+            )
+
+            overlay[
+                hole_mask
+            ] = (
+                255,
+                255,
+                255,
+            )
+
+            cv2.ellipse(
+                overlay,
+                ellipse,
+                (0, 255, 0),
+                2,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "post_grasp_depth_hole_overlay.png"
+                ),
+                overlay,
+            )
+
+        print(
+            "[POST-GRASP] Depth hole refinement | "
+            f"center_base="
+            f"[{hole_center_base[0]:.5f}, "
+            f"{hole_center_base[1]:.5f}, "
+            f"{hole_center_base[2]:.5f}] | "
+            f"axis_base="
+            f"[{hole_axis_base[0]:.5f}, "
+            f"{hole_axis_base[1]:.5f}, "
+            f"{hole_axis_base[2]:.5f}] | "
+            f"thickness="
+            f"{known_thickness_m * 1000.0:.2f} mm | "
+            f"hole_area="
+            f"{hole_area_px:.1f} px | "
+            f"plane_rms="
+            f"{top_plane_rms_m * 1000.0:.2f} mm",
+            flush=True,
+        )
+
+        return {
+            "accepted": True,
+
+            "hole_center_px": (
+                float(hole_u),
+                float(hole_v),
+            ),
+
+            "hole_center_base": tuple(
+                float(value)
+                for value
+                in hole_center_base
+            ),
+
+            "hole_bottom_center_base": tuple(
+                float(value)
+                for value
+                in hole_bottom_center_base
+            ),
+
+            "hole_axis_base": tuple(
+                float(value)
+                for value
+                in hole_axis_base
+            ),
+
+            "nut_thickness_estimate_m": float(
+                known_thickness_m
+            ),
+
+            "thickness_source": (
+                "initial_pre_grasp_refinement"
+            ),
+
+            "hole_area_px": float(
+                hole_area_px
+            ),
+
+            "hole_ellipse_axes_px": (
+                float(
+                    ellipse_width_px
+                ),
+                float(
+                    ellipse_height_px
+                ),
+            ),
+
+            "hole_ellipse_angle_deg": float(
+                ellipse_angle_deg
+            ),
+
+            "hole_fit_fill_ratio": float(
+                hole_fit_fill_ratio
+            ),
+
+            "top_plane_rms_m": float(
+                top_plane_rms_m
+            ),
+
+            "depth_hole_tolerance_m": float(
+                effective_hole_tolerance_m
+            ),
+
+            "top_plane_point_table": tuple(
+                float(value)
+                for value
+                in top_plane_point
+            ),
+
+            "top_plane_normal_table": tuple(
+                float(value)
+                for value
+                in top_plane_normal
+            ),
+        }
+
+    def detect_post_grasp_target_mask(
+        self,
+        *,
+        rgb_image: np.ndarray,
+        target_label: str,
+        artifacts_dir: str | Path | None = None,
+        box_threshold: float = 0.20,
+        text_threshold: float = 0.25,
+    ) -> dict[str, Any]:
+        """
+        Detect and segment only the already-known grasped Nut-Assembly object.
+
+        IMPORTANT:
+        SAM is used only to delimit the target object.
+
+        The internal hole is NOT inferred from SAM topology because SAM can
+        legitimately fill the visible hole. Hole geometry is recovered later
+        from RGB-D geometry.
+        """
+
+        if not isinstance(
+            rgb_image,
+            np.ndarray,
+        ):
+            raise TypeError(
+                "Post-grasp RGB image must be a numpy array."
+            )
+
+        if rgb_image.ndim != 3:
+            raise ValueError(
+                "Post-grasp RGB image must have shape (H, W, C)."
+            )
+
+        target_label = str(
+            target_label
+        ).strip()
+
+        if not target_label:
+            raise ValueError(
+                "Post-grasp target label cannot be empty."
+            )
+
+        self._ensure_models_loaded()
+
+        normalized_label = (
+            target_label
+            .strip()
+            .lower()
+            .replace("_", " ")
+        )
+
+        normalized_label = re.sub(
+            r"\s+\d+$",
+            "",
+            normalized_label,
+        ).strip()
+
+        if not normalized_label:
+            raise RuntimeError(
+                "Could not derive a GroundingDINO query "
+                "from the post-grasp target label."
+            )
+
+        object_type = (
+            normalized_label
+            .split()[-1]
+        )
+
+        queries = [
+            normalized_label
+        ]
+
+        if object_type != normalized_label:
+            queries.append(
+                object_type
+            )
+
+        image_source = np.asarray(
+            rgb_image,
+            dtype=np.uint8,
+        )
+
+        _, image = load_image_from_array(
+            image_source
+        )
+
+        height, width = (
+            image_source.shape[:2]
+        )
+
+        image_area = float(
+            height * width
+        )
+
+        selected_candidate = None
+
+        for query in queries:
+
+            timing_query = (
+                query.replace(
+                    " ",
+                    "_",
+                )
+            )
+
+            with TIMING.measure(
+                f"post_grasp.grounding_dino.{timing_query}",
+                cuda=True,
+            ):
+                boxes, logits, _ = predict(
+                    model=self.grounding_model,
+                    image=image,
+                    caption=query,
+                    box_threshold=box_threshold,
+                    text_threshold=text_threshold,
+                    device=self.device,
+                )
+
+            print(
+                "[POST-GRASP] GroundingDINO | "
+                f"query={query!r} | "
+                f"candidates={len(boxes)}",
+                flush=True,
+            )
+
+            if len(boxes) == 0:
+                continue
+
+            boxes_xyxy = (
+                box_ops.box_cxcywh_to_xyxy(
+                    boxes
+                )
+                * torch.tensor(
+                    [
+                        width,
+                        height,
+                        width,
+                        height,
+                    ],
+                    dtype=boxes.dtype,
+                    device=boxes.device,
+                )
+            )
+
+            with TIMING.measure(
+                "post_grasp.sam",
+                cuda=True,
+            ):
+                self.sam_predictor.set_image(
+                    image_source
+                )
+
+                transformed_boxes = (
+                    self.sam_predictor
+                    .transform
+                    .apply_boxes_torch(
+                        boxes_xyxy,
+                        image_source.shape[:2],
+                    )
+                    .to(
+                        self.device
+                    )
+                )
+
+                masks, _, _ = (
+                    self.sam_predictor.predict_torch(
+                        point_coords=None,
+                        point_labels=None,
+                        boxes=transformed_boxes,
+                        multimask_output=False,
+                    )
+                )
+
+            masks_np = (
+                masks
+                .detach()
+                .cpu()
+                .numpy()
+            )
+
+            logits_np = (
+                logits
+                .detach()
+                .cpu()
+                .numpy()
+            )
+
+            candidates = []
+
+            for candidate_index, (
+                mask,
+                confidence,
+            ) in enumerate(
+                zip(
+                    masks_np,
+                    logits_np,
+                )
+            ):
+                object_mask = (
+                    mask[0] > 0
+                )
+
+                mask_area = int(
+                    np.count_nonzero(
+                        object_mask
+                    )
+                )
+
+                if mask_area <= 0:
+                    continue
+
+                mask_fraction = (
+                    float(mask_area)
+                    / image_area
+                )
+
+                # Eye-in-hand targets can occupy a large fraction of
+                # the image. Only reject obviously degenerate masks.
+                if (
+                    mask_fraction <= 0.005
+                    or mask_fraction >= 0.80
+                ):
+                    print(
+                        "[POST-GRASP] Candidate rejected | "
+                        f"query={query!r} | "
+                        f"index={candidate_index} | "
+                        f"mask_fraction={mask_fraction:.4f}",
+                        flush=True,
+                    )
+
+                    continue
+
+                candidates.append(
+                    {
+                        "query": query,
+                        "candidate_index": (
+                            int(candidate_index)
+                        ),
+                        "confidence": float(
+                            confidence
+                        ),
+                        "mask": object_mask,
+                        "mask_fraction": (
+                            mask_fraction
+                        ),
+                    }
+                )
+
+            if candidates:
+                selected_candidate = max(
+                    candidates,
+                    key=lambda candidate: (
+                        candidate[
+                            "confidence"
+                        ],
+                        candidate[
+                            "mask_fraction"
+                        ],
+                    ),
+                )
+
+                break
+
+        if selected_candidate is None:
+            raise RuntimeError(
+                "Post-grasp target detection could not "
+                f"segment {normalized_label!r}."
+            )
+
+        selected_mask = np.asarray(
+            selected_candidate[
+                "mask"
+            ],
+            dtype=bool,
+        )
+
+        print(
+            "[POST-GRASP] Target mask accepted | "
+            f"label={normalized_label!r} | "
+            f"query={selected_candidate['query']!r} | "
+            f"confidence="
+            f"{selected_candidate['confidence']:.4f} | "
+            f"mask_fraction="
+            f"{selected_candidate['mask_fraction']:.4f}",
+            flush=True,
+        )
+
+        if artifacts_dir is not None:
+
+            output_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            output_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "post_grasp_rgb.png"
+                ),
+                cv2.cvtColor(
+                    image_source,
+                    cv2.COLOR_RGB2BGR,
+                ),
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "post_grasp_target_mask.png"
+                ),
+                (
+                    selected_mask.astype(
+                        np.uint8
+                    )
+                    * 255
+                ),
+            )
+
+            overlay = image_source.copy()
+
+            contours, _ = cv2.findContours(
+                selected_mask.astype(
+                    np.uint8
+                ),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+
+            cv2.drawContours(
+                overlay,
+                contours,
+                -1,
+                (255, 255, 255),
+                2,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "post_grasp_target_overlay.png"
+                ),
+                cv2.cvtColor(
+                    overlay,
+                    cv2.COLOR_RGB2BGR,
+                ),
+            )
+
+        return {
+            "mask": selected_mask,
+            "target_label": normalized_label,
+            "query": selected_candidate[
+                "query"
+            ],
+            "confidence": float(
+                selected_candidate[
+                    "confidence"
+                ]
+            ),
+            "mask_fraction": float(
+                selected_candidate[
+                    "mask_fraction"
+                ]
+            ),
+        }
+
     def pixel_to_base_link_from_info(
         self,
         pixel: tuple[int, int],

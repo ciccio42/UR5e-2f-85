@@ -116,7 +116,7 @@ class AIControllerNode(Node):
         )
         self.declare_parameter(
             'seedo_gripper_settle_timeout_sec',
-            2.0,
+            3.0,
         )
 
         self.declare_parameter(
@@ -127,6 +127,11 @@ class AIControllerNode(Node):
         self.declare_parameter(
             'seedo_gripper_settle_samples',
             4,
+        )
+
+        self.declare_parameter(
+            'seedo_gripper_settle_hold_sec',
+            0.30,
         )
 
         # SeeDo-specific parameters
@@ -221,6 +226,14 @@ class AIControllerNode(Node):
             )
             .get_parameter_value()
             .integer_value
+        )
+
+        self.seedo_gripper_settle_hold_sec = (
+            self.get_parameter(
+                'seedo_gripper_settle_hold_sec'
+            )
+            .get_parameter_value()
+            .double_value
         )
 
         self.seedo_depth_topic = self.get_parameter(
@@ -929,17 +942,14 @@ class AIControllerNode(Node):
     def _wait_for_gripper_settled(
         self,
         commanded_position,
+        start_position=None,
     ):
         """
-        Wait until the physical/simulated gripper has actually stopped.
+        Wait until the measured gripper position remains inside a small
+        position band for a minimum continuous amount of time.
 
-        Do NOT require the measured position to equal the commanded
-        position: during a successful grasp the fingers may stop before
-        the requested closed position because they contact the object.
-
-        Instead, require the measured master-joint position to remain
-        approximately unchanged for several consecutive fresh
-        /joint_states samples.
+        A successful grasp is NOT required to reach the commanded position:
+        object contact may stop the fingers earlier.
         """
 
         timeout_sec = float(
@@ -950,8 +960,8 @@ class AIControllerNode(Node):
             self.seedo_gripper_settle_delta
         )
 
-        required_stable_samples = int(
-            self.seedo_gripper_settle_samples
+        hold_sec = float(
+            self.seedo_gripper_settle_hold_sec
         )
 
         if timeout_sec <= 0.0:
@@ -964,18 +974,51 @@ class AIControllerNode(Node):
                 "seedo_gripper_settle_delta must be > 0."
             )
 
-        if required_stable_samples < 1:
+        if hold_sec <= 0.0:
             raise ValueError(
-                "seedo_gripper_settle_samples must be >= 1."
+                "seedo_gripper_settle_hold_sec must be > 0."
             )
 
-        deadline = time.monotonic() + timeout_sec
+        commanded_position = float(
+            commanded_position
+        )
 
-        previous_position = None
-        stable_samples = 0
+        if start_position is not None:
+            start_position = float(
+                start_position
+            )
+
+        near_target_tolerance = max(
+            0.005,
+            2.0 * delta_tolerance,
+        )
+
+        initially_near_target = (
+            start_position is not None
+            and abs(
+                commanded_position
+                - start_position
+            )
+            <= near_target_tolerance
+        )
+
+        movement_started = (
+            start_position is None
+            or initially_near_target
+        )
+
+        stable_since = None
+        stable_anchor_position = None
+
+        deadline = (
+            time.monotonic()
+            + timeout_sec
+        )
 
         self.get_logger().info(
-            "Waiting for measured gripper motion to settle..."
+            "Waiting for measured gripper motion to settle | "
+            f"hold={hold_sec:.3f}s | "
+            f"band=+/-{delta_tolerance:.4f}"
         )
 
         while time.monotonic() < deadline:
@@ -990,10 +1033,12 @@ class AIControllerNode(Node):
             if remaining <= 0.0:
                 break
 
-            received = self.joint_state_event.wait(
-                timeout=min(
-                    0.2,
-                    remaining,
+            received = (
+                self.joint_state_event.wait(
+                    timeout=min(
+                        0.2,
+                        remaining,
+                    )
                 )
             )
 
@@ -1007,35 +1052,101 @@ class AIControllerNode(Node):
             if current_position is None:
                 continue
 
-            if previous_position is not None:
+            now = time.monotonic()
 
-                position_delta = abs(
+            # -----------------------------------------------------
+            # First make sure a non-trivial command actually started.
+            #
+            # Exception: if the gripper already starts very close to the
+            # requested target (e.g. initial open command), movement is
+            # not required.
+            # -----------------------------------------------------
+
+            if (
+                not movement_started
+                and start_position is not None
+            ):
+
+                movement_from_start = abs(
                     current_position
-                    - previous_position
+                    - start_position
                 )
 
-                if position_delta <= delta_tolerance:
-                    stable_samples += 1
-                else:
-                    stable_samples = 0
+                if (
+                    movement_from_start
+                    > delta_tolerance
+                ):
+                    movement_started = True
 
-                if stable_samples >= required_stable_samples:
-
-                    target_error = abs(
+                    stable_since = now
+                    stable_anchor_position = (
                         current_position
-                        - float(commanded_position)
                     )
 
                     self.get_logger().info(
-                        "Gripper motion settled: "
-                        f"measured={current_position:.4f}, "
-                        f"commanded={float(commanded_position):.4f}, "
-                        f"target_error={target_error:.4f}"
+                        "Measured gripper motion started: "
+                        f"start={start_position:.4f}, "
+                        f"current={current_position:.4f}"
                     )
 
-                    return current_position
+                continue
 
-            previous_position = current_position
+            # -----------------------------------------------------
+            # Continuous stability window.
+            #
+            # Compare against the position at the START of the stable
+            # window, not against the previous sample. This prevents a
+            # slowly moving gripper from appearing stationary.
+            # -----------------------------------------------------
+
+            if stable_anchor_position is None:
+
+                stable_anchor_position = (
+                    current_position
+                )
+
+                stable_since = now
+
+                continue
+
+            position_from_anchor = abs(
+                current_position
+                - stable_anchor_position
+            )
+
+            if (
+                position_from_anchor
+                > delta_tolerance
+            ):
+                stable_anchor_position = (
+                    current_position
+                )
+
+                stable_since = now
+
+                continue
+
+            stable_duration = (
+                now
+                - stable_since
+            )
+
+            if stable_duration >= hold_sec:
+
+                target_error = abs(
+                    current_position
+                    - commanded_position
+                )
+
+                self.get_logger().info(
+                    "Gripper motion settled: "
+                    f"measured={current_position:.4f}, "
+                    f"commanded={commanded_position:.4f}, "
+                    f"target_error={target_error:.4f}, "
+                    f"stable_for={stable_duration:.3f}s"
+                )
+
+                return current_position
 
         current_position = (
             self._get_current_gripper_joint_position()
@@ -1044,7 +1155,7 @@ class AIControllerNode(Node):
         raise RuntimeError(
             "Timed out waiting for gripper motion to settle. "
             f"Last measured position: {current_position}; "
-            f"commanded position: {float(commanded_position):.4f}."
+            f"commanded position: {commanded_position:.4f}."
         )
 
 
@@ -1227,6 +1338,10 @@ class AIControllerNode(Node):
             gripper_goal.command.position = 0.1
             gripper_goal.command.max_effort = 50.0
 
+            gripper_start_position = (
+                self._get_current_gripper_joint_position()
+            )
+
             future = self.gripper_action_client.send_goal_async(
                 gripper_goal
             )
@@ -1262,6 +1377,9 @@ class AIControllerNode(Node):
                 self._wait_for_gripper_settled(
                     commanded_position=(
                         gripper_goal.command.position
+                    ),
+                    start_position=(
+                        gripper_start_position
                     ),
                 )
 
@@ -1747,6 +1865,96 @@ class AIControllerNode(Node):
 
                     pause_executor_for_grasp = False
 
+                    # ----------------------------------------------------------
+                    # Nut-Assembly post-grasp observation
+                    #
+                    # PICK has already been physically completed at this point.
+                    # Before generating LIFT_UP, acquire a fresh eye-in-hand
+                    # RGB-D observation so the grasped nut/ring geometry can be
+                    # re-estimated relative to the ACTUAL measured TCP pose.
+                    #
+                    # Pick-and-Place never enters this branch.
+                    # ----------------------------------------------------------
+
+                    is_nut_assembly = (
+                        self.controller.action_plan is not None
+                        and str(
+                            self.controller.action_plan.task_type
+                        ).strip().lower()
+                        == "nut_assembly"
+                    )
+
+                    primitive_name = (
+                        primitive_step.name
+                        .strip()
+                        .lower()
+                    )
+
+                    if (
+                        is_nut_assembly
+                        and primitive_name == "lift_up"
+                    ):
+                        self.current_failure_stage = (
+                            "post_grasp_refinement"
+                        )
+
+                        self.get_logger().info(
+                            "Nut-Assembly LIFT_UP detected: "
+                            "waiting for fresh post-grasp "
+                            "eye-in-hand RGB-D data..."
+                        )
+
+                        wait_for_seedo_grasp_runtime_data(
+                            self
+                        )
+
+                        if base_to_table_transform is None:
+                            raise RuntimeError(
+                                "base_to_table_transform is not available "
+                                "for Nut-Assembly post-grasp refinement."
+                            )
+
+                        post_grasp_input = (
+                            get_seedo_grasp_runtime_input(
+                                self,
+                                base_to_table_transform=(
+                                    base_to_table_transform
+                                ),
+                            )
+                        )
+
+                        # IMPORTANT:
+                        # measure the TCP AFTER the grasp has physically completed.
+                        robot_state = (
+                            self._capture_robot_state()
+                        )
+
+                        seedo_inference_input[
+                            "robot_state"
+                        ] = robot_state
+
+                        seedo_inference_input[
+                            "post_grasp_input"
+                        ] = post_grasp_input
+
+                        self.get_logger().info(
+                            "Fresh Nut-Assembly post-grasp "
+                            "eye-in-hand input prepared."
+                        )
+
+                        # The next controller.inference() call will eventually
+                        # run target-specific DINO + SAM + geometric refinement.
+                        # All required sensor data is already frozen, therefore
+                        # ROS callbacks may be paused during the heavy inference.
+                        self.pause_executor.set()
+
+                        pause_executor_for_grasp = True
+
+                        self.get_logger().info(
+                            "ROS executor paused during "
+                            "Nut-Assembly post-grasp refinement."
+                        )
+
                     if (
                         self.controller.grasp_planning_enabled and
                         primitive_step.name.strip().lower()
@@ -1989,6 +2197,10 @@ class AIControllerNode(Node):
 
                                 gripper_goal.command.max_effort = 50.0
 
+                                gripper_start_position = (
+                                    self._get_current_gripper_joint_position()
+                                )
+
                                 self.current_failure_stage = "gripper_execution"
                                 future = (
                                     self.gripper_action_client
@@ -2036,6 +2248,9 @@ class AIControllerNode(Node):
                                     self._wait_for_gripper_settled(
                                         commanded_position=(
                                             desired_gripper_position
+                                        ),
+                                        start_position=(
+                                            gripper_start_position
                                         ),
                                     )
 

@@ -929,6 +929,11 @@ class SeeDoController(AIController):
                 input_data["grasp_input"]
             )
 
+        if "post_grasp_input" in input_data:
+            processed_input["post_grasp_input"] = (
+                input_data["post_grasp_input"]
+            )
+
         return processed_input
 
     def _resolve_grasp_action_step(
@@ -1398,6 +1403,614 @@ class SeeDoController(AIController):
             )
 
         return pixel_matches[0]
+
+    def _run_post_grasp_nut_refinement(
+        self,
+        *,
+        post_grasp_input: dict[str, Any],
+        robot_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Re-observe the already-grasped Nut-Assembly object before LIFT_UP.
+
+        The target identity is already known from the grasp plan.
+        This stage performs only:
+            target-specific GroundingDINO
+            -> SAM
+            -> hole geometry refinement
+            -> grasp-relative geometry update using the measured TCP.
+
+        It is never used by Pick-and-Place.
+        """
+
+        if self.action_plan is None:
+            raise RuntimeError(
+                "Action plan is unavailable during "
+                "post-grasp Nut-Assembly refinement."
+            )
+
+        if (
+            str(self.action_plan.task_type)
+            .strip()
+            .lower()
+            != "nut_assembly"
+        ):
+            raise RuntimeError(
+                "Post-grasp nut refinement is only valid "
+                "for a nut_assembly task."
+            )
+
+        if self.grasp_plan_target is None:
+            raise RuntimeError(
+                "Post-grasp refinement requires an "
+                "active grasp target."
+            )
+
+        target = str(
+            self.grasp_plan_target
+        ).strip()
+
+        if not target:
+            raise RuntimeError(
+                "Post-grasp refinement received an "
+                "empty grasp target."
+            )
+
+        if not isinstance(
+            post_grasp_input,
+            dict,
+        ):
+            raise TypeError(
+                "post_grasp_input must be a dictionary."
+            )
+
+        required_inputs = (
+            "rgb_image",
+            "depth_image",
+            "camera_matrix",
+            "T_base_camera",
+            "T_base_table",
+        )
+
+        missing_inputs = [
+            key
+            for key in required_inputs
+            if key not in post_grasp_input
+        ]
+
+        if missing_inputs:
+            raise ValueError(
+                "Missing post-grasp runtime inputs: "
+                + ", ".join(
+                    missing_inputs
+                )
+            )
+
+        if not isinstance(
+            robot_state,
+            dict,
+        ):
+            raise TypeError(
+                "Post-grasp robot_state must be a dictionary."
+            )
+
+        current_position = robot_state.get(
+            EEF_POS_NAME
+        )
+
+        current_orientation = robot_state.get(
+            EEF_QUAT_NAME
+        )
+
+        if current_position is None:
+            raise ValueError(
+                "Post-grasp robot_state does not contain "
+                f"{EEF_POS_NAME!r}."
+            )
+
+        if current_orientation is None:
+            raise ValueError(
+                "Post-grasp robot_state does not contain "
+                f"{EEF_QUAT_NAME!r}."
+            )
+
+        # Recover the PRE-GRASP refinement only to reuse the
+        # physical thickness already measured from the initial scene.
+        initial_refinement = (
+            self._resolve_nut_pick_refinement(
+                target
+            )
+        )
+
+        if (
+            "nut_thickness_estimate_m"
+            not in initial_refinement
+        ):
+            raise RuntimeError(
+                "Initial Nut-Assembly refinement does not "
+                "contain nut_thickness_estimate_m."
+            )
+
+        known_thickness_m = float(
+            initial_refinement[
+                "nut_thickness_estimate_m"
+            ]
+        )
+
+        if not np.isfinite(
+            known_thickness_m
+        ):
+            raise RuntimeError(
+                "Initial Nut-Assembly thickness "
+                "is not finite."
+            )
+
+        post_grasp_artifacts_dir = None
+
+        if self.artifacts_dir is not None:
+            post_grasp_artifacts_dir = (
+                self.artifacts_dir
+                / "scene_perceiver"
+                / "post_grasp"
+            )
+
+            post_grasp_artifacts_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        if post_grasp_artifacts_dir is not None:
+
+            raw_input_path = (
+                post_grasp_artifacts_dir
+                / "post_grasp_raw_input.npz"
+            )
+
+            np.savez_compressed(
+                raw_input_path,
+
+                rgb_image=np.asarray(
+                    post_grasp_input[
+                        "rgb_image"
+                    ],
+                    dtype=np.uint8,
+                ),
+
+                depth_image=np.asarray(
+                    post_grasp_input[
+                        "depth_image"
+                    ],
+                    dtype=np.float32,
+                ),
+
+                camera_matrix=np.asarray(
+                    post_grasp_input[
+                        "camera_matrix"
+                    ],
+                    dtype=np.float64,
+                ),
+
+                T_base_camera=np.asarray(
+                    post_grasp_input[
+                        "T_base_camera"
+                    ],
+                    dtype=np.float64,
+                ),
+
+                T_base_table=np.asarray(
+                    post_grasp_input[
+                        "T_base_table"
+                    ],
+                    dtype=np.float64,
+                ),
+
+                measured_tcp_position=np.asarray(
+                    current_position,
+                    dtype=np.float64,
+                ),
+
+                measured_tcp_orientation=np.asarray(
+                    current_orientation,
+                    dtype=np.float64,
+                ),
+
+                pre_grasp_hole_center_base=np.asarray(
+                    initial_refinement[
+                        "hole_center_base"
+                    ],
+                    dtype=np.float64,
+                ),
+
+                pre_grasp_hole_bottom_center_base=np.asarray(
+                    initial_refinement[
+                        "hole_bottom_center_base"
+                    ],
+                    dtype=np.float64,
+                ),
+
+                pre_grasp_hole_axis_base=np.asarray(
+                    initial_refinement[
+                        "hole_axis_base"
+                    ],
+                    dtype=np.float64,
+                ),
+
+                pre_grasp_thickness_m=np.asarray(
+                    known_thickness_m,
+                    dtype=np.float64,
+                ),
+            )
+
+            print(
+                "[NUT] Post-grasp RAW diagnostic saved:",
+                raw_input_path,
+                flush=True,
+            )
+
+        print(
+            "[NUT] Starting post-grasp refinement | "
+            f"target={target!r} | "
+            f"initial_thickness="
+            f"{known_thickness_m * 1000.0:.2f} mm",
+            flush=True,
+        )
+
+        # ---------------------------------------------------------
+        # 1. Target-specific detection + SAM.
+        # ---------------------------------------------------------
+
+        with TIMING.measure(
+            "nut_post_grasp_detection"
+        ):
+            target_detection = (
+                self.scene_perceiver
+                .detect_post_grasp_target_mask(
+                    rgb_image=(
+                        post_grasp_input[
+                            "rgb_image"
+                        ]
+                    ),
+                    target_label=target,
+                    artifacts_dir=(
+                        post_grasp_artifacts_dir
+                    ),
+                )
+            )
+
+        target_mask = np.asarray(
+            target_detection[
+                "mask"
+            ],
+            dtype=bool,
+        )
+
+        # ---------------------------------------------------------
+        # 2. Re-estimate hole center + axis using the LIVE
+        #    eye-in-hand transform.
+        # ---------------------------------------------------------
+
+        with TIMING.measure(
+            "nut_post_grasp_geometry"
+        ):
+            refinement = (
+                self.scene_perceiver
+                .refine_post_grasp_nut_hole(
+                    mask=target_mask,
+
+                    depth_image=(
+                        post_grasp_input[
+                            "depth_image"
+                        ]
+                    ),
+
+                    camera_matrix=(
+                        post_grasp_input[
+                            "camera_matrix"
+                        ]
+                    ),
+
+                    T_base_camera=(
+                        post_grasp_input[
+                            "T_base_camera"
+                        ]
+                    ),
+
+                    T_base_table=(
+                        post_grasp_input[
+                            "T_base_table"
+                        ]
+                    ),
+
+                    known_thickness_m=(
+                        known_thickness_m
+                    ),
+                    artifacts_dir=(
+                        post_grasp_artifacts_dir
+                    ),
+                )
+            )
+
+        if refinement.get(
+            "accepted"
+        ) is not True:
+            raise RuntimeError(
+                "Post-grasp Nut-Assembly hole "
+                "refinement was rejected."
+            )
+
+        # ---------------------------------------------------------
+        # 3. Replace the old planned-grasp-relative geometry
+        #    with geometry relative to the ACTUAL measured TCP.
+        # ---------------------------------------------------------
+
+        self.motion_layer\
+            .update_nut_grasp_geometry_from_measured_tcp(
+                target_id=target,
+
+                hole_center_base=(
+                    refinement[
+                        "hole_center_base"
+                    ]
+                ),
+
+                hole_bottom_center_base=(
+                    refinement[
+                        "hole_bottom_center_base"
+                    ]
+                ),
+
+                hole_axis_base=(
+                    refinement[
+                        "hole_axis_base"
+                    ]
+                ),
+
+                current_tcp_position=(
+                    current_position
+                ),
+
+                current_tcp_orientation=(
+                    current_orientation
+                ),
+            )
+
+        if post_grasp_artifacts_dir is not None:
+
+            result_path = (
+                post_grasp_artifacts_dir
+                / "post_grasp_result.npz"
+            )
+
+            pre_center = np.asarray(
+                initial_refinement[
+                    "hole_center_base"
+                ],
+                dtype=np.float64,
+            )
+
+            pre_bottom = np.asarray(
+                initial_refinement[
+                    "hole_bottom_center_base"
+                ],
+                dtype=np.float64,
+            )
+
+            pre_axis = np.asarray(
+                initial_refinement[
+                    "hole_axis_base"
+                ],
+                dtype=np.float64,
+            )
+
+            pre_axis /= np.linalg.norm(
+                pre_axis
+            )
+
+            post_center = np.asarray(
+                refinement[
+                    "hole_center_base"
+                ],
+                dtype=np.float64,
+            )
+
+            post_bottom = np.asarray(
+                refinement[
+                    "hole_bottom_center_base"
+                ],
+                dtype=np.float64,
+            )
+
+            post_axis = np.asarray(
+                refinement[
+                    "hole_axis_base"
+                ],
+                dtype=np.float64,
+            )
+
+            post_axis /= np.linalg.norm(
+                post_axis
+            )
+
+            center_shift_m = float(
+                np.linalg.norm(
+                    post_center
+                    - pre_center
+                )
+            )
+
+            bottom_shift_m = float(
+                np.linalg.norm(
+                    post_bottom
+                    - pre_bottom
+                )
+            )
+
+            axis_dot = float(
+                np.clip(
+                    np.dot(
+                        pre_axis,
+                        post_axis,
+                    ),
+                    -1.0,
+                    1.0,
+                )
+            )
+
+            axis_change_deg = float(
+                np.degrees(
+                    np.arccos(
+                        axis_dot
+                    )
+                )
+            )
+
+            np.savez_compressed(
+                result_path,
+
+                target_mask=np.asarray(
+                    target_mask,
+                    dtype=bool,
+                ),
+
+                pre_hole_center_base=(
+                    pre_center
+                ),
+
+                pre_hole_bottom_center_base=(
+                    pre_bottom
+                ),
+
+                pre_hole_axis_base=(
+                    pre_axis
+                ),
+
+                post_hole_center_base=(
+                    post_center
+                ),
+
+                post_hole_bottom_center_base=(
+                    post_bottom
+                ),
+
+                post_hole_axis_base=(
+                    post_axis
+                ),
+
+                post_hole_top_local=np.asarray(
+                    self.motion_layer
+                    ._nut_hole_top_local,
+                    dtype=np.float64,
+                ),
+
+                post_hole_bottom_local=np.asarray(
+                    self.motion_layer
+                    ._nut_hole_bottom_local,
+                    dtype=np.float64,
+                ),
+
+                post_hole_axis_local=np.asarray(
+                    self.motion_layer
+                    ._nut_hole_axis_local,
+                    dtype=np.float64,
+                ),
+
+                center_shift_m=np.asarray(
+                    center_shift_m,
+                    dtype=np.float64,
+                ),
+
+                bottom_shift_m=np.asarray(
+                    bottom_shift_m,
+                    dtype=np.float64,
+                ),
+
+                axis_change_deg=np.asarray(
+                    axis_change_deg,
+                    dtype=np.float64,
+                ),
+
+                detection_confidence=np.asarray(
+                    target_detection[
+                        "confidence"
+                    ],
+                    dtype=np.float64,
+                ),
+            )
+
+            print(
+                "[NUT] Post-grasp RESULT diagnostic saved:",
+                result_path,
+                flush=True,
+            )
+
+            print(
+                "[NUT] PRE -> POST correction | "
+                f"center_shift="
+                f"{center_shift_m * 1000.0:.2f} mm | "
+                f"bottom_shift="
+                f"{bottom_shift_m * 1000.0:.2f} mm | "
+                f"axis_change="
+                f"{axis_change_deg:.3f} deg",
+                flush=True,
+            )
+
+        # ---------------------------------------------------------
+        # 4. Save numerical diagnostics.
+        # ---------------------------------------------------------
+
+        if post_grasp_artifacts_dir is not None:
+
+            output_path = (
+                post_grasp_artifacts_dir
+                / "post_grasp_refinement.json"
+            )
+
+            serializable_refinement = {
+                key: value
+                for key, value
+                in refinement.items()
+            }
+
+            serializable_refinement[
+                "target"
+            ] = target
+
+            serializable_refinement[
+                "detection_query"
+            ] = target_detection[
+                "query"
+            ]
+
+            serializable_refinement[
+                "detection_confidence"
+            ] = float(
+                target_detection[
+                    "confidence"
+                ]
+            )
+
+            with output_path.open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+                json.dump(
+                    serializable_refinement,
+                    stream,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+        print(
+            "[NUT] Post-grasp refinement COMPLETE | "
+            f"target={target!r} | "
+            f"center="
+            f"{refinement['hole_center_base']} | "
+            f"axis="
+            f"{refinement['hole_axis_base']}",
+            flush=True,
+        )
+
+        return refinement
 
     def _resolve_nut_pick_refinement(
         self,
@@ -3054,6 +3667,107 @@ class SeeDoController(AIController):
                     self.grasp_plan.approach_direction_base,
                 )
 
+                print()
+
+            # ---------------------------------------------------------
+            # Nut-Assembly post-grasp refinement
+            #
+            # This runs at the beginning of LIFT_UP.
+            # PICK has already been physically executed and the gripper
+            # has already settled before this inference call starts.
+            #
+            # The updated hole geometry is therefore available to
+            # LIFT_UP itself and to all following assembly primitives.
+            # ---------------------------------------------------------
+
+            is_nut_assembly = (
+                self.action_plan is not None
+                and str(
+                    self.action_plan.task_type
+                )
+                .strip()
+                .lower()
+                == "nut_assembly"
+            )
+
+            primitive_name = (
+                str(
+                    primitive_step.name
+                )
+                .strip()
+                .lower()
+            )
+
+            if (
+                is_nut_assembly
+                and primitive_name == "lift_up"
+            ):
+                post_grasp_input = (
+                    processed_input.get(
+                        "post_grasp_input"
+                    )
+                )
+
+                if post_grasp_input is None:
+                    raise RuntimeError(
+                        "Nut-Assembly LIFT_UP requires a fresh "
+                        "post_grasp_input captured after PICK."
+                    )
+
+                robot_state = (
+                    processed_input.get(
+                        "robot_state"
+                    )
+                )
+
+                if robot_state is None:
+                    raise RuntimeError(
+                        "Nut-Assembly post-grasp refinement "
+                        "requires the measured robot_state."
+                    )
+
+                self.execution_status = (
+                    "refining_post_grasp"
+                )
+
+                print()
+                print(
+                    "============================================================",
+                    flush=True,
+                )
+                print(
+                    "[NUT] POST-GRASP REFINEMENT BEFORE LIFT_UP",
+                    flush=True,
+                )
+                print(
+                    "============================================================",
+                    flush=True,
+                )
+
+                with TIMING.measure(
+                    "nut_post_grasp_refinement"
+                ):
+                    self._run_post_grasp_nut_refinement(
+                        post_grasp_input=(
+                            post_grasp_input
+                        ),
+                        robot_state=(
+                            robot_state
+                        ),
+                    )
+
+                print(
+                    "============================================================",
+                    flush=True,
+                )
+                print(
+                    "[NUT] POST-GRASP REFINEMENT COMPLETE",
+                    flush=True,
+                )
+                print(
+                    "============================================================",
+                    flush=True,
+                )
                 print()
 
             # ---------------------------------------------------------
