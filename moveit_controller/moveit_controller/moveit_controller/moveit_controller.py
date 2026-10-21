@@ -15,6 +15,10 @@ class MoveItControllerNode(Node):
     def __init__(self):
         super().__init__('moveit_controller_node')
 
+        # MODIFICA
+        self._motion_fault = False
+        self._motion_lock = threading.Lock()
+
         # Declare parameters
         self.declare_parameter('planning_component', 'arm_tcp')
         self.planning_component = self.get_parameter('planning_component').get_parameter_value().string_value
@@ -130,6 +134,75 @@ class MoveItControllerNode(Node):
                                                                   self.home_joint_positions))
 
 
+    # MODIFICA
+    def _execute_guarded_motion(self, motion_fn, response, success_message):
+        if not self._motion_lock.acquire(blocking=False):
+            response.success = False
+            response.message = "Another robot motion is already in progress."
+            return response
+
+        try:
+            if self._motion_fault:
+                response.success = False
+                response.message = (
+                    "MOTION FAULT: movements blocked. "
+                    "Manual recovery required."
+                )
+                return response
+
+            try:
+                success = motion_fn()
+
+                if not success:
+                    self._motion_fault = True
+                    self.get_logger().error(
+                        "MOTION FAULT: motion failed. "
+                        "Controller reset skipped. "
+                        "Further motion requests blocked."
+                    )
+
+                    response.success = False
+                    response.message = "Motion failed. Manual recovery required."
+                    return response
+
+                # Ripristina il controller soltanto dopo un movimento riuscito.
+                if self.execute_trajectory:
+                    restored = self._switch_controllers(
+                        controller_to_run=self.controller_to_stop,
+                        controller_to_stop=self.controller_to_run,
+                    )
+
+                    if not restored:
+                        self._motion_fault = True
+                        self.get_logger().error(
+                            "MOTION FAULT: controller reset failed. "
+                            "Further motion requests blocked."
+                        )
+
+                        response.success = False
+                        response.message = (
+                            "Controller reset failed. Manual recovery required."
+                        )
+                        return response
+
+                response.success = True
+                response.message = success_message
+                return response
+
+            except Exception as exc:
+                self._motion_fault = True
+                self.get_logger().error(
+                    f"MOTION FAULT: unexpected exception: {exc}"
+                )
+
+                response.success = False
+                response.message = "Unexpected motion error. Manual recovery required."
+                return response
+
+        finally:
+            self._motion_lock.release()
+    
+    
     def _wait_for_future(self, future, timeout_sec=None):
         done_event = threading.Event()
         future.add_done_callback(lambda _: done_event.set())
@@ -444,56 +517,86 @@ class MoveItControllerNode(Node):
         
         return self.send_moveit_goal_with_joint_positions(arm_joint_positions)
 
-    def handle_set_robot_to_home(self, request, response):
-        self.get_logger().info('Received request to set robot to home position.')
-        success = self.set_robot_to_home_position()
-        if success:
-            response.success = True
-            response.message = ('Home trajectory planned (not executed).' if not self.execute_trajectory
-                                 else 'Robot moved to home position successfully.')
-        else:
-            response.success = False
-            response.message = 'Failed to move robot to home position.'
-
-        # wait a bit to ensure the robot has stopped moving before switching controllers back
-        # self.get_logger().info('Waiting for robot to finish moving...')
-        # self.get_clock().sleep_for(Duration(seconds=2.0))
-
-        # reset controllers to original state (only needed if we actually switched to
-        # controller_to_run to execute; plan-only mode never touched the controllers)
-        if self.execute_trajectory:
-            self.get_logger().info('Resetting controllers to original state...')
-            if self._switch_controllers(controller_to_run=self.controller_to_stop,
-                                        controller_to_stop=self.controller_to_run):
-                self.get_logger().info('Controllers reset successfully.')
-            else:
-                self.get_logger().error('Failed to reset controllers to original state.')
-
-        return response
+    # MODIFICA 
     
+    # def handle_set_robot_to_home(self, request, response):
+    #     self.get_logger().info('Received request to set robot to home position.')
+    #     success = self.set_robot_to_home_position()
+    #     if success:
+    #         response.success = True
+    #         response.message = ('Home trajectory planned (not executed).' if not self.execute_trajectory
+    #                              else 'Robot moved to home position successfully.')
+    #     else:
+    #         response.success = False
+    #         response.message = 'Failed to move robot to home position.'
+
+    #     # wait a bit to ensure the robot has stopped moving before switching controllers back
+    #     # self.get_logger().info('Waiting for robot to finish moving...')
+    #     # self.get_clock().sleep_for(Duration(seconds=2.0))
+
+    #     # reset controllers to original state (only needed if we actually switched to
+    #     # controller_to_run to execute; plan-only mode never touched the controllers)
+    #     if self.execute_trajectory:
+    #         self.get_logger().info('Resetting controllers to original state...')
+    #         if self._switch_controllers(controller_to_run=self.controller_to_stop,
+    #                                     controller_to_stop=self.controller_to_run):
+    #             self.get_logger().info('Controllers reset successfully.')
+    #         else:
+    #             self.get_logger().error('Failed to reset controllers to original state.')
+
+    #     return response
+    
+    # def handle_set_robot_to_pose(self, request, response):
+    #     self.get_logger().info('Received request to set robot pose.')
+    #     # Extract pose from request
+    #     pose = request.pose
+    #     # Call send_moveit_goal with the pose
+    #     success = self.send_moveit_goal(pose)
+    #     if success:
+    #         response.success = True
+    #         response.message = ('Pose trajectory planned (not executed).' if not self.execute_trajectory
+    #                              else 'Robot pose set successfully.')
+    #     else:
+    #         response.success = False
+    #         response.message = 'Failed to set robot pose.'
+
+    #     # reset controllers to original state (only needed if we actually switched to
+    #     # controller_to_run to execute; plan-only mode never touched the controllers)
+    #     if self.execute_trajectory:
+    #         self.get_logger().info('Resetting controllers to original state...')
+    #         if self._switch_controllers(controller_to_run=self.controller_to_stop,
+    #                                     controller_to_stop=self.controller_to_run):
+    #             self.get_logger().info('Controllers reset successfully.')
+    #         else:
+    #             self.get_logger().error('Failed to reset controllers to original state.')
+
+    #     return response
+
+    # MODIFICA
+    def handle_set_robot_to_home(self, request, response):
+        self.get_logger().info(
+            'Received request to set robot to home position.'
+        )
+
+        return self._execute_guarded_motion(
+            self.set_robot_to_home_position,
+            response,
+            'Robot moved to home position successfully.'
+            if self.execute_trajectory
+            else 'Home trajectory planned (not executed).',
+        )
+
+
     def handle_set_robot_to_pose(self, request, response):
-        self.get_logger().info('Received request to set robot pose.')
-        # Extract pose from request
-        pose = request.pose
-        # Call send_moveit_goal with the pose
-        success = self.send_moveit_goal(pose)
-        if success:
-            response.success = True
-            response.message = ('Pose trajectory planned (not executed).' if not self.execute_trajectory
-                                 else 'Robot pose set successfully.')
-        else:
-            response.success = False
-            response.message = 'Failed to set robot pose.'
+        self.get_logger().info(
+            'Received request to set robot pose.'
+        )
 
-        # reset controllers to original state (only needed if we actually switched to
-        # controller_to_run to execute; plan-only mode never touched the controllers)
-        if self.execute_trajectory:
-            self.get_logger().info('Resetting controllers to original state...')
-            if self._switch_controllers(controller_to_run=self.controller_to_stop,
-                                        controller_to_stop=self.controller_to_run):
-                self.get_logger().info('Controllers reset successfully.')
-            else:
-                self.get_logger().error('Failed to reset controllers to original state.')
-
-        return response
+        return self._execute_guarded_motion(
+            lambda: self.send_moveit_goal(request.pose),
+            response,
+            'Robot pose set successfully.'
+            if self.execute_trajectory
+            else 'Pose trajectory planned (not executed).',
+        )
     
