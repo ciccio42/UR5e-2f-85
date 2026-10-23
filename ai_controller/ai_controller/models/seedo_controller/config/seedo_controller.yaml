@@ -66,8 +66,8 @@ scene_perceiver:
         translation_std_mm: 0.0
         rotation_std_deg: 0.0
 
-      # Noise levels both translation and rotation are applied to the camera pose. 
-      # The translation noise is applied independently to each axis (x, y, z) with a Gaussian distribution centered at 0 and the specified standard deviation in millimeters. 
+      # Noise levels both translation and rotation are applied to the camera pose.
+      # The translation noise is applied independently to each axis (x, y, z) with a Gaussian distribution centered at 0 and the specified standard deviation in millimeters.
       # The rotation noise is applied independently to each axis (roll, pitch, yaw) with a Gaussian distribution centered at 0 and the specified standard deviation in degrees
       noise_1.0_0.1:
         translation_std_mm: 1.0
@@ -89,8 +89,8 @@ scene_perceiver:
         translation_std_mm: 25.0
         rotation_std_deg: 5.0
 
-      # Noise levels where only translation noise is applied to the camera pose. 
-      # The translation noise is applied independently to each axis (x, y, z) with a Gaussian distribution centered at 0 and the specified standard deviation in millimeters. 
+      # Noise levels where only translation noise is applied to the camera pose.
+      # The translation noise is applied independently to each axis (x, y, z) with a Gaussian distribution centered at 0 and the specified standard deviation in millimeters.
       # The rotation noise is set to 0 degrees.
       noise_1.0_0.0:
         translation_std_mm: 1.0
@@ -159,6 +159,8 @@ motion_layer:
     # Safety distance kept above the peg before insertion.
     peg_clearance_m: 0.02
 
+    transport_clearance_margin_m: 0.050
+
     # Initial penetration of the peg into the hole.
     initial_entry_m: 0.005
 
@@ -177,6 +179,14 @@ motion_layer:
     rotation_step_deg: 5.0
 
     auto_release: true
+
+post_grasp_refinement:
+
+  # Re-observe the grasped object after PICK and refine its
+  # geometry relative to the measured TCP before LIFT_UP.
+  #
+  # Currently used only by Nut-Assembly.
+  enabled: true
 
 grasp_planner:
 

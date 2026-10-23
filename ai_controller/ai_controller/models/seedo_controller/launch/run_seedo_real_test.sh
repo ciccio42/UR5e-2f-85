@@ -31,6 +31,7 @@ fi
 TASK_ID="$(printf '%02d' "$((10#${TASK_ID_INPUT}))")"
 
 DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
+DEMO_PATH_MODIFIED="/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4"
 DEMO_PATH_NUT="/dataset_nut/task_${TASK_ID}/traj_000_camera_front.mp4"
 
 if [[ ! -f "${DEMO_PATH}" ]]; then
@@ -56,7 +57,25 @@ RUN_DIR="${REAL_TEST_ROOT}/${TEST_NAME}"
 
 ACTION_PLAN_SOURCE="/seedo_tests/ai_controller_node_interactive/action_planning"
 
-CONFIG_PATH="${REPO_ROOT}/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml"
+# ----------------------------------------------------------------------
+# Experiment configuration.
+#
+# Keep exactly ONE CONFIG_PATH assignment uncommented.
+# ----------------------------------------------------------------------
+
+CONFIG_ROOT="${REPO_ROOT}/ai_controller/ai_controller/models/seedo_controller/config"
+
+# Solution
+# CONFIG_PATH="${CONFIG_ROOT}/seedo_controller.yaml"
+
+# Baseline - original keyframes + prior-guided Pick-and-Place
+CONFIG_PATH="${CONFIG_ROOT}/experiments/baseline_prior_guided_pick_place.yaml"
+
+# Baseline - original keyframes + prior-guided Nut-Assembly
+# CONFIG_PATH="${CONFIG_ROOT}/experiments/baseline_prior_guided_nut_assembly.yaml"
+
+# Baseline - original keyframes + generalized multitask perception
+# CONFIG_PATH="${CONFIG_ROOT}/experiments/baseline_generalized_multitask.yaml"
 
 PRECOMPUTED_PLAN="${ACTION_PLAN_SOURCE}/action_plan.json"
 
@@ -71,6 +90,7 @@ echo "Test number: ${TEST_INDEX}"
 echo "Test name: ${TEST_NAME}"
 echo "Run directory: ${RUN_DIR}"
 echo "Demo video: ${DEMO_PATH}"
+echo "Configuration: ${CONFIG_PATH}"
 echo "================================================="
 
 # ----------------------------------------------------------------------
@@ -93,37 +113,68 @@ cp \
 
 set +e
 
-ros2 run ai_controller ai_controller_node \
-    --ros-args \
-    -p ai_controller_target:=seedo_controller \
-    -p model_config_path:="${CONFIG_PATH}" \
-    -p task_name:=pick_place \
-    -p demo_path:="${DEMO_PATH_NUT}" \
-    -p seedo_precomputed_action_plan_path:=/test_real/test_task00_1/action_planning/action_plan.json \
-    -p seedo_precomputed_demo_structured_scene_path:=/test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json \
-    -p seedo_artifacts_dir:="${RUN_DIR}" \
-    -p save_rollout_path:="${RUN_DIR}/rollouts" \
-    -p move_robot:=true \
-    -p seedo_execute_gripper:=true \
-    2>&1 | tee "${RUN_DIR}/console.log"
+# ======================================================================
+# EXECUTION MODE
+#
+# Keep exactly ONE ros2 block uncommented.
+#
+# MODE 1 - FAST / PRECOMPUTED
+#   Reuse Action Planning and demonstration structured-scene artifacts.
+#   Useful for fast runtime, grasp and Motion Layer testing.
+#
+# MODE 2 - FULL PICK-AND-PLACE
+#   Execute the complete pipeline from the Pick-and-Place demonstration.
+#
+# MODE 3 - FULL NUT-ASSEMBLY
+#   Execute the complete pipeline from the Nut-Assembly demonstration.
+# ======================================================================
+
+
+# ======================================================================
+# MODE 1 - FAST / PRECOMPUTED
+# ======================================================================
 
 # ros2 run ai_controller ai_controller_node \
 #     --ros-args \
 #     -p ai_controller_target:=seedo_controller \
 #     -p model_config_path:="${CONFIG_PATH}" \
-#     -p task_name:=pick_place \
-#     -p demo_path:="${DEMO_PATH}" \
+#     -p task_name:=nut_assembly \
+#     -p demo_path:="${DEMO_PATH_NUT}" \
+#     -p seedo_precomputed_action_plan_path:=/test_real/test_task00_1/action_planning/action_plan.json \
+#     -p seedo_precomputed_demo_structured_scene_path:=/test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json \
 #     -p seedo_artifacts_dir:="${RUN_DIR}" \
 #     -p save_rollout_path:="${RUN_DIR}/rollouts" \
 #     -p move_robot:=true \
 #     -p seedo_execute_gripper:=true \
 #     2>&1 | tee "${RUN_DIR}/console.log"
 
+
+# ======================================================================
+# MODE 2 - FULL PICK-AND-PLACE
+# ======================================================================
+
+ros2 run ai_controller ai_controller_node \
+    --ros-args \
+    -p ai_controller_target:=seedo_controller \
+    -p model_config_path:="${CONFIG_PATH}" \
+    -p task_name:=pick_place \
+    -p demo_path:="${DEMO_PATH_MODIFIED}" \
+    -p seedo_artifacts_dir:="${RUN_DIR}" \
+    -p save_rollout_path:="${RUN_DIR}/rollouts" \
+    -p move_robot:=true \
+    -p seedo_execute_gripper:=true \
+    2>&1 | tee "${RUN_DIR}/console.log"
+
+
+# ======================================================================
+# MODE 3 - FULL NUT-ASSEMBLY
+# ======================================================================
+
 # ros2 run ai_controller ai_controller_node \
 #     --ros-args \
 #     -p ai_controller_target:=seedo_controller \
 #     -p model_config_path:="${CONFIG_PATH}" \
-#     -p task_name:=pick_place \
+#     -p task_name:=nut_assembly \
 #     -p demo_path:="${DEMO_PATH_NUT}" \
 #     -p seedo_artifacts_dir:="${RUN_DIR}" \
 #     -p save_rollout_path:="${RUN_DIR}/rollouts" \

@@ -425,14 +425,23 @@ class SeeDoMotionLayer:
         hole_bottom_center_base,
         hole_axis_base,
         object_radius_from_hole_m: float,
+        reference_tcp_position=None,
+        reference_tcp_orientation=None,
+        synchronize_current_pose: bool = False,
     ) -> None:
         """
-        Freeze the perceived hole geometry in the planned grasp TCP frame.
+        Freeze the perceived Nut-Assembly hole geometry in a TCP frame.
 
-        At this point the object is still in its original scene pose, while
-        active_grasp_position/orientation describe the TCP pose that will
-        grasp it. Therefore the resulting local geometry remains valid after
-        the object becomes rigidly attached to the gripper.
+        When reference_tcp_position/reference_tcp_orientation are omitted,
+        the geometry is expressed in the planned grasp TCP frame. This is
+        the normal GraspPlanner path.
+
+        When an explicit reference TCP is provided, the geometry is instead
+        expressed in that measured TCP frame. This is used by the legacy
+        grasp path after APPROACHING has physically completed.
+
+        If synchronize_current_pose is True, the Motion Layer internal pose
+        is also synchronized with the supplied reference TCP.
         """
 
         if self.task_type != "nut_assembly":
@@ -441,13 +450,105 @@ class SeeDoMotionLayer:
                 "for a nut_assembly task."
             )
 
+        has_reference_position = (
+            reference_tcp_position is not None
+        )
+
+        has_reference_orientation = (
+            reference_tcp_orientation is not None
+        )
+
         if (
-            self.active_grasp_position is None
-            or self.active_grasp_orientation is None
+            has_reference_position
+            != has_reference_orientation
         ):
-            raise RuntimeError(
-                "Active grasp pose must be configured before "
-                "Nut-Assembly grasp geometry."
+            raise ValueError(
+                "reference_tcp_position and "
+                "reference_tcp_orientation must be provided together."
+            )
+
+        use_reference_tcp = (
+            has_reference_position
+            and has_reference_orientation
+        )
+
+        if use_reference_tcp:
+
+            grasp_position = np.asarray(
+                reference_tcp_position,
+                dtype=np.float64,
+            )
+
+            grasp_orientation = np.asarray(
+                reference_tcp_orientation,
+                dtype=np.float64,
+            )
+
+            if (
+                grasp_position.shape != (3,)
+                or not np.isfinite(
+                    grasp_position
+                ).all()
+            ):
+                raise ValueError(
+                    "Invalid reference TCP position."
+                )
+
+            if (
+                grasp_orientation.shape != (4,)
+                or not np.isfinite(
+                    grasp_orientation
+                ).all()
+            ):
+                raise ValueError(
+                    "Invalid reference TCP orientation."
+                )
+
+            quaternion_norm = float(
+                np.linalg.norm(
+                    grasp_orientation
+                )
+            )
+
+            if quaternion_norm <= 1e-8:
+                raise ValueError(
+                    "Reference TCP quaternion has near-zero norm."
+                )
+
+            grasp_orientation = (
+                grasp_orientation
+                / quaternion_norm
+            )
+
+        else:
+
+            if (
+                self.active_grasp_position is None
+                or self.active_grasp_orientation is None
+            ):
+                raise RuntimeError(
+                    "Active grasp pose must be configured before "
+                    "Nut-Assembly grasp geometry when no explicit "
+                    "reference TCP is provided."
+                )
+
+            grasp_position = np.asarray(
+                self.active_grasp_position,
+                dtype=np.float64,
+            ).copy()
+
+            grasp_orientation = np.asarray(
+                self.active_grasp_orientation,
+                dtype=np.float64,
+            ).copy()
+
+        if (
+            synchronize_current_pose
+            and not use_reference_tcp
+        ):
+            raise ValueError(
+                "synchronize_current_pose requires an explicit "
+                "reference TCP."
             )
 
         target_id = str(
@@ -523,13 +624,8 @@ class SeeDoMotionLayer:
                 "Invalid object_radius_from_hole_m."
             )
 
-        grasp_position = np.asarray(
-            self.active_grasp_position,
-            dtype=np.float64,
-        )
-
         grasp_rotation = Rotation.from_quat(
-            self.active_grasp_orientation
+            grasp_orientation
         )
 
         inverse_grasp_rotation = (
@@ -608,6 +704,21 @@ class SeeDoMotionLayer:
         self._nut_object_sweep_radius_m = (
             object_sweep_radius
         )
+
+        if synchronize_current_pose:
+
+            self.current_pose = GripperPose(
+                grasp_position.copy(),
+                grasp_orientation.copy(),
+            )
+
+            print(
+                "[NUT] Motion Layer synchronized with "
+                "measured legacy grasp TCP | "
+                f"position={grasp_position} | "
+                f"orientation={grasp_orientation}",
+                flush=True,
+            )
 
         print(
             "[NUT] Grasp-relative hole geometry | "

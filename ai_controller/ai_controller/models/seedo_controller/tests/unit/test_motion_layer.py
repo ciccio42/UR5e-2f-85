@@ -42,6 +42,7 @@ def _motion_layer(
         "assembly_insertion_z_offset": -0.11,
         "nut_assembly_config": {
             "peg_clearance_m": 0.020,
+            "transport_clearance_margin_m": 0.050,
             "initial_entry_m": 0.005,
             "insertion_step_m": 0.005,
             "release_bottom_height_m": 0.010,
@@ -2201,6 +2202,206 @@ def test_nut_grasp_geometry_is_frozen_in_tcp_frame():
         atol=1e-9,
     )
 
+def test_legacy_nut_grasp_geometry_uses_measured_tcp_and_allows_lift():
+    layer = _motion_layer(
+        grasp_planning_enabled=False,
+        lift_height=0.15,
+    )
+
+    scene_state = _nut_scene_state()
+
+    # Initial Motion Layer state before the legacy grasp.
+    _reset(
+        layer,
+        position=(
+            0.20,
+            0.40,
+            0.20,
+        ),
+        orientation=(
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ),
+        task_type="nut_assembly",
+    )
+
+    # Nut-Assembly still needs the refined destination geometry.
+    layer.set_nut_place_refinements(
+        {
+            PEG_TARGET: {
+                "accepted": True,
+
+                "axis_xy_base": (
+                    0.50,
+                    0.30,
+                ),
+
+                "axis_direction_base": (
+                    0.0,
+                    0.0,
+                    1.0,
+                ),
+
+                "peg_tip_point_base": (
+                    0.50,
+                    0.30,
+                    0.30,
+                ),
+
+                "peg_support_point_base": (
+                    0.50,
+                    0.30,
+                    0.10,
+                ),
+            }
+        }
+    )
+
+    # This represents the REAL TCP measured after the legacy
+    # APPROACHING primitive has physically completed.
+    measured_tcp_position = np.array(
+        [
+            0.20,
+            0.40,
+            0.12,
+        ],
+        dtype=np.float64,
+    )
+
+    measured_tcp_orientation = np.array(
+        [
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ],
+        dtype=np.float64,
+    )
+
+    # No GraspPlanner pose is installed.
+    assert layer.active_grasp_position is None
+    assert layer.active_grasp_orientation is None
+    assert layer.active_approach_direction is None
+
+    layer.set_nut_grasp_geometry(
+        target_id=NUT_TARGET,
+
+        hole_center_base=(
+            0.23,
+            0.40,
+            0.09,
+        ),
+
+        hole_bottom_center_base=(
+            0.23,
+            0.40,
+            0.07,
+        ),
+
+        hole_axis_base=(
+            0.0,
+            0.0,
+            1.0,
+        ),
+
+        object_radius_from_hole_m=0.040,
+
+        reference_tcp_position=(
+            measured_tcp_position
+        ),
+
+        reference_tcp_orientation=(
+            measured_tcp_orientation
+        ),
+
+        synchronize_current_pose=True,
+    )
+
+    # The legacy path must not fabricate a planned grasp.
+    assert layer.active_grasp_position is None
+    assert layer.active_grasp_orientation is None
+    assert layer.active_approach_direction is None
+
+    # Hole geometry must be frozen in the measured TCP frame.
+    np.testing.assert_allclose(
+        layer._nut_hole_top_local,
+        np.array(
+            [
+                0.03,
+                0.00,
+                -0.03,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer._nut_hole_bottom_local,
+        np.array(
+            [
+                0.03,
+                0.00,
+                -0.05,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer._nut_hole_axis_local,
+        np.array(
+            [
+                0.0,
+                0.0,
+                1.0,
+            ]
+        ),
+        atol=1e-9,
+    )
+
+    # Motion Layer must also start subsequent primitives from
+    # the REAL measured TCP pose.
+    np.testing.assert_allclose(
+        layer.current_pose.position,
+        measured_tcp_position,
+        atol=1e-9,
+    )
+
+    np.testing.assert_allclose(
+        layer.current_pose.orientation,
+        measured_tcp_orientation,
+        atol=1e-9,
+    )
+
+    # Simulate PICK completion.
+    layer.current_gripper_position = (
+        layer.gripper_closed_position
+    )
+
+    # Most importantly: LIFT_UP must now work even though
+    # grasp_planning_enabled=False.
+    lift_actions = layer.translate(
+        primitive_step=_primitive(
+            "lift_up",
+            target=NUT_TARGET,
+        ),
+        scene_state=scene_state,
+    )
+
+    assert lift_actions
+
+    assert (
+        layer._nut_phase
+        == "lifted"
+    )
+
+    assert (
+        layer.current_pose.position[2]
+        > measured_tcp_position[2]
+    )
+
 def test_rotation_between_vectors_aligns_source_with_target():
     source = np.array(
         [
@@ -2336,34 +2537,27 @@ def test_complete_nut_assembly_geometry_is_numerically_consistent():
 
     assert lift_actions
 
-    expected_sweep_radius = (
-        max(
-            np.linalg.norm(
-                np.array(
-                    [
-                        0.03,
-                        0.0,
-                        -0.03,
-                    ]
-                )
-            ),
-            np.linalg.norm(
-                np.array(
-                    [
-                        0.03,
-                        0.0,
-                        -0.05,
-                    ]
-                )
-            ),
-        )
-        + 0.040
+    expected_hole_bottom_offset_z = -0.050
+
+    expected_required_clearance = (
+        0.020  # peg_clearance_m
+        + 0.050  # transport_clearance_margin_m
     )
 
-    expected_lift_z = (
-        0.30
-        + 0.020
-        + expected_sweep_radius
+    expected_safe_tcp_z = (
+        0.30  # highest peg tip Z
+        + expected_required_clearance
+        - expected_hole_bottom_offset_z
+    )
+
+    expected_nominal_lift_z = (
+        0.12  # TCP Z before LIFT_UP
+        + 0.15  # lift_height
+    )
+
+    expected_lift_z = max(
+        expected_nominal_lift_z,
+        expected_safe_tcp_z,
     )
 
     assert (

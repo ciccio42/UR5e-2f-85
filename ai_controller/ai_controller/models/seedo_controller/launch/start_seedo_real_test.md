@@ -130,7 +130,49 @@ On the UR tablet, start the **External Control** program.
 
 ---
 
-## 4. `table_0` Static TF
+## 5. Start the GraspMolmo server
+
+Open a new terminal:
+
+```bash
+docker exec -it seedo_ros2_container bash
+
+cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
+
+HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
+PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
+PYTHONNOUSERSITE=1 \
+/opt/graspmolmo_venv/bin/python server.py \
+    --config config/graspmolmo_config.yaml
+```
+
+---
+
+## 6. Start the GraspGen-X server
+
+Open a new terminal:
+
+```bash
+docker exec -it seedo_ros2_container bash
+
+cd /opt/GraspGenX
+
+env -u PYTHONPATH \
+PYTHONNOUSERSITE=1 \
+GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx_checkpoints \
+GRASPGENX_GRIPPER_CFG_DIR=/opt/graspgenx_gripper_descriptions \
+/opt/graspgenx_venv/bin/python \
+    client-server/graspgenx_server.py \
+    --config /opt/graspgenx_checkpoints/release \
+    --assets_dir /opt/graspgenx_gripper_descriptions/gripper_descriptions/assets \
+    --default_gripper robotiq_2f_85 \
+    --host 0.0.0.0 \
+    --port 8782
+```
+
+---
+
+## 7. `table_0` Static TF
 
 Open a new terminal:
 
@@ -148,7 +190,7 @@ ros2 run tf2_ros static_transform_publisher \
 
 ---
 
-## 5. MoveIt
+## 8. MoveIt
 
 Open a new terminal:
 
@@ -163,7 +205,7 @@ ros2 launch ur5e_2f_85_moveit_config move_group_servo.launch.py \
 
 ---
 
-## 6. MoveIt Controller
+## 9. MoveIt Controller
 
 Open a new terminal:
 
@@ -179,7 +221,7 @@ ros2 run moveit_controller moveit_controller_node \
 
 ---
 
-## 7. Run the SeeDo Test
+## 10. Run the SeeDo Pipeline
 
 Open a new terminal:
 

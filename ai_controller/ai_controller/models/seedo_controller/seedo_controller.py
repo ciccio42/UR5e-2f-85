@@ -506,6 +506,18 @@ class SeeDoController(AIController):
             )
         )
 
+        post_grasp_config = config.get(
+            "post_grasp_refinement",
+            {},
+        )
+
+        self.post_grasp_refinement_enabled = bool(
+            post_grasp_config.get(
+                "enabled",
+                True,
+            )
+        )
+
         motion_config = config.get(
             "motion_layer",
             {},
@@ -3670,6 +3682,183 @@ class SeeDoController(AIController):
                 print()
 
             # ---------------------------------------------------------
+            # Legacy Nut-Assembly grasp geometry
+            #
+            # When task-oriented grasp planning is disabled, APPROACHING
+            # uses the original SeeDo fixed grasp policy.
+            #
+            # At PICK time the preceding APPROACHING primitive has already
+            # been physically executed. The robot_state received here
+            # therefore contains the ACTUAL measured TCP pose at the
+            # legacy grasp location.
+            #
+            # Freeze the already-perceived nut/ring hole geometry in that
+            # measured TCP frame before closing the gripper.
+            # ---------------------------------------------------------
+
+            is_nut_assembly = (
+                self.action_plan is not None
+                and str(
+                    self.action_plan.task_type
+                )
+                .strip()
+                .lower()
+                == "nut_assembly"
+            )
+
+            primitive_name = (
+                str(
+                    primitive_step.name
+                )
+                .strip()
+                .lower()
+            )
+
+            if (
+                not self.grasp_planning_enabled
+                and is_nut_assembly
+                and primitive_name == "pick"
+            ):
+
+                target = str(
+                    primitive_step.arguments.get(
+                        "target",
+                        "",
+                    )
+                ).strip()
+
+                if not target:
+                    raise RuntimeError(
+                        "Legacy Nut-Assembly PICK does not contain "
+                        "a valid target."
+                    )
+
+                robot_state = processed_input.get(
+                    "robot_state"
+                )
+
+                if robot_state is None:
+                    raise RuntimeError(
+                        "Legacy Nut-Assembly PICK requires "
+                        "the measured robot_state."
+                    )
+
+                current_position = robot_state.get(
+                    EEF_POS_NAME
+                )
+
+                current_orientation = robot_state.get(
+                    EEF_QUAT_NAME
+                )
+
+                if current_position is None:
+                    raise ValueError(
+                        "Legacy Nut-Assembly robot_state does not "
+                        f"contain {EEF_POS_NAME!r}."
+                    )
+
+                if current_orientation is None:
+                    raise ValueError(
+                        "Legacy Nut-Assembly robot_state does not "
+                        f"contain {EEF_QUAT_NAME!r}."
+                    )
+
+                nut_pick_refinement = (
+                    self._resolve_nut_pick_refinement(
+                        target
+                    )
+                )
+
+                print()
+                print(
+                    "============================================================",
+                    flush=True,
+                )
+
+                print(
+                    "[NUT] INITIALIZING LEGACY GRASP GEOMETRY",
+                    flush=True,
+                )
+
+                print(
+                    "============================================================",
+                    flush=True,
+                )
+
+                print(
+                    "[NUT] Legacy grasp target:",
+                    target,
+                    flush=True,
+                )
+
+                print(
+                    "[NUT] Measured TCP position:",
+                    current_position,
+                    flush=True,
+                )
+
+                print(
+                    "[NUT] Measured TCP orientation:",
+                    current_orientation,
+                    flush=True,
+                )
+
+                self.motion_layer.set_nut_grasp_geometry(
+                    target_id=target,
+
+                    hole_center_base=(
+                        nut_pick_refinement[
+                            "hole_center_base"
+                        ]
+                    ),
+
+                    hole_bottom_center_base=(
+                        nut_pick_refinement[
+                            "hole_bottom_center_base"
+                        ]
+                    ),
+
+                    hole_axis_base=(
+                        nut_pick_refinement[
+                            "hole_axis_base"
+                        ]
+                    ),
+
+                    object_radius_from_hole_m=(
+                        nut_pick_refinement[
+                            "object_radius_from_hole_m"
+                        ]
+                    ),
+
+                    reference_tcp_position=(
+                        current_position
+                    ),
+
+                    reference_tcp_orientation=(
+                        current_orientation
+                    ),
+
+                    synchronize_current_pose=True,
+                )
+
+                # Keep the active target available also when the grasp planner
+                # is disabled. This makes the target identity independent from
+                # the grasp backend and allows optional downstream refinement.
+                self.grasp_plan_target = target
+
+                print(
+                    "[NUT] Legacy grasp geometry initialized.",
+                    flush=True,
+                )
+
+                print(
+                    "============================================================",
+                    flush=True,
+                )
+
+                print()
+
+            # ---------------------------------------------------------
             # Nut-Assembly post-grasp refinement
             #
             # This runs at the beginning of LIFT_UP.
@@ -3699,7 +3888,8 @@ class SeeDoController(AIController):
             )
 
             if (
-                is_nut_assembly
+                self.post_grasp_refinement_enabled
+                and is_nut_assembly
                 and primitive_name == "lift_up"
             ):
                 post_grasp_input = (

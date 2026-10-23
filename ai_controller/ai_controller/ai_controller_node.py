@@ -1891,7 +1891,8 @@ class AIControllerNode(Node):
                     )
 
                     if (
-                        is_nut_assembly
+                        self.controller.post_grasp_refinement_enabled
+                        and is_nut_assembly
                         and primitive_name == "lift_up"
                     ):
                         self.current_failure_stage = (

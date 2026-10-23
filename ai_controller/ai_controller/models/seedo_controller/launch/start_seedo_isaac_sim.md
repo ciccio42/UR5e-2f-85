@@ -110,7 +110,49 @@ docker run --rm -it \
   seedo_ros2:latest
 ```
 
-### Terminal 1 — Robot State Publisher
+## Terminal 1 — Start the GraspMolmo server
+
+Open a new terminal:
+
+```bash
+docker exec -it seedo_ros2_container bash
+
+cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
+
+HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
+PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
+PYTHONNOUSERSITE=1 \
+/opt/graspmolmo_venv/bin/python server.py \
+    --config config/graspmolmo_config.yaml
+```
+
+---
+
+## Terminal 2 — Start the GraspGen-X server
+
+Open a new terminal:
+
+```bash
+docker exec -it seedo_ros2_container bash
+
+cd /opt/GraspGenX
+
+env -u PYTHONPATH \
+PYTHONNOUSERSITE=1 \
+GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx_checkpoints \
+GRASPGENX_GRIPPER_CFG_DIR=/opt/graspgenx_gripper_descriptions \
+/opt/graspgenx_venv/bin/python \
+    client-server/graspgenx_server.py \
+    --config /opt/graspgenx_checkpoints/release \
+    --assets_dir /opt/graspgenx_gripper_descriptions/gripper_descriptions/assets \
+    --default_gripper robotiq_2f_85 \
+    --host 0.0.0.0 \
+    --port 8782
+```
+
+---
+
+### Terminal 3 — Robot State Publisher
 
 ```bash
 source /home/ros2_ws/install/setup.bash
@@ -120,7 +162,7 @@ ros2 launch ur5e_2f_85_moveit_config \
   isaac_robot_state_publisher.launch.py
 ```
 
-### Terminal 2 — ros2_control
+### Terminal 4 — ros2_control
 
 ```bash
 docker exec -it seedo_ros2_container bash
@@ -133,7 +175,7 @@ ros2 run controller_manager ros2_control_node \
   --params-file /home/ros2_ws/src/UR5e-2f-85/ur5e_2f_85/ur5e_2f_85_moveit_config/config/ros2_controllers_isaac.yaml
 ```
 
-### Terminal 3 — Controllers + MoveIt
+### Terminal 5 — Controllers + MoveIt
 
 ```bash
 docker exec -it seedo_ros2_container bash
@@ -157,7 +199,7 @@ ros2 run controller_manager spawner robotiq_gripper_controller \
 ros2 launch ur5e_2f_85_moveit_config move_group_isaac.launch.py
 ```
 
-### Terminal 4 — MoveIt Controller
+### Terminal 6 — MoveIt Controller
 
 ```bash
 docker exec -it seedo_ros2_container bash
@@ -171,7 +213,7 @@ ros2 run moveit_controller moveit_controller_node \
   -p controller_to_stop:=hold_position_controller
 ```
 
-### Terminal 5 — SeeDo Test
+### Terminal 7 — SeeDo Test
 
 ```bash
 docker exec -it seedo_ros2_container bash

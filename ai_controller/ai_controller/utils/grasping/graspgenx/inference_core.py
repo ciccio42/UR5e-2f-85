@@ -408,11 +408,6 @@ class GraspGenXInferenceCore:
             np.float32
         )
 
-    @staticmethod
-
-
-    @staticmethod
-
     def _generate_grasp_candidates_base(
         self,
         target_point_cloud_camera: np.ndarray,
