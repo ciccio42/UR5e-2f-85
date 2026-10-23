@@ -59,7 +59,7 @@ export ROS_PACKAGE_PATH="/workspace/build_ws/install/share:/workspace/jazzy_ws/i
 Open:
 
 ```text
-/isaac-sim/usd/ur5e_2f_85/seedo_scene_v2.usd
+/isaac-sim/usd/ur5e_2f_85/seedo_scene_v3.usd
 ```
 
 and press **Play**.
@@ -112,8 +112,6 @@ docker run --rm -it \
 
 ## Terminal 1 — Start the GraspMolmo server
 
-Open a new terminal:
-
 ```bash
 docker exec -it seedo_ros2_container bash
 
@@ -129,8 +127,6 @@ PYTHONNOUSERSITE=1 \
 ---
 
 ## Terminal 2 — Start the GraspGen-X server
-
-Open a new terminal:
 
 ```bash
 docker exec -it seedo_ros2_container bash
@@ -218,13 +214,18 @@ ros2 run moveit_controller moveit_controller_node \
 ```bash
 docker exec -it seedo_ros2_container bash
 
+# The --config parameter is used to select the desired inference configuration
+
+# FULL INFERENCE 
 export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
 export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh
 
+# PRECOMPUTED INFERENCE
 export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
 export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml
   --precomputed-plan /test_real/test_task00_1/action_planning/action_plan.json \
   --precomputed-demo-scene /test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json
 ```

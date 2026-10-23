@@ -2521,6 +2521,21 @@ class AIControllerNode(Node):
                         self.get_logger().info(
                             f'[TIMING] Results saved to: {timing_path}'
                         )
+
+                        token_usage_path = (
+                            self.controller.artifacts_dir
+                            / "token_usage.json"
+                        )
+
+                        self.controller.token_usage.save(
+                            token_usage_path
+                        )
+
+                        self.get_logger().info(
+                            "[TOKEN USAGE] Results saved to: "
+                            f"{token_usage_path}"
+                        )
+                        
                     else:
                         self.get_logger().warning(
                             '[TIMING] No artifacts_dir set; '

@@ -68,6 +68,11 @@ from ai_controller.utils.utils import (
 )
 from ai_controller.models.seedo_controller.timing_utils import TIMING
 
+from ai_controller.models.seedo_controller.token_usage import (
+    TOKEN_USAGE,
+    install_openai_usage_hooks,
+)
+
 
 class SeeDoController(AIController):
     """Orchestrate the complete SeeDo inference pipeline."""
@@ -77,6 +82,10 @@ class SeeDoController(AIController):
         model_config: str,
     ) -> None:
         self.device: Any = None
+
+        self.token_usage = TOKEN_USAGE
+
+        install_openai_usage_hooks()
 
         # Demonstration / task configuration.
         self.demo_path: Path | None = None
@@ -3117,21 +3126,25 @@ class SeeDoController(AIController):
             try:
                 self.execution_status = "perceiving"
 
-                with TIMING.measure(
-                    "scene_perception"
+                with TOKEN_USAGE.stage(
+                    "runtime",
+                    "scene_perceiver",
                 ):
-                    self.perception_result = self.scene_perceiver.run(
-                        rgb_image=processed_input["rgb"],
-                        depth_image=processed_input["depth"],
-                        camera_info=processed_input["camera_info"],
-                        base_to_table_transform=processed_input[
-                            "base_to_table_transform"
-                        ],
-                        artifacts_dir=(
-                            self.artifacts_dir
-                            / "scene_perceiver"
-                        ),
-                    )
+                    with TIMING.measure(
+                        "scene_perception"
+                    ):
+                        self.perception_result = self.scene_perceiver.run(
+                            rgb_image=processed_input["rgb"],
+                            depth_image=processed_input["depth"],
+                            camera_info=processed_input["camera_info"],
+                            base_to_table_transform=processed_input[
+                                "base_to_table_transform"
+                            ],
+                            artifacts_dir=(
+                                self.artifacts_dir
+                                / "scene_perceiver"
+                            ),
+                        )
 
                 if (
                     str(
@@ -3158,17 +3171,21 @@ class SeeDoController(AIController):
                     )
 
                 self.execution_status = "interpreting_scene"
-                
-                with TIMING.measure(
-                    "scene_interpretation"
+
+                with TOKEN_USAGE.stage(
+                    "runtime",
+                    "scene_interpreter",
                 ):
-                    self.scene_state = self.scene_interpreter.run(
-                        perception_result=self.perception_result,
-                        artifacts_dir=(
-                            self.artifacts_dir
-                            / "scene_interpreter"
-                        ),
-                    )
+                    with TIMING.measure(
+                        "scene_interpretation"
+                    ):
+                        self.scene_state = self.scene_interpreter.run(
+                            perception_result=self.perception_result,
+                            artifacts_dir=(
+                                self.artifacts_dir
+                                / "scene_interpreter"
+                            ),
+                        )
 
                 if self.perception_mode == "generalized":
                     with TIMING.measure(
@@ -3235,20 +3252,24 @@ class SeeDoController(AIController):
 
                 self.execution_status = "generating_lmp"
 
-                with TIMING.measure(
-                    "lmp_generation"
+                with TOKEN_USAGE.stage(
+                    "runtime",
+                    "lmp_generator",
                 ):
-                    self.primitive_plan = self.lmp_generator.run(
-                        action_plan=self.action_plan,
-                        scene_state=self.scene_state,
-                        workspace_bottom_left=self.workspace_bottom_left,
-                        workspace_top_right=self.workspace_top_right,
-                        replicability_result=self.replicability_result,
-                        artifacts_dir=(
-                            self.artifacts_dir
-                            / "lmp_generator"
-                        ),
-                    )
+                    with TIMING.measure(
+                        "lmp_generation"
+                    ):
+                        self.primitive_plan = self.lmp_generator.run(
+                            action_plan=self.action_plan,
+                            scene_state=self.scene_state,
+                            workspace_bottom_left=self.workspace_bottom_left,
+                            workspace_top_right=self.workspace_top_right,
+                            replicability_result=self.replicability_result,
+                            artifacts_dir=(
+                                self.artifacts_dir
+                                / "lmp_generator"
+                            ),
+                        )
 
                 if (
                     str(self.action_plan.task_type)
@@ -4124,6 +4145,8 @@ class SeeDoController(AIController):
         self.demo_path = normalized_demo_path
         self.task_id = str(task_id)
 
+        self.token_usage.reset()
+
         requested_artifacts_dir = kwargs.get(
             "artifacts_dir"
         )
@@ -4206,28 +4229,36 @@ class SeeDoController(AIController):
         self.execution_error = None
 
         try:
-            with TIMING.measure(
-                "keyframe_selection"
+            with TOKEN_USAGE.stage(
+                "demonstration",
+                "keyframe_selector",
             ):
-                keyframe_result = self.keyframe_selector.run(
-                    video_path=self.demo_path,
-                    artifacts_dir=(
-                        artifacts_dir
-                        / "keyframe_selection"
-                    ),
-                )
+                with TIMING.measure(
+                    "keyframe_selection"
+                ):
+                    keyframe_result = self.keyframe_selector.run(
+                        video_path=self.demo_path,
+                        artifacts_dir=(
+                            artifacts_dir
+                            / "keyframe_selection"
+                        ),
+                    )
 
-            with TIMING.measure(
-                "visual_prompting_wall"
-            ):
-                visual_result = self.visual_prompter.run(
-                    video_path=self.demo_path,
-                    keyframes=keyframe_result.keyframes,
-                    artifacts_dir=(
-                        artifacts_dir
-                        / "visual_prompting"
-                    ),
-                )
+            with TOKEN_USAGE.stage(
+                "demonstration",
+                "visual_prompter",
+            ): 
+                with TIMING.measure(
+                    "visual_prompting_wall"
+                ):
+                    visual_result = self.visual_prompter.run(
+                        video_path=self.demo_path,
+                        keyframes=keyframe_result.keyframes,
+                        artifacts_dir=(
+                            artifacts_dir
+                            / "visual_prompting"
+                        ),
+                    )
 
             if self.perception_mode == "generalized":
                 with TIMING.measure(
@@ -4243,23 +4274,27 @@ class SeeDoController(AIController):
                         )
                     )
 
-            with TIMING.measure(
-                "action_planning"
+            with TOKEN_USAGE.stage(
+                "demonstration",
+                "action_planner",
             ):
-                action_result = self.action_planner.run(
-                    annotated_video_path=(
-                        visual_result.annotated_video_path
-                    ),
-                    keyframes=keyframe_result.keyframes,
-                    track_id_map=visual_result.track_id_map,
-                    key_frame_coordinates=(
-                        visual_result.key_frame_coordinates
-                    ),
-                    artifacts_dir=(
-                        artifacts_dir
-                        / "action_planning"
-                    ),
-                )
+                with TIMING.measure(
+                    "action_planning"
+                ):
+                    action_result = self.action_planner.run(
+                        annotated_video_path=(
+                            visual_result.annotated_video_path
+                        ),
+                        keyframes=keyframe_result.keyframes,
+                        track_id_map=visual_result.track_id_map,
+                        key_frame_coordinates=(
+                            visual_result.key_frame_coordinates
+                        ),
+                        artifacts_dir=(
+                            artifacts_dir
+                            / "action_planning"
+                        ),
+                    )
 
             self.action_plan = self.post_process(
                 action_result

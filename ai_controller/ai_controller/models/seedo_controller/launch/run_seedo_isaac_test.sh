@@ -68,19 +68,14 @@ SCRIPT_DIR="${REPO_ROOT}/ai_controller/ai_controller/models/seedo_controller"
 
 SCENE_CONFIGURATOR="${SCRIPT_DIR}/configure_isaac_scene.py"
 
-CONFIG_PATH="${SCRIPT_DIR}/config/seedo_controller.yaml"
+CONFIG_ROOT="${SCRIPT_DIR}/config"
+DEFAULT_CONFIG_PATH="${CONFIG_ROOT}/seedo_controller.yaml"
 
 REAL_TEST_ROOT="/test_isaac"
-
-ACTION_PLAN_SOURCE="/seedo_tests/ai_controller_node_interactive/action_planning"
 
 
 if [[ ! -f "${SCENE_CONFIGURATOR}" ]]; then
     fail "Scene configurator not found: ${SCENE_CONFIGURATOR}"
-fi
-
-if [[ ! -f "${CONFIG_PATH}" ]]; then
-    fail "SeeDo configuration not found: ${CONFIG_PATH}"
 fi
 
 
@@ -100,6 +95,8 @@ SCENE_TRAJECTORY=""
 
 DEMO_TASK=""
 DEMO_PATH=""
+
+CONFIG_PATH=""
 
 PRECOMPUTED_PLAN=""
 PRECOMPUTED_DEMO_SCENE=""
@@ -148,10 +145,24 @@ Demonstration:
   --demo-task N
   --demo-path PATH
 
-Optional:
+Configuration:
+
+  --config PATH
+
+  Default:
+    ${DEFAULT_CONFIG_PATH}
+
+Optional precomputed demonstration artifacts:
 
   --precomputed-plan PATH
   --precomputed-demo-scene PATH
+
+Notes:
+
+  - If --config is omitted, the Solution config is used.
+  - Supplying --precomputed-plan enables precomputed mode.
+  - --precomputed-demo-scene is required only when the selected config uses
+    perception_mode: generalized.
 
 Examples:
 
@@ -267,6 +278,18 @@ while [[ $# -gt 0 ]]; do
             ;;
 
 
+        --config)
+
+            if [[ $# -lt 2 ]]; then
+                fail "--config requires a value."
+            fi
+
+            CONFIG_PATH="$2"
+
+            shift 2
+            ;;
+
+
         --precomputed-plan)
 
             if [[ $# -lt 2 ]]; then
@@ -362,6 +385,57 @@ validate_range() {
 
     fi
 }
+
+
+read_perception_mode() {
+
+    local config_path="$1"
+    local value
+
+    value="$(
+        awk '
+            /^[[:space:]]*perception_mode[[:space:]]*:/ {
+                line = $0
+                sub(/^[^:]*:[[:space:]]*/, "", line)
+                sub(/[[:space:]]*#.*/, "", line)
+                gsub(/[[:space:]\047\042]/, "", line)
+                print tolower(line)
+                exit
+            }
+        ' "${config_path}"
+    )"
+
+    case "${value}" in
+        generalized|prior_guided)
+            printf '%s\n' "${value}"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+if [[ -z "${CONFIG_PATH}" ]]; then
+    CONFIG_PATH="${DEFAULT_CONFIG_PATH}"
+fi
+
+if [[ ! -f "${CONFIG_PATH}" ]]; then
+    fail "SeeDo configuration not found: ${CONFIG_PATH}"
+fi
+
+PERCEPTION_MODE="$(read_perception_mode "${CONFIG_PATH}")" \
+    || fail "Could not read a supported top-level perception_mode from: ${CONFIG_PATH}"
+
+echo
+echo "[PASS] SeeDo configuration found:"
+echo "       ${CONFIG_PATH}"
+echo "       perception_mode=${PERCEPTION_MODE}"
+echo
 
 
 # =============================================================================
@@ -705,36 +779,49 @@ echo
 # OPTIONAL PRECOMPUTED DEMONSTRATION ARTIFACTS
 # =============================================================================
 
-if [[ -n "${PRECOMPUTED_PLAN}" || -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+if [[ -n "${PRECOMPUTED_DEMO_SCENE}" && -z "${PRECOMPUTED_PLAN}" ]]; then
 
-    if [[ -z "${PRECOMPUTED_PLAN}" ]]; then
-        fail \
-            "Precomputed mode requires --precomputed-plan."
-    fi
+    fail "--precomputed-demo-scene requires --precomputed-plan."
 
-    if [[ -z "${PRECOMPUTED_DEMO_SCENE}" ]]; then
-        fail \
-            "Precomputed mode requires --precomputed-demo-scene."
-    fi
+fi
+
+
+if [[ -n "${PRECOMPUTED_PLAN}" ]]; then
+
+    PRECOMPUTED_MODE=true
 
     if [[ ! -f "${PRECOMPUTED_PLAN}" ]]; then
         fail \
             "Precomputed action plan not found: ${PRECOMPUTED_PLAN}"
     fi
 
-    if [[ ! -f "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+    if [[ "${PERCEPTION_MODE}" == "generalized" ]]; then
+
+        if [[ -z "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+            fail \
+                "Generalized precomputed execution requires " \
+                "--precomputed-demo-scene."
+        fi
+
+    fi
+
+    if [[ -n "${PRECOMPUTED_DEMO_SCENE}" && ! -f "${PRECOMPUTED_DEMO_SCENE}" ]]; then
         fail \
             "Precomputed demo structured scene not found: ${PRECOMPUTED_DEMO_SCENE}"
     fi
-
-    PRECOMPUTED_MODE=true
 
     echo
     echo "[INFO] Precomputed demonstration mode enabled."
     echo "[INFO] Action plan:"
     echo "       ${PRECOMPUTED_PLAN}"
-    echo "[INFO] Demo structured scene:"
-    echo "       ${PRECOMPUTED_DEMO_SCENE}"
+
+    if [[ -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+        echo "[INFO] Demo structured scene:"
+        echo "       ${PRECOMPUTED_DEMO_SCENE}"
+    else
+        echo "[INFO] Demo structured scene: not required (${PERCEPTION_MODE})."
+    fi
+
     echo
 
 else
@@ -795,6 +882,8 @@ echo "Test number:       ${TEST_INDEX}"
 echo "Test name:         ${TEST_NAME}"
 echo "Run directory:     ${RUN_DIR}"
 echo "Demo video:        ${DEMO_PATH}"
+echo "Configuration:     ${CONFIG_PATH}"
+echo "Perception mode:   ${PERCEPTION_MODE}"
 
 if [[ "${CONFIGURE_SCENE}" == true ]]; then
 
@@ -812,7 +901,12 @@ if [[ "${PRECOMPUTED_MODE}" == true ]]; then
 
     echo "Precomputed mode:  enabled"
     echo "Action plan:       ${PRECOMPUTED_PLAN}"
-    echo "Demo scene:        ${PRECOMPUTED_DEMO_SCENE}"
+
+    if [[ -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+        echo "Demo scene:        ${PRECOMPUTED_DEMO_SCENE}"
+    else
+        echo "Demo scene:        not required"
+    fi
 
 else
 
@@ -830,36 +924,25 @@ echo
 # SAVE PRE-RUN ARTIFACTS
 # =============================================================================
 
-if [[ -d "${ACTION_PLAN_SOURCE}" ]]; then
-
-    cp -a \
-        "${ACTION_PLAN_SOURCE}/." \
-        "${RUN_DIR}/action_planning/"
-
-    echo \
-        "[PASS] Existing action-planning artifacts copied."
-
-else
-
-    echo \
-        "[INFO] No existing action-planning directory to copy:"
-    echo \
-        "       ${ACTION_PLAN_SOURCE}"
-
-fi
-
+# Save only the exact precomputed artifacts explicitly selected for this run.
+# Full runs generate their action-planning artifacts directly in RUN_DIR.
 if [[ "${PRECOMPUTED_MODE}" == true ]]; then
 
     cp \
         "${PRECOMPUTED_PLAN}" \
         "${RUN_DIR}/action_planning/action_plan.json"
 
-    cp \
-        "${PRECOMPUTED_DEMO_SCENE}" \
-        "${RUN_DIR}/demo_structured_scene/demo_structured_scene.json"
-
     echo "[PASS] Precomputed action plan copied into run artifacts."
-    echo "[PASS] Precomputed demo structured scene copied into run artifacts."
+
+    if [[ -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+
+        cp \
+            "${PRECOMPUTED_DEMO_SCENE}" \
+            "${RUN_DIR}/demo_structured_scene/demo_structured_scene.json"
+
+        echo "[PASS] Precomputed demo structured scene copied into run artifacts."
+
+    fi
 
 fi
 
@@ -923,14 +1006,18 @@ ROS_ARGS=(
 if [[ "${PRECOMPUTED_MODE}" == true ]]; then
 
     ROS_ARGS+=(
-
         -p
         "seedo_precomputed_action_plan_path:=${PRECOMPUTED_PLAN}"
-
-        -p
-        "seedo_precomputed_demo_structured_scene_path:=${PRECOMPUTED_DEMO_SCENE}"
-
     )
+
+    if [[ -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+
+        ROS_ARGS+=(
+            -p
+            "seedo_precomputed_demo_structured_scene_path:=${PRECOMPUTED_DEMO_SCENE}"
+        )
+
+    fi
 
 fi
 
@@ -945,8 +1032,10 @@ echo "STARTING SEEDO CONTROLLER"
 echo "----------------------------------------------------------------------------------------------------"
 echo
 
-echo "task_name: ${ENV_TYPE}"
-echo "demo_path: ${DEMO_PATH}"
+echo "task_name:       ${ENV_TYPE}"
+echo "demo_path:       ${DEMO_PATH}"
+echo "model_config:    ${CONFIG_PATH}"
+echo "perception_mode: ${PERCEPTION_MODE}"
 echo
 
 echo "RGB cameras:"
@@ -993,6 +1082,8 @@ cat > "${RUN_DIR}/run_status.json" <<EOF
     "env_type": "${ENV_TYPE}",
     "demo_task_id": "${DEMO_TASK_ID}",
     "demo_path": "${DEMO_PATH}",
+    "config_path": "${CONFIG_PATH}",
+    "perception_mode": "${PERCEPTION_MODE}",
     "isaac_scene_configured": ${CONFIGURE_SCENE},
     "isaac_scene_task": "${SCENE_TASK}",
     "isaac_scene_trajectory": "${SCENE_TRAJECTORY}",
