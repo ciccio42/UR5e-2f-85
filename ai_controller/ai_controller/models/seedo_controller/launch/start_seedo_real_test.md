@@ -78,9 +78,11 @@ docker run -it --rm \
   -e XDG_RUNTIME_DIR=/tmp/runtime-root \
   -e BUILD_SEEDO_ROS=1 \
   -e HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
+  -e SEEDO_EXECUTION_MODE=real \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v /dev/input:/dev/input \
   -v "$(pwd)":/home/ros2_ws/src/UR5e-2f-85 \
+  -v "$(pwd)/.runtime/seedo_gui_venv":/opt/seedo_gui_venv \
   -v "$(pwd)/.runtime/graspmolmo_venv":/opt/graspmolmo_venv \
   -v "$(pwd)/external/GraspMolmo":/opt/GraspMolmo \
   -v "$(pwd)/.runtime/m2t2_venv":/opt/m2t2_venv \

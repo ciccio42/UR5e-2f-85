@@ -232,20 +232,47 @@ The dedicated environment is:
 ```text
 /opt/graspgenx_venv
 ```
+uv installation:
 
+```bash
+cd /opt/GraspGenX
+
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 The setup used by the project is:
 
 ```bash
 cd /opt/GraspGenX
 
-UV_PROJECT_ENVIRONMENT=/opt/graspgenx_venv \
-uv sync --extra serve --inexact
+export PATH="/root/.local/bin:$PATH"
+
+export UV_PROJECT_ENVIRONMENT=/opt/graspgenx_venv
+
+unset PYTHONPATH
+export PYTHONNOUSERSITE=1
+
+sed -i \
+  's/scene-synthesizer\[recommend\]/scene-synthesizer/' \
+  pyproject.toml
+
+uv pip install \
+  --python /opt/graspgenx_venv/bin/python \
+  "git+https://github.com/drufat/triangle.git@595b43eb6682992a0b1012b9671bf860c0e6ae56"
+
+UV_LINK_MODE=copy \
+uv sync \
+  --extra serve \
+  --inexact \
+  --no-install-package triangle
 ```
 
 Quick import check:
 
 ```bash
 cd /opt/GraspGenX
+
+/opt/graspgenx_venv/bin/python -c \
+'import triangle; print("triangle:", triangle.__version__)'
 
 PYTHONNOUSERSITE=1 \
 /opt/graspgenx_venv/bin/python -c \
@@ -284,6 +311,9 @@ https://huggingface.co/adithyamurali/GraspGenXModel
 Fresh download:
 
 ```bash
+apt update
+apt install -y git-lfs
+
 git lfs install
 
 git clone --depth 1 \

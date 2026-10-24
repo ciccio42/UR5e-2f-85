@@ -1,0 +1,1544 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>SeeDo Experiment Dashboard</title>
+
+    <link
+        rel="stylesheet"
+        href="/static/styles.css"
+    >
+</head>
+
+<body>
+
+<div class="ambient-orb orb-one"></div>
+<div class="ambient-orb orb-two"></div>
+<div class="background-grid"></div>
+
+
+<div class="app-shell">
+
+    <!-- =====================================================
+         TOP BAR
+         ===================================================== -->
+
+    <header class="topbar">
+
+        <div>
+            <div class="eyebrow">
+                ROBOT LEARNING CONTROL
+            </div>
+
+            <h1>
+                SeeDo Experiment Dashboard
+            </h1>
+        </div>
+
+
+        <div class="system-status">
+
+            <span
+                id="status-dot"
+                class="status-dot loading"
+            ></span>
+
+            <span id="system-status">
+                Connecting...
+            </span>
+
+        </div>
+
+    </header>
+
+
+    <main>
+
+        <!-- =================================================
+             EXPERIMENT SETUP
+             ================================================= -->
+
+        <section class="section-heading">
+
+            <div>
+                <h2>
+                    Experiment Setup
+                </h2>
+
+                <p>
+                    Configure the execution before starting
+                    the robotic pipeline.
+                </p>
+            </div>
+
+        </section>
+
+
+        <section class="setup-grid">
+
+            <div class="setup-card">
+
+                <label for="controller-select">
+                    Controller
+                </label>
+
+                <select id="controller-select">
+                </select>
+
+                <span class="field-hint">
+                    Robot controller used for this experiment
+                </span>
+
+            </div>
+
+
+            <div class="setup-card">
+
+                <label>
+                    Execution Target
+                </label>
+
+                <div
+                    id="execution-target"
+                    class="readonly-value"
+                >
+                    —
+                </div>
+
+                <span class="field-hint">
+                    Automatically detected from the container
+                </span>
+
+            </div>
+
+
+            <div class="setup-card">
+
+                <label for="task-select">
+                    Task
+                </label>
+
+                <select id="task-select">
+                </select>
+
+                <span class="field-hint">
+                    Environment executed by the controller
+                </span>
+
+            </div>
+
+
+            <div class="setup-card">
+
+                <label for="execution-type-select">
+                    Execution
+                </label>
+
+                <select id="execution-type-select">
+                </select>
+
+                <span class="field-hint">
+                    Full pipeline or precomputed artifacts
+                </span>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             DEMONSTRATION
+             ================================================= -->
+
+        <section class="detail-panel">
+
+            <div class="panel-heading-row">
+
+                <div>
+                    <div class="panel-label">
+                        DEMONSTRATION
+                    </div>
+
+                    <h3>
+                        Demonstration Input
+                    </h3>
+                </div>
+
+
+                <div class="panel-indicator">
+                    REQUIRED
+                </div>
+
+            </div>
+
+
+            <div class="detail-grid">
+
+                <div class="field">
+
+                    <label for="demo-task">
+                        Demo Task
+                    </label>
+
+                    <input
+                        id="demo-task"
+                        type="number"
+                    >
+
+                    <span
+                        id="demo-task-hint"
+                        class="field-hint"
+                    ></span>
+
+                </div>
+
+
+                <div class="field">
+
+                    <label for="demo-path">
+                        Custom Demo Path
+                    </label>
+
+                    <input
+                        id="demo-path"
+                        type="text"
+                        placeholder="Leave empty to use the launcher default"
+                    >
+
+                    <span class="field-hint">
+                        Optional absolute path inside the container
+                    </span>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             ISAAC SCENE
+             ================================================= -->
+
+        <section
+            id="isaac-panel"
+            class="collapsible"
+        >
+
+            <div class="collapsible-inner">
+
+                <div class="detail-panel">
+
+                    <div class="panel-heading-row">
+
+                        <div>
+                            <div class="panel-label">
+                                ISAAC SIM
+                            </div>
+
+                            <h3>
+                                Scene Configuration
+                            </h3>
+                        </div>
+
+
+                        <label class="switch-row">
+
+                            <span>
+                                Configure scene
+                            </span>
+
+                            <input
+                                id="configure-scene"
+                                type="checkbox"
+                            >
+
+                            <span class="switch">
+                                <span
+                                    class="switch-knob"
+                                ></span>
+                            </span>
+
+                        </label>
+
+                    </div>
+
+
+                    <div
+                        id="isaac-scene-fields"
+                        class="collapsible visible"
+                    >
+
+                        <div class="collapsible-inner">
+
+                            <div class="detail-grid">
+
+                                <div class="field">
+
+                                    <label for="scene-task">
+                                        Scene Task
+                                    </label>
+
+                                    <input
+                                        id="scene-task"
+                                        type="number"
+                                    >
+
+                                    <span
+                                        id="scene-task-hint"
+                                        class="field-hint"
+                                    ></span>
+
+                                </div>
+
+
+                                <div class="field">
+
+                                    <label for="scene-trajectory">
+                                        Scene Trajectory
+                                    </label>
+
+                                    <input
+                                        id="scene-trajectory"
+                                        type="number"
+                                    >
+
+                                    <span
+                                        id="scene-trajectory-hint"
+                                        class="field-hint"
+                                    ></span>
+
+                                </div>
+
+                            </div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             PRECOMPUTED
+             ================================================= -->
+
+        <section
+            id="precomputed-panel"
+            class="collapsible"
+        >
+
+            <div class="collapsible-inner">
+
+                <div class="detail-panel precomputed-panel">
+
+                    <div class="panel-heading-row">
+
+                        <div>
+                            <div class="panel-label">
+                                PRECOMPUTED MODE
+                            </div>
+
+                            <h3>
+                                Demonstration Artifacts
+                            </h3>
+                        </div>
+
+
+                        <div class="panel-indicator accent">
+                            ARTIFACTS
+                        </div>
+
+                    </div>
+
+
+                    <div class="detail-grid">
+
+                        <div class="field">
+
+                            <label for="precomputed-plan">
+                                Action Plan
+                            </label>
+
+                            <input
+                                id="precomputed-plan"
+                                type="text"
+                                placeholder="/path/to/action_plan.json"
+                            >
+
+                            <span class="field-hint">
+                                Required in precomputed mode
+                            </span>
+
+                        </div>
+
+
+                        <div class="field">
+
+                            <label for="precomputed-demo-scene">
+                                Demo Structured Scene
+                            </label>
+
+                            <input
+                                id="precomputed-demo-scene"
+                                type="text"
+                                placeholder="/path/to/demo_structured_scene.json"
+                            >
+
+                            <span class="field-hint">
+                                Required by generalized perception
+                            </span>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             CONFIG
+             ================================================= -->
+
+        <section class="config-panel">
+
+            <div class="config-header">
+
+                <div>
+                    <div class="panel-label">
+                        CONTROLLER CONFIGURATION
+                    </div>
+
+                    <h3>
+                        Solution
+                    </h3>
+                </div>
+
+
+                <div class="locked-badge">
+                    DEFAULT
+                </div>
+
+            </div>
+
+
+            <div
+                id="config-path"
+                class="config-path"
+            >
+                Loading configuration...
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             LAUNCH PREVIEW
+             ================================================= -->
+
+        <section class="preview-panel">
+
+            <div class="preview-header">
+
+                <div>
+                    <div class="panel-label">
+                        LAUNCH PREVIEW
+                    </div>
+
+                    <h3>
+                        Experiment Configuration
+                    </h3>
+                </div>
+
+
+                <span
+                    id="preview-status"
+                    class="preview-badge loading"
+                >
+                    VALIDATING
+                </span>
+
+            </div>
+
+
+            <div class="preview-summary">
+
+                <div class="preview-item">
+
+                    <span>
+                        Target
+                    </span>
+
+                    <strong id="preview-target">
+                        —
+                    </strong>
+
+                </div>
+
+
+                <div class="preview-item">
+
+                    <span>
+                        Task
+                    </span>
+
+                    <strong id="preview-task">
+                        —
+                    </strong>
+
+                </div>
+
+
+                <div class="preview-item">
+
+                    <span>
+                        Execution
+                    </span>
+
+                    <strong id="preview-execution">
+                        —
+                    </strong>
+
+                </div>
+
+
+                <div class="preview-item">
+
+                    <span>
+                        Perception
+                    </span>
+
+                    <strong id="preview-perception">
+                        —
+                    </strong>
+
+                </div>
+
+            </div>
+
+
+            <div
+                id="preview-error"
+                class="preview-error"
+            ></div>
+
+
+            <details class="command-details">
+
+                <summary>
+                    View launcher command
+                </summary>
+
+                <div
+                    id="preview-command"
+                    class="command-preview"
+                >
+                    Waiting for configuration...
+                </div>
+
+            </details>
+
+        </section>
+
+
+        <!-- =================================================
+             PIPELINE MONITOR
+             ================================================= -->
+
+        <section class="pipeline-panel">
+
+            <div class="pipeline-header">
+
+                <div>
+                    <div class="panel-label">
+                        PIPELINE MONITOR
+                    </div>
+
+                    <h3>
+                        SeeDo Execution Flow
+                    </h3>
+                </div>
+
+                <div
+                    id="pipeline-telemetry-status"
+                    class="telemetry-badge"
+                >
+                    WAITING FOR TELEMETRY
+                </div>
+
+            </div>
+
+
+            <!-- =====================================================
+                DEMONSTRATION
+                ===================================================== -->
+
+            <div class="pipeline-group">
+
+                <div class="pipeline-group-label">
+                    DEMONSTRATION
+                </div>
+
+                <div class="pipeline-flow">
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="keyframe_selector"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            01
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>Keyframe Selector</strong>
+                            <span>Waiting</span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="keyframe_selector"
+                        data-to="visual_prompter"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="visual_prompter"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            02
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>Visual Prompter</strong>
+                            <span>Waiting</span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="visual_prompter"
+                        data-to="demo_structured_scene_builder"
+                        data-generalized-only="true"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="demo_structured_scene_builder"
+                        data-generalized-only="true"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            03
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>Demo Scene Builder</strong>
+                            <span>Waiting</span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="demo_structured_scene_builder"
+                        data-to="action_planner"
+                        data-generalized-only="true"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="action_planner"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            04
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>Action Planner</strong>
+                            <span>Waiting</span>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div class="pipeline-divider"></div>
+
+
+            <!-- =====================================================
+            RUNTIME
+            ===================================================== -->
+
+        <div class="pipeline-group">
+
+            <div class="pipeline-group-label">
+                RUNTIME
+            </div>
+
+
+            <div class="runtime-pipeline-layout">
+
+                <!-- =============================================
+                    RUNTIME - ROW 1
+                    ============================================= -->
+
+                <div class="pipeline-flow runtime-flow runtime-flow-first">
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="scene_perceiver"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            05
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                Scene Perceiver
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="scene_perceiver"
+                        data-to="scene_interpreter"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="scene_interpreter"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            06
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                Scene Interpreter
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="scene_interpreter"
+                        data-to="runtime_structured_scene_builder"
+                        data-generalized-only="true"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="runtime_structured_scene_builder"
+                        data-generalized-only="true"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            07
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                Runtime Scene Builder
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="runtime_structured_scene_builder"
+                        data-to="structural_matcher"
+                        data-generalized-only="true"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="structural_matcher"
+                        data-generalized-only="true"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            08
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                Structural Matcher
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+                </div>
+
+
+                <!-- =============================================
+                    ROW BRIDGE
+                    ============================================= -->
+
+                <div class="runtime-row-transition">
+
+                    <div
+                        class="pipeline-link runtime-row-bridge"
+                        data-from="structural_matcher"
+                        data-to="replicability_checker"
+                        data-generalized-only="true"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+                    <span>
+                        CONTINUE
+                    </span>
+
+                </div>
+
+
+                <!-- =============================================
+                    RUNTIME - ROW 2
+                    ============================================= -->
+
+                <div class="pipeline-flow runtime-flow runtime-flow-second">
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="replicability_checker"
+                        data-generalized-only="true"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            09
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                Replicability Checker
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="replicability_checker"
+                        data-to="lmp_generator"
+                        data-generalized-only="true"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="lmp_generator"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            10
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                LMP Generator
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-link"
+                        data-from="lmp_generator"
+                        data-to="robot_execution"
+                    >
+                        <div class="pipeline-link-flow"></div>
+                    </div>
+
+
+                    <div
+                        class="pipeline-stage waiting"
+                        data-stage="robot_execution"
+                    >
+                        <div class="stage-orbit"></div>
+
+                        <div class="stage-icon">
+                            11
+                        </div>
+
+                        <div class="stage-text">
+                            <strong>
+                                Robot Execution
+                            </strong>
+
+                            <span>
+                                Waiting
+                            </span>
+                        </div>
+                    </div>
+
+                </div>
+
+            </div>
+
+        </div>
+
+        </section>
+
+
+        <!-- =================================================
+             RUNTIME
+             ================================================= -->
+
+        <section class="runtime-panel">
+
+            <div class="runtime-header">
+
+                <div>
+                    <div class="panel-label">
+                        RUNTIME
+                    </div>
+
+                    <h3>
+                        Experiment State
+                    </h3>
+                </div>
+
+
+                <div class="runtime-status-area">
+
+                    <div
+                        id="runtime-live-indicator"
+                        class="runtime-live-indicator"
+                    >
+                        <span></span>
+                        LIVE
+                    </div>
+
+
+                    <span
+                        id="process-status"
+                        class="process-badge idle"
+                    >
+                        IDLE
+                    </span>
+
+                </div>
+
+            </div>
+
+
+            <div
+                id="runtime-idle"
+                class="runtime-placeholder"
+            >
+
+                <div class="runtime-icon">
+                    ▶
+                </div>
+
+
+                <div>
+
+                    <strong>
+                        No experiment running
+                    </strong>
+
+                    <p>
+                        Launch an experiment to start
+                        the runtime monitor.
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <div
+                id="runtime-active"
+                class="runtime-active hidden"
+            >
+
+                <!-- =====================================================
+                    RUNTIME VIEW SWITCH
+                    ===================================================== -->
+
+                <div class="runtime-view-toolbar">
+
+                    <div class="runtime-view-copy">
+
+                        <span class="runtime-view-label">
+                            OUTPUT VIEW
+                        </span>
+
+                        <span id="runtime-view-caption">
+                            Visual execution timeline
+                        </span>
+
+                    </div>
+
+
+                    <div
+                        class="runtime-view-switch"
+                        role="group"
+                        aria-label="Runtime view"
+                    >
+
+                        <button
+                            id="runtime-visual-button"
+                            class="runtime-view-button active"
+                            type="button"
+                        >
+                            Visual
+                        </button>
+
+                        <button
+                            id="runtime-terminal-button"
+                            class="runtime-view-button"
+                            type="button"
+                        >
+                            Terminal
+                        </button>
+
+                    </div>
+
+                </div>
+
+
+                <!-- =====================================================
+                    VISUAL VIEW
+                    ===================================================== -->
+
+                <div
+                    id="runtime-visual-view"
+                    class="runtime-view"
+                >
+
+                    <div class="visual-sequence">
+
+                        <!-- SETUP -->
+
+                        <article
+                            id="visual-setup-card"
+                            class="visual-stage-card active"
+                        >
+
+                            <div class="visual-stage-index">
+                                SETUP
+                            </div>
+
+
+                            <div class="visual-stage-body">
+
+                                <div class="visual-stage-heading">
+
+                                    <div>
+
+                                        <span class="visual-stage-kicker">
+                                            EXPERIMENT INITIALIZATION
+                                        </span>
+
+                                        <h4>
+                                            Preparing experiment
+                                        </h4>
+
+                                        <p id="visual-setup-status">
+                                            Initializing robot interfaces and runtime services...
+                                        </p>
+
+                                    </div>
+
+                                    <span class="visual-live-badge">
+                                        PREPARING
+                                    </span>
+
+                                </div>
+
+
+                                <div class="setup-graphic">
+
+                                    <div class="setup-ring ring-one"></div>
+                                    <div class="setup-ring ring-two"></div>
+                                    <div class="setup-ring ring-three"></div>
+
+                                    <div class="setup-core">
+                                        <span>SEEDO</span>
+                                        <small>INITIALIZING</small>
+                                    </div>
+
+                                </div>
+
+                            </div>
+
+                        </article>
+
+
+                        <!-- DEMONSTRATION -->
+
+                        <article
+                            id="visual-demo-card"
+                            class="visual-stage-card hidden"
+                        >
+
+                            <div class="visual-stage-index">
+                                DEMO
+                            </div>
+
+
+                            <div class="visual-stage-body">
+
+                                <div class="visual-stage-heading">
+
+                                    <div>
+
+                                        <span class="visual-stage-kicker">
+                                            HUMAN DEMONSTRATION
+                                        </span>
+
+                                        <h4>
+                                            Demonstration video
+                                        </h4>
+
+                                        <p id="visual-demo-status">
+                                            Waiting for demonstration pipeline...
+                                        </p>
+
+                                    </div>
+
+                                </div>
+
+
+                                <div class="demo-video-shell">
+
+                                    <video
+                                        id="demo-video"
+                                        class="demo-video"
+                                        controls
+                                        muted
+                                        playsinline
+                                        preload="metadata"
+                                    ></video>
+
+                                </div>
+
+                            </div>
+
+                        </article>
+
+
+                        <!-- ERROR -->
+
+                        <article
+                            id="visual-error-card"
+                            class="visual-stage-card visual-error-card hidden"
+                        >
+
+                            <div class="visual-stage-index">
+                                ERROR
+                            </div>
+
+
+                            <div class="visual-stage-body visual-error-body">
+
+                                <div class="visual-error-symbol">
+                                    !
+                                </div>
+
+
+                                <span class="visual-stage-kicker visual-error-kicker">
+                                    EXECUTION FAILED
+                                </span>
+
+
+                                <h4>
+                                    Experiment terminated with an error
+                                </h4>
+
+
+                                <div
+                                    id="visual-error-message"
+                                    class="visual-error-message"
+                                ></div>
+
+
+                                <div class="visual-error-footer">
+
+                                    <div>
+
+                                        <span>
+                                            RETURN CODE
+                                        </span>
+
+                                        <strong id="visual-error-return-code">
+                                            —
+                                        </strong>
+
+                                    </div>
+
+
+                                    <button
+                                        id="visual-error-terminal"
+                                        class="secondary-button"
+                                        type="button"
+                                    >
+                                        View Terminal
+                                    </button>
+
+                                </div>
+
+                            </div>
+
+                        </article>
+
+                    </div>
+
+                </div>
+
+
+                <!-- =====================================================
+                    TERMINAL VIEW
+                    ===================================================== -->
+
+                <div
+                    id="runtime-terminal-view"
+                    class="runtime-view hidden"
+                >
+
+                    <div class="runtime-meta">
+
+                        <div>
+
+                            <span>
+                                PROCESS
+                            </span>
+
+                            <strong id="runtime-pid">
+                                —
+                            </strong>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="terminal-shell">
+
+                        <div class="terminal-topbar">
+
+                            <div class="terminal-dots">
+                                <span></span>
+                                <span></span>
+                                <span></span>
+                            </div>
+
+                            <span>
+                                SeeDo Runtime Console
+                            </span>
+
+                            <div
+                                id="terminal-stream-indicator"
+                                class="terminal-stream-indicator"
+                            >
+                                STREAMING
+                            </div>
+
+                        </div>
+
+
+                        <div class="terminal-body">
+
+                            <div class="terminal-scanline"></div>
+
+                            <pre id="runtime-console"></pre>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+        </section>
+
+
+        <!-- =================================================
+             ACTIONS
+             ================================================= -->
+
+        <section class="actions">
+
+            <button
+                id="start-button"
+                class="primary-button"
+                disabled
+            >
+
+                <span
+                    class="button-glow"
+                ></span>
+
+                <span id="start-button-label">
+                    Start Experiment
+                </span>
+
+            </button>
+
+
+            <button
+                id="stop-button"
+                class="danger-button hidden"
+            >
+                Stop Experiment
+            </button>
+
+
+            <span
+                id="launch-note"
+                class="disabled-note"
+            >
+                Validating experiment configuration...
+            </span>
+
+        </section>
+
+    </main>
+
+</div>
+
+
+<!-- =========================================================
+     USER INTERACTION MODAL
+     ========================================================= -->
+
+<div
+    id="interaction-overlay"
+    class="interaction-overlay"
+>
+
+    <div class="interaction-modal">
+
+        <div class="interaction-glow"></div>
+
+
+        <div class="interaction-icon">
+            !
+        </div>
+
+
+        <div class="interaction-content">
+
+            <div class="panel-label">
+                USER INPUT REQUIRED
+            </div>
+
+
+            <h2>
+                Controller paused
+            </h2>
+
+
+            <p
+                id="interaction-prompt"
+                class="interaction-prompt"
+            ></p>
+
+
+            <div id="interaction-response-field">
+
+                <label for="interaction-value">
+                    Response
+                </label>
+
+                <input
+                    id="interaction-value"
+                    type="text"
+                    autocomplete="off"
+                >
+
+                <span class="interaction-hint">
+                    The value is forwarded exactly as entered.
+                    Leave it empty to send Enter.
+                </span>
+
+            </div>
+
+
+            <div
+                id="interaction-error"
+                class="interaction-error"
+            ></div>
+
+
+            <div class="interaction-actions">
+
+                <button
+                    id="interaction-submit"
+                    class="primary-button"
+                >
+                    Send Response
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<!-- =========================================================
+     EXECUTION ERROR MODAL
+     ========================================================= -->
+
+<div
+    id="execution-error-overlay"
+    class="execution-error-overlay"
+>
+
+    <div class="execution-error-modal">
+
+        <div class="execution-error-glow"></div>
+
+
+        <div class="execution-error-icon">
+            !
+        </div>
+
+
+        <div class="execution-error-content">
+
+            <div class="panel-label error-label">
+                EXECUTION ERROR
+            </div>
+
+            <h2 id="execution-error-title">
+                Experiment failed
+            </h2>
+
+
+            <div
+                id="execution-error-message"
+                class="execution-error-message"
+            ></div>
+
+
+            <div class="execution-error-meta">
+
+                <span>
+                    RETURN CODE
+                </span>
+
+                <strong id="execution-error-return-code">
+                    —
+                </strong>
+
+            </div>
+
+
+            <div class="execution-error-actions">
+
+                <button
+                    id="execution-error-terminal"
+                    class="secondary-button"
+                    type="button"
+                >
+                    View Terminal
+                </button>
+
+                <button
+                    id="execution-error-close"
+                    class="primary-button"
+                    type="button"
+                >
+                    Close
+                </button>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+
+</body>
+</html>

@@ -51,6 +51,9 @@ from ai_controller.utils.grasping.grasp_planner_base import (
 from ai_controller.utils.grasping.grasp_planner_factory import (
     build_grasp_planner,
 )
+from ai_controller.utils.gui.pipeline_bridge import (
+    emit_pipeline_event,
+)
 from results import (
     ActionPlanningResult,
     ActionStep,
@@ -4228,7 +4231,22 @@ class SeeDoController(AIController):
         self.execution_status = "planning"
         self.execution_error = None
 
+        current_pipeline_stage: str | None = None
+
         try:
+            # =========================================================
+            # KEYFRAME SELECTOR
+            # =========================================================
+
+            current_pipeline_stage = (
+                "keyframe_selector"
+            )
+
+            emit_pipeline_event(
+                "stage_started",
+                stage=current_pipeline_stage,
+            )
+
             with TOKEN_USAGE.stage(
                 "demonstration",
                 "keyframe_selector",
@@ -4236,43 +4254,125 @@ class SeeDoController(AIController):
                 with TIMING.measure(
                     "keyframe_selection"
                 ):
-                    keyframe_result = self.keyframe_selector.run(
-                        video_path=self.demo_path,
-                        artifacts_dir=(
-                            artifacts_dir
-                            / "keyframe_selection"
-                        ),
+                    keyframe_result = (
+                        self.keyframe_selector.run(
+                            video_path=self.demo_path,
+                            artifacts_dir=(
+                                artifacts_dir
+                                / "keyframe_selection"
+                            ),
+                        )
                     )
+
+            emit_pipeline_event(
+                "stage_completed",
+                stage=current_pipeline_stage,
+            )
+
+
+            # =========================================================
+            # VISUAL PROMPTER
+            # =========================================================
+
+            current_pipeline_stage = (
+                "visual_prompter"
+            )
+
+            emit_pipeline_event(
+                "stage_started",
+                stage=current_pipeline_stage,
+            )
 
             with TOKEN_USAGE.stage(
                 "demonstration",
                 "visual_prompter",
-            ): 
+            ):
                 with TIMING.measure(
                     "visual_prompting_wall"
                 ):
-                    visual_result = self.visual_prompter.run(
-                        video_path=self.demo_path,
-                        keyframes=keyframe_result.keyframes,
-                        artifacts_dir=(
-                            artifacts_dir
-                            / "visual_prompting"
-                        ),
+                    visual_result = (
+                        self.visual_prompter.run(
+                            video_path=self.demo_path,
+                            keyframes=(
+                                keyframe_result.keyframes
+                            ),
+                            artifacts_dir=(
+                                artifacts_dir
+                                / "visual_prompting"
+                            ),
+                        )
                     )
 
-            if self.perception_mode == "generalized":
+            emit_pipeline_event(
+                "stage_completed",
+                stage=current_pipeline_stage,
+            )
+
+
+            # =========================================================
+            # DEMONSTRATION STRUCTURED SCENE
+            # GENERALIZED MODE ONLY
+            # =========================================================
+
+            if (
+                self.perception_mode
+                == "generalized"
+            ):
+                current_pipeline_stage = (
+                    "demo_structured_scene_builder"
+                )
+
+                emit_pipeline_event(
+                    "stage_started",
+                    stage=current_pipeline_stage,
+                )
+
                 with TIMING.measure(
                     "demo_structured_scene"
                 ):
                     self.demo_structured_scene = (
                         self.demo_structured_scene_builder.run(
-                            visual_prompting_result=visual_result,
+                            visual_prompting_result=(
+                                visual_result
+                            ),
                             artifacts_dir=(
                                 artifacts_dir
                                 / "demo_structured_scene"
                             ),
                         )
                     )
+
+                emit_pipeline_event(
+                    "artifact_created",
+                    stage=current_pipeline_stage,
+                    artifact_type=(
+                        "demo_structured_scene"
+                    ),
+                    path=str(
+                        artifacts_dir
+                        / "demo_structured_scene"
+                        / "demo_structured_scene.json"
+                    ),
+                )
+
+                emit_pipeline_event(
+                    "stage_completed",
+                    stage=current_pipeline_stage,
+                )
+
+
+            # =========================================================
+            # ACTION PLANNER
+            # =========================================================
+
+            current_pipeline_stage = (
+                "action_planner"
+            )
+
+            emit_pipeline_event(
+                "stage_started",
+                stage=current_pipeline_stage,
+            )
 
             with TOKEN_USAGE.stage(
                 "demonstration",
@@ -4281,28 +4381,56 @@ class SeeDoController(AIController):
                 with TIMING.measure(
                     "action_planning"
                 ):
-                    action_result = self.action_planner.run(
-                        annotated_video_path=(
-                            visual_result.annotated_video_path
-                        ),
-                        keyframes=keyframe_result.keyframes,
-                        track_id_map=visual_result.track_id_map,
-                        key_frame_coordinates=(
-                            visual_result.key_frame_coordinates
-                        ),
-                        artifacts_dir=(
-                            artifacts_dir
-                            / "action_planning"
-                        ),
+                    action_result = (
+                        self.action_planner.run(
+                            annotated_video_path=(
+                                visual_result
+                                .annotated_video_path
+                            ),
+                            keyframes=(
+                                keyframe_result.keyframes
+                            ),
+                            track_id_map=(
+                                visual_result.track_id_map
+                            ),
+                            key_frame_coordinates=(
+                                visual_result
+                                .key_frame_coordinates
+                            ),
+                            artifacts_dir=(
+                                artifacts_dir
+                                / "action_planning"
+                            ),
+                        )
                     )
 
-            self.action_plan = self.post_process(
-                action_result
+
+            self.action_plan = (
+                self.post_process(
+                    action_result
+                )
             )
+
+
+            emit_pipeline_event(
+                "stage_completed",
+                stage=current_pipeline_stage,
+            )
+
+
+            current_pipeline_stage = None
+
 
         except Exception as exc:
             self.execution_status = "failed"
             self.execution_error = str(exc)
+
+            emit_pipeline_event(
+                "pipeline_error",
+                stage=current_pipeline_stage,
+                message=str(exc),
+            )
+
             raise
 
         self.execution_status = "plan_ready"

@@ -28,6 +28,7 @@ from control_msgs.action import GripperCommand
 from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _normalize_angle, EEF_POS_NAME, EEF_QUAT_NAME, JOINT_POS_NAME, JOINT_VEL_NAME, GRIPPER_QPOS_NAME, GRIPPER_QVEL_NAME
 from ai_controller.models.seedo_controller.ai_controller_node_utils import *
 from ai_controller.models.seedo_controller.timing_utils import TIMING
+from ai_controller.utils.gui.interaction_bridge import request_user_input
 _trajectory_cls = None
 
 def set_seed(seed: int = 42) -> None:
@@ -1290,7 +1291,10 @@ class AIControllerNode(Node):
     def move_to_initial_pose(self):
         """Move the robot to the initial pose before starting the control loop."""
         self.get_logger().info('Moving robot to initial pose before first inference...')
-        input("Press Enter to move the robot to the initial pose. Make sure the robot is in a safe position.")
+        request_user_input(
+            "Press Enter to move the robot to the initial pose. Make sure the robot is in a safe position.",
+            interaction_type="enter"
+        )
         pose_request = GoToPose.Request()
         pose_request.pose.header.stamp = self.get_clock().now().to_msg()
         pose_request.pose.header.frame_id = self.frame_id
@@ -1557,15 +1561,15 @@ class AIControllerNode(Node):
         res_dict["failed_action_index"] = None
 
         # 1. Ask for object reached
-        object_reached = input("Did the robot successfully reach the target object? [1,0]: ")
+        object_reached = request_user_input("Did the robot successfully reach the target object? [1,0]: ")
         res_dict['object_reached'] = int(object_reached)
         
         # 2. Ask for object picked
-        object_picked = input("Did the robot successfully pick the target object? [1,0]: ")
+        object_picked = request_user_input("Did the robot successfully pick the target object? [1,0]: ")
         res_dict['object_picked'] = int(object_picked)
         
         # 3. Ask for object placed
-        object_placed = input("Did the robot successfully place the target object? [1,0]: ")
+        object_placed = request_user_input("Did the robot successfully place the target object? [1,0]: ")
         res_dict['object_placed'] = int(object_placed)
         
         res_dict['reached_wrong'] = 0
@@ -1573,16 +1577,16 @@ class AIControllerNode(Node):
         res_dict['place_wrong_correct_bin'] = 0
         res_dict['place_wrong_wrong_bin'] = 0
         if res_dict['object_reached'] != 1:
-            reached_wrong = input("Did the robot reach the wrong object? [1,0]: ")
+            reached_wrong = request_user_input("Did the robot reach the wrong object? [1,0]: ")
             res_dict['reached_wrong'] = int(reached_wrong)
             
-            picked_wrong = input("Did the robot pick the wrong object? [1,0]: ")
+            picked_wrong = request_user_input("Did the robot pick the wrong object? [1,0]: ")
             res_dict['picked_wrong'] = int(picked_wrong)
             
-            place_wrong_correct_bin = input("Did the robot place the wrong object in correct bin? [1,0]: ")
+            place_wrong_correct_bin = request_user_input("Did the robot place the wrong object in correct bin? [1,0]: ")
             res_dict['place_wrong_correct_bin'] = int(place_wrong_correct_bin)
             
-            place_wrong_wrong_bin = input("Did the robot place the wrong object in wrong bin? [1,0]: ")
+            place_wrong_wrong_bin = request_user_input("Did the robot place the wrong object in wrong bin? [1,0]: ")
             res_dict['place_wrong_wrong_bin'] = int(place_wrong_wrong_bin)
             
         
@@ -1599,14 +1603,17 @@ class AIControllerNode(Node):
 
         Trajectory = _get_trajectory_cls(self)
         
-        traj_cnt = int(input("Write the current trajectory count to the console: "))
+        traj_cnt = int(request_user_input("Write the current trajectory count to the console: "))
         self.traj_cnt = traj_cnt
         
         while rclpy.ok():
         
-            input("Press Enter to start the control loop. Make sure the robot is in a safe position.")
+            request_user_input(
+                "Press Enter to start the control loop. Make sure the robot is in a safe position.",
+                interaction_type="enter",
+            )
             
-            enter_task_id = input("Enter task ID (e.g., 1, 2, 3): ")
+            enter_task_id = request_user_input("Enter task ID (e.g., 1, 2, 3): ")
             self.get_logger().info(f'Starting control loop for task ID: {enter_task_id}')
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
@@ -2100,7 +2107,10 @@ class AIControllerNode(Node):
                         # 5. Send commands to the robot (e.g., set pose, control gripper)
                         # call service to set robot to the desired pose
                         self.get_logger().info(f'\tSetting robot to desired pose at step {step}')
-                        # input("Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.")
+                        # request_user_input(
+                        #     "Press Enter to set the robot to the desired pose. Make sure the robot is in a safe position.",
+                        #     interaction_type="enter"
+                        # )
                         pose_request = GoToPose.Request()
                         pose_request.pose.header.stamp = self.get_clock().now().to_msg()
                         pose_request.pose.header.frame_id = self.frame_id

@@ -84,8 +84,10 @@ docker run --rm -it \
   --ipc=host \
   -e DISPLAY="$DISPLAY" \
   -e HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
+  -e SEEDO_EXECUTION_MODE=isaac \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v "$(pwd)":/home/ros2_ws/src/UR5e-2f-85 \
+  -v "$(pwd)/.runtime/seedo_gui_venv":/opt/seedo_gui_venv \
   -v "$(pwd)/.runtime/graspmolmo_venv":/opt/graspmolmo_venv \
   -v "$(pwd)/external/GraspMolmo":/opt/GraspMolmo \
   -v "$(pwd)/.runtime/m2t2_venv":/opt/m2t2_venv \
@@ -151,6 +153,8 @@ GRASPGENX_GRIPPER_CFG_DIR=/opt/graspgenx_gripper_descriptions \
 ### Terminal 3 — Robot State Publisher
 
 ```bash
+docker exec -it seedo_ros2_container bash
+
 source /home/ros2_ws/install/setup.bash
 source /opt/topic_based_ws/install/setup.bash
 
