@@ -67,6 +67,36 @@ const elements = {
     currentStageAnimation: document.getElementById("current-stage-animation"),
     currentStageCore: document.getElementById("current-stage-core"),
 
+    robotExecutionDetail:
+        document.getElementById(
+            "robot-execution-detail"
+        ),
+
+    robotPrimitiveProgress:
+        document.getElementById(
+            "robot-primitive-progress"
+        ),
+
+    robotPrimitiveName:
+        document.getElementById(
+            "robot-primitive-name"
+        ),
+
+    robotPrimitiveActivity:
+        document.getElementById(
+            "robot-primitive-activity"
+        ),
+
+    robotModuleInfo:
+        document.getElementById(
+            "robot-module-info"
+        ),
+
+    robotModuleStatus:
+        document.getElementById(
+            "robot-module-status"
+        ),
+
     robotCameraPanel: document.getElementById("robot-camera-panel"),
     robotCameraState: document.getElementById("robot-camera-state"),
     robotCameraStream: document.getElementById("robot-camera-stream"),
@@ -94,6 +124,7 @@ const elements = {
     interactionResponseField: document.getElementById("interaction-response-field"),
     interactionSubmit: document.getElementById("interaction-submit"),
     interactionError: document.getElementById("interaction-error"),
+    interactionStop: document.getElementById("interaction-stop"),
 };
 
 
@@ -909,6 +940,17 @@ function handlePipelineEvent(event) {
     );
 
     if (
+        event.event
+        === "robot_execution_detail"
+    ) {
+        updateRobotExecutionDetail(
+            event
+        );
+
+        return;
+    }
+
+    if (
         event.event === "stage_started"
         && event.stage
     ) {
@@ -1318,6 +1360,146 @@ function startRobotCameraStream() {
         );
 }
 
+function resetRobotExecutionDetail() {
+    elements.robotExecutionDetail.classList.add(
+        "hidden"
+    );
+
+    elements.robotPrimitiveProgress.textContent =
+        "PRIMITIVE";
+
+    elements.robotPrimitiveName.textContent =
+        "—";
+
+    elements.robotPrimitiveActivity.textContent =
+        "PREPARING";
+
+    elements.robotPrimitiveActivity.className =
+        "robot-primitive-activity preparing";
+
+    elements.robotModuleInfo.classList.add(
+        "hidden"
+    );
+
+    elements.robotModuleStatus.textContent =
+        "Planning grasp...";
+}
+
+
+function updateRobotExecutionDetail(
+    event,
+) {
+    elements.robotExecutionDetail.classList.remove(
+        "hidden"
+    );
+
+    const primitive =
+        (
+            event.primitive
+            ?? "unknown"
+        )
+        .toString()
+        .replaceAll(
+            "_",
+            " "
+        )
+        .toUpperCase();
+
+
+    elements.robotPrimitiveName.textContent =
+        primitive;
+
+
+    if (
+        event.primitive_index != null
+        && event.primitive_total != null
+    ) {
+        elements.robotPrimitiveProgress.textContent =
+            (
+                `PRIMITIVE ${event.primitive_index}`
+                + ` / ${event.primitive_total}`
+            );
+    }
+
+
+    const activity =
+        event.activity
+        ?? "preparing";
+
+
+    const activityLabels = {
+        preparing:
+            "PREPARING",
+
+        grasp_planning:
+            "GRASP PLANNING",
+
+        post_grasp_refinement:
+            "POST-GRASP",
+
+        executing:
+            "EXECUTING",
+
+        completed:
+            "COMPLETED",
+    };
+
+
+    elements.robotPrimitiveActivity.textContent =
+        activityLabels[activity]
+        ?? activity
+            .toString()
+            .replaceAll(
+                "_",
+                " "
+            )
+            .toUpperCase();
+
+
+    elements.robotPrimitiveActivity.className =
+        (
+            "robot-primitive-activity "
+            + activity
+        );
+
+
+    const graspModuleActive =
+        (
+            activity
+            === "grasp_planning"
+            ||
+            activity
+            === "post_grasp_refinement"
+        );
+
+
+    elements.robotModuleInfo.classList.toggle(
+        "hidden",
+        !graspModuleActive,
+    );
+
+
+    if (
+        activity
+        === "grasp_planning"
+    ) {
+        const target =
+            event.target
+                ? ` · ${event.target}`
+                : "";
+
+        elements.robotModuleStatus.textContent =
+            `Planning grasp${target}`;
+    }
+
+    else if (
+        activity
+        === "post_grasp_refinement"
+    ) {
+        elements.robotModuleStatus.textContent =
+            "Post-grasp refinement...";
+    }
+}
 
 function setCurrentStageState(
     stageName,
@@ -1421,10 +1603,23 @@ function setCurrentStageState(
     );
 
     if (robotExecution) {
+
+        if (
+            state === "running"
+        ) {
+            resetRobotExecutionDetail();
+
+            elements.robotExecutionDetail.classList.remove(
+                "hidden"
+            );
+        }
+
         startRobotCameraStream();
     }
 
     else {
+        resetRobotExecutionDetail();
+
         stopRobotCameraStream();
     }
 }
@@ -1517,6 +1712,8 @@ function resetRuntimeVisual() {
     elements.currentStageAnimation.classList.remove(
         "hidden"
     );
+
+    resetRobotExecutionDetail();
 
     elements.robotCameraPanel.classList.add(
         "hidden"
@@ -1911,37 +2108,69 @@ function showInteraction(interaction) {
         interaction.interaction_type
         ?? "text";
 
+
     const enterOnly =
         dashboardState.currentInteractionType
         === "enter";
 
+
+    const continueStop =
+        dashboardState.currentInteractionType
+        === "continue_stop";
+
+
     elements.interactionPrompt.textContent =
         interaction.prompt;
+
 
     elements.interactionValue.value =
         "";
 
+
     elements.interactionResponseField.classList.toggle(
         "hidden",
-        enterOnly,
+        enterOnly || continueStop,
     );
 
-    elements.interactionSubmit.textContent =
-        enterOnly
-            ? "Press Enter"
-            : "Send Response";
+
+    elements.interactionStop.classList.toggle(
+        "hidden",
+        !continueStop,
+    );
+
+
+    if (continueStop) {
+        elements.interactionSubmit.textContent =
+            "Continue";
+    }
+
+    else if (enterOnly) {
+        elements.interactionSubmit.textContent =
+            "Press Enter";
+    }
+
+    else {
+        elements.interactionSubmit.textContent =
+            "Send Response";
+    }
+
 
     elements.interactionError.classList.remove(
         "visible"
     );
 
+
     elements.interactionOverlay.classList.add(
         "visible"
     );
 
+
     setTimeout(
         () => {
-            if (enterOnly) {
+            if (
+                enterOnly
+                || continueStop
+            ) {
                 elements.interactionSubmit.focus();
             }
 
@@ -1970,6 +2199,10 @@ function hideInteraction() {
 
     elements.interactionOverlay.classList.remove(
         "visible"
+    );
+
+    elements.interactionStop.classList.add(
+        "hidden"
     );
 }
 
@@ -2023,7 +2256,9 @@ async function pollInteraction() {
 }
 
 
-async function submitInteraction() {
+async function submitInteraction(
+    valueOverride = null,
+) {
     const interactionId =
         dashboardState.currentInteractionId;
 
@@ -2037,10 +2272,14 @@ async function submitInteraction() {
         true;
 
     const value =
-        dashboardState.currentInteractionType
-        === "enter"
-            ? ""
-            : elements.interactionValue.value;
+        valueOverride !== null
+            ? valueOverride
+            : (
+                dashboardState.currentInteractionType
+                === "enter"
+                    ? ""
+                    : elements.interactionValue.value
+            );
 
     try {
         const response =
@@ -2368,7 +2607,30 @@ function attachInteractions() {
 
     elements.interactionSubmit.addEventListener(
         "click",
-        submitInteraction,
+        () => {
+
+            if (
+                dashboardState.currentInteractionType
+                === "continue_stop"
+            ) {
+                submitInteraction(
+                    "continue"
+                );
+
+                return;
+            }
+
+            submitInteraction();
+        },
+    );
+
+    elements.interactionStop.addEventListener(
+        "click",
+        () => {
+            submitInteraction(
+                "stop"
+            );
+        },
     );
 
     elements.interactionValue.addEventListener(

@@ -3604,6 +3604,21 @@ class SeeDoController(AIController):
                     "planning_grasp"
                 )
 
+                emit_pipeline_event(
+                    "robot_execution_detail",
+                    stage="robot_execution",
+                    primitive=(
+                        str(
+                            primitive_step.name
+                        )
+                        .strip()
+                        .lower()
+                    ),
+                    activity="grasp_planning",
+                    module="grasp_planner",
+                    target=grasp_target,
+                )
+
                 print()
                 print(
                     "[GRASP] Planning grasp for:",
@@ -3768,6 +3783,19 @@ class SeeDoController(AIController):
 
                 self.grasp_plan_target = (
                     grasp_target
+                )
+
+                emit_pipeline_event(
+                    "robot_execution_detail",
+                    stage="robot_execution",
+                    primitive=(
+                        str(
+                            primitive_step.name
+                        )
+                        .strip()
+                        .lower()
+                    ),
+                    activity="preparing",
                 )
 
                 print(
@@ -4041,6 +4069,14 @@ class SeeDoController(AIController):
                     "refining_post_grasp"
                 )
 
+                emit_pipeline_event(
+                    "robot_execution_detail",
+                    stage="robot_execution",
+                    primitive=primitive_name,
+                    activity="post_grasp_refinement",
+                    module="grasp_planner",
+                )
+
                 print()
                 print(
                     "============================================================",
@@ -4066,6 +4102,13 @@ class SeeDoController(AIController):
                             robot_state
                         ),
                     )
+
+                emit_pipeline_event(
+                    "robot_execution_detail",
+                    stage="robot_execution",
+                    primitive=primitive_name,
+                    activity="preparing",
+                )
 
                 print(
                     "============================================================",

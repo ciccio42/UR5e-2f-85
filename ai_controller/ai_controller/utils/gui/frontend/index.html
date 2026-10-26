@@ -1233,6 +1233,61 @@
 
                             </div>
 
+                            <div
+                                id="robot-execution-detail"
+                                class="robot-execution-detail hidden"
+                            >
+
+                                <div class="robot-primitive-summary">
+
+                                    <span
+                                        id="robot-primitive-progress"
+                                        class="robot-primitive-progress"
+                                    >
+                                        PRIMITIVE
+                                    </span>
+
+                                    <div class="robot-primitive-row">
+
+                                        <strong id="robot-primitive-name">
+                                            —
+                                        </strong>
+
+                                        <span
+                                            id="robot-primitive-activity"
+                                            class="robot-primitive-activity preparing"
+                                        >
+                                            PREPARING
+                                        </span>
+
+                                    </div>
+
+                                </div>
+
+
+                                <div
+                                    id="robot-module-info"
+                                    class="robot-module-info hidden"
+                                >
+
+                                    <span class="robot-module-pulse"></span>
+
+                                    <div class="robot-module-copy">
+
+                                        <strong>
+                                            GRASP MODULE
+                                        </strong>
+
+                                        <span id="robot-module-status">
+                                            Planning grasp...
+                                        </span>
+
+                                    </div>
+
+                                </div>
+
+                            </div>
+
 
                             <div
                                 id="current-stage-animation"
@@ -1529,6 +1584,14 @@
 
 
             <div class="interaction-actions">
+
+                <button
+                    id="interaction-stop"
+                    class="danger-button hidden"
+                    type="button"
+                >
+                    Stop
+                </button>
 
                 <button
                     id="interaction-submit"

@@ -2830,6 +2830,217 @@ input:focus {
 
 }
 
+/* ============================================================
+   ROBOT EXECUTION DETAIL
+   ============================================================ */
+
+
+.robot-execution-detail {
+    position: relative;
+    z-index: 2;
+
+    margin-top: 18px;
+
+    padding: 13px 14px;
+
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 16px;
+
+    background:
+        rgba(5, 8, 14, 0.54);
+
+    border:
+        1px solid
+        rgba(255, 255, 255, 0.055);
+
+    border-radius: 10px;
+}
+
+
+.robot-primitive-summary {
+    min-width: 0;
+
+    display: flex;
+    flex-direction: column;
+
+    gap: 6px;
+}
+
+
+.robot-primitive-progress {
+    color: #65718b;
+
+    font-size: 8px;
+    font-weight: 800;
+
+    letter-spacing: 0.11em;
+}
+
+
+.robot-primitive-row {
+    display: flex;
+    align-items: center;
+
+    gap: 10px;
+
+    min-width: 0;
+}
+
+
+.robot-primitive-row strong {
+    overflow: hidden;
+
+    color: #d7ddea;
+
+    font-size: 13px;
+    font-weight: 700;
+
+    letter-spacing: 0.045em;
+
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+
+.robot-primitive-activity {
+    flex: 0 0 auto;
+
+    padding: 5px 7px;
+
+    border-radius: 6px;
+
+    color: #9eabff;
+
+    background:
+        rgba(102, 122, 255, 0.10);
+
+    font-size: 7px;
+    font-weight: 800;
+
+    letter-spacing: 0.09em;
+}
+
+
+.robot-primitive-activity.executing {
+    color: #6ddca7;
+
+    background:
+        rgba(79, 211, 147, 0.10);
+}
+
+
+.robot-primitive-activity.completed {
+    color: #6ddca7;
+
+    background:
+        rgba(79, 211, 147, 0.12);
+}
+
+
+.robot-primitive-activity.grasp_planning,
+.robot-primitive-activity.post_grasp_refinement {
+    color: #dfb968;
+
+    background:
+        rgba(223, 185, 104, 0.10);
+}
+
+
+.robot-module-info {
+    flex: 0 0 auto;
+
+    display: flex;
+    align-items: center;
+
+    gap: 9px;
+
+    padding: 8px 10px;
+
+    color: #b9c3ff;
+
+    background:
+        rgba(98, 119, 255, 0.095);
+
+    border:
+        1px solid
+        rgba(112, 132, 255, 0.15);
+
+    border-radius: 9px;
+}
+
+
+.robot-module-copy {
+    display: flex;
+    flex-direction: column;
+
+    gap: 2px;
+}
+
+
+.robot-module-copy strong {
+    color: #b9c3ff;
+
+    font-size: 8px;
+    font-weight: 800;
+
+    letter-spacing: 0.10em;
+}
+
+
+.robot-module-copy span {
+    color: #7e89a3;
+
+    font-size: 9px;
+}
+
+
+.robot-module-pulse {
+    width: 7px;
+    height: 7px;
+
+    flex: 0 0 auto;
+
+    border-radius: 50%;
+
+    background: #8495ff;
+
+    box-shadow:
+        0 0 13px
+        rgba(111, 132, 255, 0.52);
+
+    animation:
+        graspModulePulse
+        1.15s
+        ease-in-out
+        infinite;
+}
+
+
+@keyframes graspModulePulse {
+
+    50% {
+        opacity: 0.50;
+
+        transform:
+            scale(1.35);
+    }
+
+}
+
+
+@media (
+    max-width: 720px
+) {
+
+    .robot-execution-detail {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+}
 
 /* ============================================================
    ROBOT CAMERA

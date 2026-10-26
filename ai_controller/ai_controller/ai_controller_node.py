@@ -1862,6 +1862,34 @@ class AIControllerNode(Node):
                         ]
                     )
 
+                    primitive_name = (
+                        str(
+                            primitive_step.name
+                        )
+                        .strip()
+                        .lower()
+                    )
+
+                    if (
+                        self.move_robot
+                        and not robot_execution_stage_started
+                    ):
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage="robot_execution",
+                        )
+
+                        robot_execution_stage_started = True
+
+                    emit_pipeline_event(
+                        "robot_execution_detail",
+                        stage="robot_execution",
+                        primitive=primitive_name,
+                        primitive_index=step,
+                        primitive_total=seedo_primitive_count,
+                        activity="preparing",
+                    )
+
                     seedo_inference_input = {
                         "robot_state": robot_state,
                     }
@@ -2042,6 +2070,15 @@ class AIControllerNode(Node):
                                 "ROS executor resumed after grasp planning."
                             )
 
+                    emit_pipeline_event(
+                        "robot_execution_detail",
+                        stage="robot_execution",
+                        primitive=primitive_name,
+                        primitive_index=step,
+                        primitive_total=seedo_primitive_count,
+                        activity="executing",
+                    )
+
                 else:
                     out = self.controller.inference(
                         input_data=[images, states],
@@ -2091,15 +2128,6 @@ class AIControllerNode(Node):
                     self.ai_controller_target == 'seedo_controller'
                     and self.move_robot
                 ):
-
-                    if not robot_execution_stage_started:
-
-                        emit_pipeline_event(
-                            "stage_started",
-                            stage="robot_execution",
-                        )
-
-                        robot_execution_stage_started = True
                     
                     # Start the global robot execution timer only once,
                     # immediately before the first physical action.
@@ -2449,6 +2477,20 @@ class AIControllerNode(Node):
                         primitive_execution_start,
                     )
 
+                if (
+                    self.ai_controller_target
+                    == "seedo_controller"
+                    and self.move_robot
+                ):
+                    emit_pipeline_event(
+                        "robot_execution_detail",
+                        stage="robot_execution",
+                        primitive=primitive_name,
+                        primitive_index=step,
+                        primitive_total=seedo_primitive_count,
+                        activity="completed",
+                    )
+
                 # check if a transiction close->open has been made
                 episode_done = False
 
@@ -2595,6 +2637,52 @@ class AIControllerNode(Node):
             self.current_failure_stage = None
             self.current_failure_step = None
             self.current_failure_action_index = None
+
+            if self.ai_controller_target == 'seedo_controller':
+                while True:
+
+                    next_action = request_user_input(
+                        "Experiment completed. "
+                        "Do you want to continue with another experiment "
+                        "or stop? [continue/stop]: ",
+                        interaction_type="continue_stop",
+                    )
+
+                    normalized_next_action = (
+                        next_action
+                        .strip()
+                        .lower()
+                    )
+
+                    if normalized_next_action in {
+                        "continue",
+                        "c",
+                        "1",
+                        "yes",
+                        "y",
+                    }:
+                        self.get_logger().info(
+                            "Starting a new experiment."
+                        )
+                        break
+
+                    if normalized_next_action in {
+                        "stop",
+                        "s",
+                        "0",
+                        "no",
+                        "n",
+                        "quit",
+                        "q",
+                    }:
+                        self.get_logger().info(
+                            "Experiment session stopped by user."
+                        )
+                        return
+
+                    self.get_logger().warning(
+                        "Invalid choice. Use 'continue' or 'stop'."
+                    )
                     
         
 def spin_executor(node=None, executor=None):
