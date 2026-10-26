@@ -115,8 +115,6 @@ docker run --rm -it \
 ## Terminal 1 — Start the GraspMolmo server
 
 ```bash
-docker exec -it seedo_ros2_container bash
-
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
 
 HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \

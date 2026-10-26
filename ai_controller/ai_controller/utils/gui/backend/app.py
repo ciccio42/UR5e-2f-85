@@ -2,7 +2,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from pathlib import Path
 
-from fastapi.responses import FileResponse
+from fastapi.responses import (
+    FileResponse,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from ai_controller.utils.gui.backend.controllers import list_controllers
@@ -25,6 +28,9 @@ from ai_controller.utils.gui.backend.experiment_runner import (
 )
 from ai_controller.utils.gui.backend.event_manager import (
     EVENT_MANAGER,
+)
+from ai_controller.utils.gui.backend.camera_stream import (
+    FRONT_CAMERA_STREAM,
 )
 
 app = FastAPI(
@@ -244,3 +250,22 @@ def pipeline_test_event(
             exclude_none=True
         )
     )
+
+@app.get("/api/camera/front/stream")
+def front_camera_stream():
+
+    return StreamingResponse(
+        FRONT_CAMERA_STREAM.mjpeg_frames(),
+        media_type=(
+            "multipart/x-mixed-replace; "
+            "boundary=frame"
+        ),
+        headers={
+            "Cache-Control": "no-store",
+        },
+    )
+
+@app.on_event("shutdown")
+def shutdown_front_camera_stream():
+
+    FRONT_CAMERA_STREAM.stop()

@@ -1090,80 +1090,20 @@
                     class="runtime-view"
                 >
 
-                    <div class="visual-sequence">
+                    <div
+                        id="visual-workspace"
+                        class="execution-visual-grid"
+                    >
 
-                        <!-- SETUP -->
+                        <!-- =============================================
+                            LEFT: PERSISTENT DEMONSTRATION ARTIFACTS
+                            ============================================= -->
 
-                        <article
-                            id="visual-setup-card"
-                            class="visual-stage-card active"
-                        >
+                        <div class="visual-artifacts-column">
 
-                            <div class="visual-stage-index">
-                                SETUP
-                            </div>
+                            <article class="visual-artifact-card">
 
-
-                            <div class="visual-stage-body">
-
-                                <div class="visual-stage-heading">
-
-                                    <div>
-
-                                        <span class="visual-stage-kicker">
-                                            EXPERIMENT INITIALIZATION
-                                        </span>
-
-                                        <h4>
-                                            Preparing experiment
-                                        </h4>
-
-                                        <p id="visual-setup-status">
-                                            Initializing robot interfaces and runtime services...
-                                        </p>
-
-                                    </div>
-
-                                    <span class="visual-live-badge">
-                                        PREPARING
-                                    </span>
-
-                                </div>
-
-
-                                <div class="setup-graphic">
-
-                                    <div class="setup-ring ring-one"></div>
-                                    <div class="setup-ring ring-two"></div>
-                                    <div class="setup-ring ring-three"></div>
-
-                                    <div class="setup-core">
-                                        <span>SEEDO</span>
-                                        <small>INITIALIZING</small>
-                                    </div>
-
-                                </div>
-
-                            </div>
-
-                        </article>
-
-
-                        <!-- DEMONSTRATION -->
-
-                        <article
-                            id="visual-demo-card"
-                            class="visual-stage-card hidden"
-                        >
-
-                            <div class="visual-stage-index">
-                                DEMO
-                            </div>
-
-
-                            <div class="visual-stage-body">
-
-                                <div class="visual-stage-heading">
+                                <div class="visual-artifact-header">
 
                                     <div>
 
@@ -1172,14 +1112,17 @@
                                         </span>
 
                                         <h4>
-                                            Demonstration video
+                                            Demonstration
                                         </h4>
 
-                                        <p id="visual-demo-status">
-                                            Waiting for demonstration pipeline...
-                                        </p>
-
                                     </div>
+
+                                    <span
+                                        id="demo-video-state"
+                                        class="artifact-state"
+                                    >
+                                        LOADING
+                                    </span>
 
                                 </div>
 
@@ -1191,74 +1134,152 @@
                                         class="demo-video"
                                         controls
                                         muted
+                                        loop
                                         playsinline
-                                        preload="metadata"
+                                        preload="auto"
                                     ></video>
 
                                 </div>
 
-                            </div>
-
-                        </article>
+                            </article>
 
 
-                        <!-- ERROR -->
+                            <article
+                                id="action-plan-card"
+                                class="visual-artifact-card action-plan-card waiting"
+                            >
 
-                        <article
-                            id="visual-error-card"
-                            class="visual-stage-card visual-error-card hidden"
-                        >
-
-                            <div class="visual-stage-index">
-                                ERROR
-                            </div>
-
-
-                            <div class="visual-stage-body visual-error-body">
-
-                                <div class="visual-error-symbol">
-                                    !
-                                </div>
-
-
-                                <span class="visual-stage-kicker visual-error-kicker">
-                                    EXECUTION FAILED
-                                </span>
-
-
-                                <h4>
-                                    Experiment terminated with an error
-                                </h4>
-
-
-                                <div
-                                    id="visual-error-message"
-                                    class="visual-error-message"
-                                ></div>
-
-
-                                <div class="visual-error-footer">
+                                <div class="visual-artifact-header">
 
                                     <div>
 
-                                        <span>
-                                            RETURN CODE
+                                        <span class="visual-stage-kicker">
+                                            ACTION PLANNER
                                         </span>
 
-                                        <strong id="visual-error-return-code">
-                                            —
-                                        </strong>
+                                        <h4>
+                                            Planned action
+                                        </h4>
 
                                     </div>
 
-
-                                    <button
-                                        id="visual-error-terminal"
-                                        class="secondary-button"
-                                        type="button"
+                                    <span
+                                        id="action-plan-state"
+                                        class="artifact-state"
                                     >
-                                        View Terminal
-                                    </button>
+                                        WAITING
+                                    </span>
+
+                                </div>
+
+
+                                <div
+                                    id="action-plan-text"
+                                    class="action-plan-text"
+                                >
+                                    Waiting for the Action Planner...
+                                </div>
+
+                            </article>
+
+                        </div>
+
+
+                        <!-- =============================================
+                            RIGHT: CURRENT PIPELINE STAGE
+                            ============================================= -->
+
+                        <article
+                            id="current-stage-card"
+                            class="current-stage-card running"
+                        >
+
+                            <div class="current-stage-header">
+
+                                <span
+                                    id="current-stage-index"
+                                    class="current-stage-index"
+                                >
+                                    SETUP
+                                </span>
+
+
+                                <div class="current-stage-copy">
+
+                                    <span
+                                        id="current-stage-kicker"
+                                        class="visual-stage-kicker"
+                                    >
+                                        EXPERIMENT INITIALIZATION
+                                    </span>
+
+                                    <h4 id="current-stage-title">
+                                        Preparing experiment
+                                    </h4>
+
+                                    <p id="current-stage-status">
+                                        Initializing robot interfaces and runtime services...
+                                    </p>
+
+                                </div>
+
+
+                                <span
+                                    id="current-stage-badge"
+                                    class="current-stage-badge"
+                                >
+                                    RUNNING
+                                </span>
+
+                            </div>
+
+
+                            <div
+                                id="current-stage-animation"
+                                class="current-stage-animation"
+                            >
+
+                                <div class="current-stage-ring ring-a"></div>
+                                <div class="current-stage-ring ring-b"></div>
+                                <div class="current-stage-ring ring-c"></div>
+
+                                <div
+                                    id="current-stage-core"
+                                    class="current-stage-core"
+                                >
+                                    ·
+                                </div>
+
+                            </div>
+
+
+                            <div
+                                id="robot-camera-panel"
+                                class="robot-camera-panel hidden"
+                            >
+
+                                <div class="robot-camera-header">
+
+                                    <span>
+                                        FRONT CAMERA
+                                    </span>
+
+                                    <span
+                                        id="robot-camera-state"
+                                        class="camera-live-state"
+                                    >
+                                        CONNECTING
+                                    </span>
+
+                                </div>
+
+
+                                <div class="robot-camera-frame">
+
+                                    <img
+                                        id="robot-camera-stream"
+                                        alt="Robot front camera"
+                                    >
 
                                 </div>
 
@@ -1267,6 +1288,66 @@
                         </article>
 
                     </div>
+
+
+                    <!-- ERROR -->
+
+                    <article
+                        id="visual-error-card"
+                        class="visual-stage-card visual-error-card hidden"
+                    >
+
+                        <div class="visual-stage-index">
+                            ERROR
+                        </div>
+
+
+                        <div class="visual-stage-body visual-error-body">
+
+                            <div class="visual-error-symbol">
+                                !
+                            </div>
+
+                            <span class="visual-stage-kicker visual-error-kicker">
+                                EXECUTION FAILED
+                            </span>
+
+                            <h4>
+                                Experiment terminated with an error
+                            </h4>
+
+                            <div
+                                id="visual-error-message"
+                                class="visual-error-message"
+                            ></div>
+
+                            <div class="visual-error-footer">
+
+                                <div>
+
+                                    <span>
+                                        RETURN CODE
+                                    </span>
+
+                                    <strong id="visual-error-return-code">
+                                        —
+                                    </strong>
+
+                                </div>
+
+                                <button
+                                    id="visual-error-terminal"
+                                    class="secondary-button"
+                                    type="button"
+                                >
+                                    View Terminal
+                                </button>
+
+                            </div>
+
+                        </div>
+
+                    </article>
 
                 </div>
 
@@ -1332,6 +1413,7 @@
                     </div>
 
                 </div>
+
 
             </div>
 

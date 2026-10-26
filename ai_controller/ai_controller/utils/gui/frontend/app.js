@@ -1,287 +1,127 @@
 const elements = {
-    systemStatus:
-        document.getElementById("system-status"),
-
-    statusDot:
-        document.getElementById("status-dot"),
-
-    controllerSelect:
-        document.getElementById("controller-select"),
-
-    executionTarget:
-        document.getElementById("execution-target"),
-
-    taskSelect:
-        document.getElementById("task-select"),
-
-    executionTypeSelect:
-        document.getElementById("execution-type-select"),
-
-    demoTask:
-        document.getElementById("demo-task"),
-
-    demoTaskHint:
-        document.getElementById("demo-task-hint"),
-
-    demoPath:
-        document.getElementById("demo-path"),
-
-    isaacPanel:
-        document.getElementById("isaac-panel"),
-
-    configureScene:
-        document.getElementById("configure-scene"),
-
-    isaacSceneFields:
-        document.getElementById("isaac-scene-fields"),
-
-    sceneTask:
-        document.getElementById("scene-task"),
-
-    sceneTaskHint:
-        document.getElementById("scene-task-hint"),
-
-    sceneTrajectory:
-        document.getElementById("scene-trajectory"),
-
-    sceneTrajectoryHint:
-        document.getElementById("scene-trajectory-hint"),
-
-    precomputedPanel:
-        document.getElementById("precomputed-panel"),
-
-    precomputedPlan:
-        document.getElementById("precomputed-plan"),
-
-    precomputedDemoScene:
-        document.getElementById(
-            "precomputed-demo-scene"
-        ),
-
-    configPath:
-        document.getElementById("config-path"),
-
-    previewStatus:
-        document.getElementById("preview-status"),
-
-    previewTarget:
-        document.getElementById("preview-target"),
-
-    previewTask:
-        document.getElementById("preview-task"),
-
-    previewExecution:
-        document.getElementById("preview-execution"),
-
-    previewPerception:
-        document.getElementById("preview-perception"),
-
-    previewCommand:
-        document.getElementById("preview-command"),
-
-    previewError:
-        document.getElementById("preview-error"),
-
-    pipelineTelemetryStatus:
-        document.getElementById(
-            "pipeline-telemetry-status"
-        ),
-
-    processStatus:
-        document.getElementById("process-status"),
-
-    runtimeIdle:
-        document.getElementById("runtime-idle"),
-
-    runtimeActive:
-        document.getElementById("runtime-active"),
-
-    runtimePid:
-        document.getElementById("runtime-pid"),
-
-    runtimeLiveIndicator:
-        document.getElementById(
-            "runtime-live-indicator"
-        ),
-
-    terminalStreamIndicator:
-        document.getElementById(
-            "terminal-stream-indicator"
-        ),
-
-    runtimeConsole:
-        document.getElementById("runtime-console"),
-
-    runtimeVisualButton:
-        document.getElementById(
-            "runtime-visual-button"
-        ),
-
-    runtimeTerminalButton:
-        document.getElementById(
-            "runtime-terminal-button"
-        ),
-
-    runtimeViewCaption:
-        document.getElementById(
-            "runtime-view-caption"
-        ),
-
-    runtimeVisualView:
-        document.getElementById(
-            "runtime-visual-view"
-        ),
-
-    runtimeTerminalView:
-        document.getElementById(
-            "runtime-terminal-view"
-        ),
-
-    visualSetupCard:
-        document.getElementById(
-            "visual-setup-card"
-        ),
-
-    visualSetupStatus:
-        document.getElementById(
-            "visual-setup-status"
-        ),
-
-    visualDemoCard:
-        document.getElementById(
-            "visual-demo-card"
-        ),
-
-    visualDemoStatus:
-        document.getElementById(
-            "visual-demo-status"
-        ),
-
-    demoVideo:
-        document.getElementById(
-            "demo-video"
-        ),
-
-    visualErrorCard:
-        document.getElementById(
-            "visual-error-card"
-        ),
-
-    visualErrorMessage:
-        document.getElementById(
-            "visual-error-message"
-        ),
-
-    visualErrorReturnCode:
-        document.getElementById(
-            "visual-error-return-code"
-        ),
-
-    visualErrorTerminal:
-        document.getElementById(
-            "visual-error-terminal"
-        ),
-
-    executionErrorOverlay:
-        document.getElementById(
-            "execution-error-overlay"
-        ),
-
-    executionErrorTitle:
-        document.getElementById(
-            "execution-error-title"
-        ),
-
-    executionErrorMessage:
-        document.getElementById(
-            "execution-error-message"
-        ),
-
-    executionErrorReturnCode:
-        document.getElementById(
-            "execution-error-return-code"
-        ),
-
-    executionErrorTerminal:
-        document.getElementById(
-            "execution-error-terminal"
-        ),
-
-    executionErrorClose:
-        document.getElementById(
-            "execution-error-close"
-        ),
-
-    startButton:
-        document.getElementById("start-button"),
-
-    startButtonLabel:
-        document.getElementById(
-            "start-button-label"
-        ),
-
-    stopButton:
-        document.getElementById("stop-button"),
-
-    launchNote:
-        document.getElementById("launch-note"),
-
-    interactionOverlay:
-        document.getElementById(
-            "interaction-overlay"
-        ),
-
-    interactionPrompt:
-        document.getElementById(
-            "interaction-prompt"
-        ),
-
-    interactionValue:
-        document.getElementById(
-            "interaction-value"
-        ),
-
-    interactionResponseField:
-        document.getElementById(
-            "interaction-response-field"
-        ),
-
-    interactionSubmit:
-        document.getElementById(
-            "interaction-submit"
-        ),
-
-    interactionError:
-        document.getElementById(
-            "interaction-error"
-        ),
+    systemStatus: document.getElementById("system-status"),
+    statusDot: document.getElementById("status-dot"),
+
+    controllerSelect: document.getElementById("controller-select"),
+    executionTarget: document.getElementById("execution-target"),
+    taskSelect: document.getElementById("task-select"),
+    executionTypeSelect: document.getElementById("execution-type-select"),
+
+    demoTask: document.getElementById("demo-task"),
+    demoTaskHint: document.getElementById("demo-task-hint"),
+    demoPath: document.getElementById("demo-path"),
+
+    isaacPanel: document.getElementById("isaac-panel"),
+    configureScene: document.getElementById("configure-scene"),
+    isaacSceneFields: document.getElementById("isaac-scene-fields"),
+    sceneTask: document.getElementById("scene-task"),
+    sceneTaskHint: document.getElementById("scene-task-hint"),
+    sceneTrajectory: document.getElementById("scene-trajectory"),
+    sceneTrajectoryHint: document.getElementById("scene-trajectory-hint"),
+
+    precomputedPanel: document.getElementById("precomputed-panel"),
+    precomputedPlan: document.getElementById("precomputed-plan"),
+    precomputedDemoScene: document.getElementById("precomputed-demo-scene"),
+
+    configPath: document.getElementById("config-path"),
+
+    previewStatus: document.getElementById("preview-status"),
+    previewTarget: document.getElementById("preview-target"),
+    previewTask: document.getElementById("preview-task"),
+    previewExecution: document.getElementById("preview-execution"),
+    previewPerception: document.getElementById("preview-perception"),
+    previewCommand: document.getElementById("preview-command"),
+    previewError: document.getElementById("preview-error"),
+
+    pipelineTelemetryStatus: document.getElementById("pipeline-telemetry-status"),
+
+    processStatus: document.getElementById("process-status"),
+    runtimeIdle: document.getElementById("runtime-idle"),
+    runtimeActive: document.getElementById("runtime-active"),
+    runtimePid: document.getElementById("runtime-pid"),
+    runtimeLiveIndicator: document.getElementById("runtime-live-indicator"),
+    terminalStreamIndicator: document.getElementById("terminal-stream-indicator"),
+    runtimeConsole: document.getElementById("runtime-console"),
+
+    runtimeVisualButton: document.getElementById("runtime-visual-button"),
+    runtimeTerminalButton: document.getElementById("runtime-terminal-button"),
+    runtimeViewCaption: document.getElementById("runtime-view-caption"),
+    runtimeVisualView: document.getElementById("runtime-visual-view"),
+    runtimeTerminalView: document.getElementById("runtime-terminal-view"),
+
+    visualWorkspace: document.getElementById("visual-workspace"),
+
+    demoVideo: document.getElementById("demo-video"),
+    demoVideoState: document.getElementById("demo-video-state"),
+
+    actionPlanCard: document.getElementById("action-plan-card"),
+    actionPlanState: document.getElementById("action-plan-state"),
+    actionPlanText: document.getElementById("action-plan-text"),
+
+    currentStageCard: document.getElementById("current-stage-card"),
+    currentStageIndex: document.getElementById("current-stage-index"),
+    currentStageKicker: document.getElementById("current-stage-kicker"),
+    currentStageTitle: document.getElementById("current-stage-title"),
+    currentStageStatus: document.getElementById("current-stage-status"),
+    currentStageBadge: document.getElementById("current-stage-badge"),
+    currentStageAnimation: document.getElementById("current-stage-animation"),
+    currentStageCore: document.getElementById("current-stage-core"),
+
+    robotCameraPanel: document.getElementById("robot-camera-panel"),
+    robotCameraState: document.getElementById("robot-camera-state"),
+    robotCameraStream: document.getElementById("robot-camera-stream"),
+
+    visualErrorCard: document.getElementById("visual-error-card"),
+    visualErrorMessage: document.getElementById("visual-error-message"),
+    visualErrorReturnCode: document.getElementById("visual-error-return-code"),
+    visualErrorTerminal: document.getElementById("visual-error-terminal"),
+
+    executionErrorOverlay: document.getElementById("execution-error-overlay"),
+    executionErrorTitle: document.getElementById("execution-error-title"),
+    executionErrorMessage: document.getElementById("execution-error-message"),
+    executionErrorReturnCode: document.getElementById("execution-error-return-code"),
+    executionErrorTerminal: document.getElementById("execution-error-terminal"),
+    executionErrorClose: document.getElementById("execution-error-close"),
+
+    startButton: document.getElementById("start-button"),
+    startButtonLabel: document.getElementById("start-button-label"),
+    stopButton: document.getElementById("stop-button"),
+    launchNote: document.getElementById("launch-note"),
+
+    interactionOverlay: document.getElementById("interaction-overlay"),
+    interactionPrompt: document.getElementById("interaction-prompt"),
+    interactionValue: document.getElementById("interaction-value"),
+    interactionResponseField: document.getElementById("interaction-response-field"),
+    interactionSubmit: document.getElementById("interaction-submit"),
+    interactionError: document.getElementById("interaction-error"),
 };
 
 
 const dashboardState = {
     options: null,
-
     preview: null,
-
     previewTimer: null,
 
     processStatus: "idle",
 
     lastLogSequence: 0,
-
     lastPipelineSequence: 0,
 
     currentInteractionId: null,
-
     currentInteractionType: "text",
 
     pollTimer: null,
-
     runtimeView: "visual",
 
     activeExperiment: null,
-
     lastErrorSignature: null,
+
+    visualEventQueue: [],
+    visualEventProcessing: false,
+    visualQueueGeneration: 0,
+    activeVisualStage: null,
+
+    cameraStreamActive: false,
 };
 
 
@@ -290,40 +130,25 @@ const dashboardState = {
    ============================================================ */
 
 
-function populateSelect(
-    select,
-    values,
-    selectedId,
-) {
+function populateSelect(select, values, selectedId) {
     select.innerHTML = "";
 
     for (const value of values) {
-        const option =
-            document.createElement("option");
+        const option = document.createElement("option");
 
-        option.value =
-            value.id;
+        option.value = value.id;
+        option.textContent = value.label;
 
-        option.textContent =
-            value.label;
-
-        if (
-            value.id
-            === selectedId
-        ) {
+        if (value.id === selectedId) {
             option.selected = true;
         }
 
-        select.appendChild(
-            option
-        );
+        select.appendChild(option);
     }
 }
 
 
-function formatExecutionMode(
-    mode,
-) {
+function formatExecutionMode(mode) {
     if (mode === "isaac") {
         return "Isaac Sim";
     }
@@ -336,12 +161,8 @@ function formatExecutionMode(
 }
 
 
-function setConnectionState(
-    online,
-    message,
-) {
-    elements.systemStatus.textContent =
-        message;
+function setConnectionState(online, message) {
+    elements.systemStatus.textContent = message;
 
     elements.statusDot.classList.remove(
         "loading",
@@ -357,10 +178,7 @@ function setConnectionState(
 }
 
 
-function setPanelVisible(
-    element,
-    visible,
-) {
+function setPanelVisible(element, visible) {
     element.classList.toggle(
         "visible",
         visible,
@@ -379,100 +197,67 @@ function getSelectedTaskDefinition() {
     }
 
     return dashboardState.options.tasks.find(
-        task =>
-            task.id
-            === elements.taskSelect.value
+        task => task.id === elements.taskSelect.value
     );
 }
 
 
 function updateTaskDependentFields() {
-    const task =
-        getSelectedTaskDefinition();
+    const task = getSelectedTaskDefinition();
 
     if (!task) {
         return;
     }
 
+    const demo = task.demo_task;
 
-    const demo =
-        task.demo_task;
+    elements.demoTask.min = demo.minimum;
+    elements.demoTask.max = demo.maximum;
 
-
-    elements.demoTask.min =
-        demo.minimum;
-
-    elements.demoTask.max =
-        demo.maximum;
-
-
-    const demoValue =
-        Number(
-            elements.demoTask.value
-        );
-
+    const demoValue = Number(
+        elements.demoTask.value
+    );
 
     if (
         !Number.isFinite(demoValue)
         || demoValue < demo.minimum
         || demoValue > demo.maximum
     ) {
-        elements.demoTask.value =
-            demo.default;
+        elements.demoTask.value = demo.default;
     }
-
 
     elements.demoTaskHint.textContent =
         `Allowed range: ${demo.minimum} – ${demo.maximum}`;
 
-
-    const scene =
-        task.isaac_scene;
-
+    const scene = task.isaac_scene;
 
     if (!scene) {
         return;
     }
 
-
-    elements.sceneTask.min =
-        scene.task.minimum;
-
-    elements.sceneTask.max =
-        scene.task.maximum;
-
-    elements.sceneTask.value =
-        scene.task.default;
-
+    elements.sceneTask.min = scene.task.minimum;
+    elements.sceneTask.max = scene.task.maximum;
+    elements.sceneTask.value = scene.task.default;
 
     elements.sceneTaskHint.textContent =
         `Allowed range: ${scene.task.minimum} – ${scene.task.maximum}`;
 
-
-    elements.sceneTrajectory.min =
-        scene.trajectory.minimum;
-
-    elements.sceneTrajectory.max =
-        scene.trajectory.maximum;
-
-    elements.sceneTrajectory.value =
-        scene.trajectory.default;
-
+    elements.sceneTrajectory.min = scene.trajectory.minimum;
+    elements.sceneTrajectory.max = scene.trajectory.maximum;
+    elements.sceneTrajectory.value = scene.trajectory.default;
 
     if (
         scene.trajectory.minimum
         === scene.trajectory.maximum
     ) {
-        elements.sceneTrajectory.disabled =
-            true;
+        elements.sceneTrajectory.disabled = true;
 
         elements.sceneTrajectoryHint.textContent =
             `Fixed value: ${scene.trajectory.default}`;
     }
 
     else {
-        elements.sceneTrajectory.disabled =
-            false;
+        elements.sceneTrajectory.disabled = false;
 
         elements.sceneTrajectoryHint.textContent =
             `Allowed range: ${scene.trajectory.minimum} – ${scene.trajectory.maximum}`;
@@ -485,19 +270,16 @@ function updateIsaacVisibility() {
         return;
     }
 
-
     const isIsaac =
         dashboardState.options
             .environment
             .execution_mode
         === "isaac";
 
-
     setPanelVisible(
         elements.isaacPanel,
         isIsaac,
     );
-
 
     setPanelVisible(
         elements.isaacSceneFields,
@@ -514,7 +296,6 @@ function updateExecutionTypeVisibility() {
         elements.executionTypeSelect.value
         === "precomputed";
 
-
     setPanelVisible(
         elements.precomputedPanel,
         precomputed,
@@ -526,16 +307,13 @@ function buildRequest() {
     const demoPath =
         elements.demoPath.value.trim();
 
-
     const precomputedPlan =
         elements.precomputedPlan.value.trim();
-
 
     const precomputedDemoScene =
         elements.precomputedDemoScene
             .value
             .trim();
-
 
     return {
         controller:
@@ -601,20 +379,16 @@ function updateStartAvailability() {
     const valid =
         dashboardState.preview !== null;
 
-
     const busy =
         processIsBusy();
 
-
     elements.startButton.disabled =
         !valid || busy;
-
 
     elements.stopButton.classList.toggle(
         "hidden",
         !busy,
     );
-
 
     if (busy) {
         elements.launchNote.textContent =
@@ -623,14 +397,12 @@ function updateStartAvailability() {
         return;
     }
 
-
     if (valid) {
         elements.launchNote.textContent =
             "Configuration valid. Ready to launch.";
 
         return;
     }
-
 
     elements.launchNote.textContent =
         "Fix the configuration before launching.";
@@ -641,59 +413,45 @@ function setPreviewLoading() {
     dashboardState.preview =
         null;
 
-
     elements.previewStatus.textContent =
         "VALIDATING";
 
-
     elements.previewStatus.className =
         "preview-badge loading";
-
 
     elements.previewError.classList.remove(
         "visible"
     );
 
-
     updateStartAvailability();
 }
 
 
-function setPreviewError(
-    message,
-) {
+function setPreviewError(message) {
     dashboardState.preview =
         null;
-
 
     elements.previewStatus.textContent =
         "INVALID";
 
-
     elements.previewStatus.className =
         "preview-badge invalid";
 
-
     elements.previewError.textContent =
         message;
-
 
     elements.previewError.classList.add(
         "visible"
     );
 
-
     elements.previewCommand.textContent =
         "Configuration is not valid.";
-
 
     updateStartAvailability();
 }
 
 
-function renderPreview(
-    preview,
-) {
+function renderPreview(preview) {
     dashboardState.preview =
         preview;
 
@@ -704,37 +462,29 @@ function renderPreview(
     elements.previewStatus.textContent =
         "READY";
 
-
     elements.previewStatus.className =
         "preview-badge valid";
-
 
     elements.previewError.classList.remove(
         "visible"
     );
-
 
     elements.previewTarget.textContent =
         formatExecutionMode(
             preview.execution_mode
         );
 
-
     elements.previewTask.textContent =
         preview.task;
-
 
     elements.previewExecution.textContent =
         preview.execution_type;
 
-
     elements.previewPerception.textContent =
         preview.perception_mode;
 
-
     elements.previewCommand.textContent =
         preview.shell_command;
-
 
     updateStartAvailability();
 }
@@ -745,9 +495,7 @@ async function refreshPreview() {
         return;
     }
 
-
     setPreviewLoading();
-
 
     try {
         const response =
@@ -768,10 +516,8 @@ async function refreshPreview() {
                 }
             );
 
-
         const payload =
             await response.json();
-
 
         if (!response.ok) {
             throw new Error(
@@ -779,7 +525,6 @@ async function refreshPreview() {
                 ?? "Invalid configuration."
             );
         }
-
 
         renderPreview(
             payload
@@ -799,7 +544,6 @@ function schedulePreview() {
         dashboardState.previewTimer
     );
 
-
     dashboardState.previewTimer =
         setTimeout(
             refreshPreview,
@@ -813,21 +557,16 @@ function schedulePreview() {
    ============================================================ */
 
 
-function getPipelineStage(
-    stageName,
-) {
+function getPipelineStage(stageName) {
     return document.querySelector(
         `.pipeline-stage[data-stage="${stageName}"]`
     );
 }
 
 
-function applyPipelineMode(
-    perceptionMode,
-) {
+function applyPipelineMode(perceptionMode) {
     const generalized =
         perceptionMode === "generalized";
-
 
     document
         .querySelectorAll(
@@ -840,12 +579,10 @@ function applyPipelineMode(
                         ".stage-text span"
                     );
 
-
                 if (generalized) {
                     stage.classList.remove(
                         "skipped"
                     );
-
 
                     if (
                         !stage.classList.contains(
@@ -864,7 +601,6 @@ function applyPipelineMode(
                             "waiting"
                         );
 
-
                         if (status) {
                             status.textContent =
                                 "Waiting";
@@ -881,11 +617,9 @@ function applyPipelineMode(
                         "artifact-pulse",
                     );
 
-
                     stage.classList.add(
                         "skipped"
                     );
-
 
                     if (status) {
                         status.textContent =
@@ -894,7 +628,6 @@ function applyPipelineMode(
                 }
             }
         );
-
 
     document
         .querySelectorAll(
@@ -907,7 +640,6 @@ function applyPipelineMode(
                     !generalized,
                 );
 
-
                 if (!generalized) {
                     link.classList.remove(
                         "active",
@@ -917,7 +649,6 @@ function applyPipelineMode(
             }
         );
 
-
     updatePipelineLinks();
 }
 
@@ -925,7 +656,6 @@ function applyPipelineMode(
 function resetPipelineMonitor() {
     dashboardState.lastPipelineSequence =
         0;
-
 
     document
         .querySelectorAll(
@@ -942,17 +672,14 @@ function resetPipelineMonitor() {
                     "artifact-pulse",
                 );
 
-
                 stage.classList.add(
                     "waiting"
                 );
-
 
                 const status =
                     stage.querySelector(
                         ".stage-text span"
                     );
-
 
                 if (status) {
                     status.textContent =
@@ -960,7 +687,6 @@ function resetPipelineMonitor() {
                 }
             }
         );
-
 
     document
         .querySelectorAll(
@@ -976,15 +702,12 @@ function resetPipelineMonitor() {
             }
         );
 
-
     elements.pipelineTelemetryStatus.textContent =
         "WAITING FOR TELEMETRY";
-
 
     elements.pipelineTelemetryStatus.classList.remove(
         "live"
     );
-
 
     applyPipelineMode(
         dashboardState.preview
@@ -1003,14 +726,12 @@ function updatePipelineLinks() {
         )
         === "generalized";
 
-
     document
         .querySelectorAll(
             ".pipeline-link"
         )
         .forEach(
             link => {
-
                 const generalizedOnly =
                     (
                         link.dataset
@@ -1018,12 +739,10 @@ function updatePipelineLinks() {
                         === "true"
                     );
 
-
                 link.classList.remove(
                     "active",
                     "completed",
                 );
-
 
                 if (
                     generalizedOnly
@@ -1036,28 +755,26 @@ function updatePipelineLinks() {
                     return;
                 }
 
-
                 link.classList.remove(
                     "skipped"
                 );
-
 
                 const from =
                     getPipelineStage(
                         link.dataset.from
                     );
 
-
                 const to =
                     getPipelineStage(
                         link.dataset.to
                     );
 
-
-                if (!from || !to) {
+                if (
+                    !from
+                    || !to
+                ) {
                     return;
                 }
-
 
                 if (
                     from.classList.contains(
@@ -1068,7 +785,6 @@ function updatePipelineLinks() {
                         "completed"
                     );
                 }
-
 
                 if (
                     to.classList.contains(
@@ -1084,15 +800,11 @@ function updatePipelineLinks() {
 }
 
 
-function setPipelineStageState(
-    stageName,
-    state,
-) {
+function setPipelineStageState(stageName, state) {
     const stage =
         getPipelineStage(
             stageName
         );
-
 
     if (!stage) {
         console.warn(
@@ -1103,11 +815,9 @@ function setPipelineStageState(
         return;
     }
 
-
     stage.classList.remove(
         "skipped"
     );
-
 
     stage.classList.remove(
         "waiting",
@@ -1116,17 +826,14 @@ function setPipelineStageState(
         "failed",
     );
 
-
     stage.classList.add(
         state
     );
-
 
     const status =
         stage.querySelector(
             ".stage-text span"
         );
-
 
     if (status) {
         switch (state) {
@@ -1152,37 +859,29 @@ function setPipelineStageState(
         }
     }
 
-
     updatePipelineLinks();
 }
 
 
-function pulsePipelineArtifact(
-    stageName,
-) {
+function pulsePipelineArtifact(stageName) {
     const stage =
         getPipelineStage(
             stageName
         );
 
-
     if (!stage) {
         return;
     }
-
 
     stage.classList.remove(
         "artifact-pulse"
     );
 
-
     void stage.offsetWidth;
-
 
     stage.classList.add(
         "artifact-pulse"
     );
-
 
     setTimeout(
         () => {
@@ -1195,54 +894,35 @@ function pulsePipelineArtifact(
 }
 
 
-function handlePipelineEvent(
-    event,
-) {
+function handlePipelineEvent(event) {
     dashboardState.lastPipelineSequence =
         Math.max(
             dashboardState.lastPipelineSequence,
             event.sequence ?? 0,
         );
 
-
     elements.pipelineTelemetryStatus.textContent =
         "TELEMETRY LIVE";
-
 
     elements.pipelineTelemetryStatus.classList.add(
         "live"
     );
 
-
     if (
         event.event === "stage_started"
         && event.stage
     ) {
-        const demonstrationStages = [
-            "keyframe_selector",
-            "visual_prompter",
-            "demo_structured_scene_builder",
-            "action_planner",
-        ];
-
-
-        if (
-            demonstrationStages.includes(
-                event.stage
-            )
-        ) {
-            showDemoVisual();
-        }
-
-
         setPipelineStageState(
             event.stage,
             "running",
         );
 
+        enqueueVisualPipelineEvent(
+            event
+        );
+
         return;
     }
-
 
     if (
         event.event === "stage_completed"
@@ -1253,9 +933,12 @@ function handlePipelineEvent(
             "completed",
         );
 
+        enqueueVisualPipelineEvent(
+            event
+        );
+
         return;
     }
-
 
     if (
         (
@@ -1269,9 +952,12 @@ function handlePipelineEvent(
             "failed",
         );
 
+        enqueueVisualPipelineEvent(
+            event
+        );
+
         return;
     }
-
 
     if (
         event.event === "artifact_created"
@@ -1280,6 +966,15 @@ function handlePipelineEvent(
         pulsePipelineArtifact(
             event.stage
         );
+
+        if (
+            event.artifact_type
+            === "action_plan"
+        ) {
+            renderActionPlanArtifact(
+                event
+            );
+        }
     }
 }
 
@@ -1291,15 +986,12 @@ async function pollPipelineEvents() {
                 `/api/pipeline/events?after_sequence=${dashboardState.lastPipelineSequence}`
             );
 
-
         if (!response.ok) {
             return;
         }
 
-
         const payload =
             await response.json();
-
 
         for (
             const event
@@ -1325,79 +1017,435 @@ async function pollPipelineEvents() {
    ============================================================ */
 
 
-function setRuntimeView(
-    mode,
-) {
+const VISUAL_STAGE_DEFINITIONS = {
+    keyframe_selector: {
+        index: "01",
+
+        kicker:
+            "DEMONSTRATION UNDERSTANDING",
+
+        title:
+            "Keyframe Selector",
+
+        running:
+            "Selecting the most informative frames from the demonstration...",
+
+        completed:
+            "Keyframe selection completed.",
+    },
+
+    visual_prompter: {
+        index: "02",
+
+        kicker:
+            "DEMONSTRATION UNDERSTANDING",
+
+        title:
+            "Visual Prompter",
+
+        running:
+            "Tracking and grounding the relevant objects in the demonstration...",
+
+        completed:
+            "Visual prompting completed.",
+    },
+
+    demo_structured_scene_builder: {
+        index: "03",
+
+        kicker:
+            "DEMONSTRATION UNDERSTANDING",
+
+        title:
+            "Demo Structured Scene",
+
+        running:
+            "Building the structured representation of the demonstrated scene...",
+
+        completed:
+            "Demonstration scene representation completed.",
+    },
+
+    action_planner: {
+        index: "04",
+
+        kicker:
+            "DEMONSTRATION UNDERSTANDING",
+
+        title:
+            "Action Planner",
+
+        running:
+            "Inferring the task and generating the action plan...",
+
+        completed:
+            "Action planning completed.",
+    },
+
+    scene_perceiver: {
+        index: "05",
+
+        kicker:
+            "RUNTIME UNDERSTANDING",
+
+        title:
+            "Scene Perceiver",
+
+        running:
+            "Perceiving the current robot workspace...",
+
+        completed:
+            "Runtime scene perception completed.",
+    },
+
+    scene_interpreter: {
+        index: "06",
+
+        kicker:
+            "RUNTIME UNDERSTANDING",
+
+        title:
+            "Scene Interpreter",
+
+        running:
+            "Interpreting objects, attributes and spatial relationships...",
+
+        completed:
+            "Runtime scene interpretation completed.",
+    },
+
+    runtime_structured_scene_builder: {
+        index: "07",
+
+        kicker:
+            "RUNTIME UNDERSTANDING",
+
+        title:
+            "Runtime Structured Scene",
+
+        running:
+            "Building the structured representation of the runtime scene...",
+
+        completed:
+            "Runtime scene representation completed.",
+    },
+
+    structural_matcher: {
+        index: "08",
+
+        kicker:
+            "TASK TRANSFER",
+
+        title:
+            "Structural Matcher",
+
+        running:
+            "Matching the demonstrated scene structure to the runtime scene...",
+
+        completed:
+            "Structural matching completed.",
+    },
+
+    replicability_checker: {
+        index: "09",
+
+        kicker:
+            "TASK TRANSFER",
+
+        title:
+            "Replicability Checker",
+
+        running:
+            "Checking whether the demonstrated task can be reproduced...",
+
+        completed:
+            "Task replicability confirmed.",
+    },
+
+    lmp_generator: {
+        index: "10",
+
+        kicker:
+            "MOTION GENERATION",
+
+        title:
+            "LMP Generator",
+
+        running:
+            "Generating the executable primitive plan...",
+
+        completed:
+            "Primitive plan generated.",
+    },
+
+    robot_execution: {
+        index: "11",
+
+        kicker:
+            "PHYSICAL EXECUTION",
+
+        title:
+            "Robot Execution",
+
+        running:
+            "Executing the generated plan on the robot...",
+
+        completed:
+            "Robot execution completed.",
+    },
+};
+
+
+const VISUAL_COMPLETION_HOLD_MS =
+    650;
+
+
+function setRuntimeView(mode) {
     dashboardState.runtimeView =
         mode;
 
-
     const visual =
         mode === "visual";
-
 
     elements.runtimeVisualView.classList.toggle(
         "hidden",
         !visual,
     );
 
-
     elements.runtimeTerminalView.classList.toggle(
         "hidden",
         visual,
     );
-
 
     elements.runtimeVisualButton.classList.toggle(
         "active",
         visual,
     );
 
-
     elements.runtimeTerminalButton.classList.toggle(
         "active",
         !visual,
     );
 
-
     elements.runtimeViewCaption.textContent =
         visual
-            ? "Visual execution timeline"
+            ? "Live experiment visualization"
             : "Raw SeeDo runtime output";
 }
 
 
-function resetRuntimeVisual() {
+function delay(milliseconds) {
+    return new Promise(
+        resolve => {
+            setTimeout(
+                resolve,
+                milliseconds,
+            );
+        }
+    );
+}
 
-    elements.visualSetupCard.classList.remove(
-        "hidden",
+
+function getVisualStageDefinition(stageName) {
+    return (
+        VISUAL_STAGE_DEFINITIONS[
+            stageName
+        ]
+        ?? {
+            index: "—",
+
+            kicker:
+                "SEEDO PIPELINE",
+
+            title:
+                stageName
+                    ?.replaceAll(
+                        "_",
+                        " "
+                    )
+                ?? "Pipeline stage",
+
+            running:
+                "Processing pipeline stage...",
+
+            completed:
+                "Pipeline stage completed.",
+        }
+    );
+}
+
+
+function stopRobotCameraStream() {
+    dashboardState.cameraStreamActive =
+        false;
+
+    elements.robotCameraStream.removeAttribute(
+        "src"
+    );
+
+    elements.robotCameraState.textContent =
+        "OFFLINE";
+
+    elements.robotCameraState.classList.remove(
+        "live",
+        "failed",
+    );
+}
+
+
+function startRobotCameraStream() {
+    if (
+        dashboardState.cameraStreamActive
+    ) {
+        return;
+    }
+
+    dashboardState.cameraStreamActive =
+        true;
+
+    elements.robotCameraState.textContent =
+        "CONNECTING";
+
+    elements.robotCameraState.classList.remove(
+        "live",
+        "failed",
+    );
+
+    elements.robotCameraStream.src =
+        (
+            "/api/camera/front/stream"
+            + `?run=${Date.now()}`
+        );
+}
+
+
+function setCurrentStageState(
+    stageName,
+    state,
+    message = null,
+) {
+    const definition =
+        getVisualStageDefinition(
+            stageName
+        );
+
+    dashboardState.activeVisualStage =
+        stageName;
+
+    elements.currentStageIndex.textContent =
+        definition.index;
+
+    elements.currentStageKicker.textContent =
+        definition.kicker;
+
+    elements.currentStageTitle.textContent =
+        definition.title;
+
+    elements.currentStageCard.classList.remove(
+        "waiting",
+        "running",
         "completed",
         "failed",
     );
 
-    elements.visualSetupCard.classList.add(
-        "active"
+    elements.currentStageCard.classList.add(
+        state
     );
 
+    if (
+        state === "running"
+    ) {
+        elements.currentStageBadge.textContent =
+            "RUNNING";
 
-    elements.visualSetupStatus.textContent =
-        "Initializing robot interfaces and runtime services...";
+        elements.currentStageStatus.textContent =
+            message
+            ?? definition.running;
+
+        elements.currentStageCore.textContent =
+            definition.index;
+    }
+
+    else if (
+        state === "completed"
+    ) {
+        elements.currentStageBadge.textContent =
+            "COMPLETED";
+
+        elements.currentStageStatus.textContent =
+            message
+            ?? definition.completed;
+
+        elements.currentStageCore.textContent =
+            "✓";
+    }
+
+    else if (
+        state === "failed"
+    ) {
+        elements.currentStageBadge.textContent =
+            "FAILED";
+
+        elements.currentStageStatus.textContent =
+            message
+            ?? "The current pipeline stage failed.";
+
+        elements.currentStageCore.textContent =
+            "!";
+    }
+
+    else {
+        elements.currentStageBadge.textContent =
+            "WAITING";
+
+        elements.currentStageStatus.textContent =
+            message
+            ?? "Waiting for pipeline telemetry...";
+
+        elements.currentStageCore.textContent =
+            definition.index;
+    }
+
+    const robotExecution =
+        stageName
+        === "robot_execution";
+
+    elements.currentStageAnimation.classList.toggle(
+        "hidden",
+        robotExecution,
+    );
+
+    elements.robotCameraPanel.classList.toggle(
+        "hidden",
+        !robotExecution,
+    );
+
+    if (robotExecution) {
+        startRobotCameraStream();
+    }
+
+    else {
+        stopRobotCameraStream();
+    }
+}
 
 
-    elements.visualDemoCard.classList.add(
+function resetRuntimeVisual() {
+    dashboardState.visualEventQueue =
+        [];
+
+    dashboardState.visualEventProcessing =
+        false;
+
+    dashboardState.visualQueueGeneration +=
+        1;
+
+    dashboardState.activeVisualStage =
+        null;
+
+    elements.visualWorkspace.classList.remove(
         "hidden"
     );
-
-    elements.visualDemoCard.classList.remove(
-        "active",
-        "completed",
-        "failed",
-    );
-
-
-    elements.visualDemoStatus.textContent =
-        "Waiting for demonstration pipeline...";
-
 
     elements.visualErrorCard.classList.add(
         "hidden"
@@ -1408,14 +1456,73 @@ function resetRuntimeVisual() {
         "failed",
     );
 
-
     elements.visualErrorMessage.textContent =
         "";
-
 
     elements.visualErrorReturnCode.textContent =
         "—";
 
+    elements.demoVideoState.textContent =
+        "LOADING";
+
+    elements.demoVideoState.className =
+        "artifact-state loading";
+
+    elements.actionPlanCard.classList.remove(
+        "ready",
+        "failed",
+    );
+
+    elements.actionPlanCard.classList.add(
+        "waiting"
+    );
+
+    elements.actionPlanState.textContent =
+        "WAITING";
+
+    elements.actionPlanState.className =
+        "artifact-state";
+
+    elements.actionPlanText.textContent =
+        "Waiting for the Action Planner...";
+
+    elements.currentStageCard.classList.remove(
+        "waiting",
+        "completed",
+        "failed",
+    );
+
+    elements.currentStageCard.classList.add(
+        "running"
+    );
+
+    elements.currentStageIndex.textContent =
+        "SETUP";
+
+    elements.currentStageKicker.textContent =
+        "EXPERIMENT INITIALIZATION";
+
+    elements.currentStageTitle.textContent =
+        "Preparing experiment";
+
+    elements.currentStageStatus.textContent =
+        "Initializing robot interfaces and runtime services...";
+
+    elements.currentStageBadge.textContent =
+        "RUNNING";
+
+    elements.currentStageCore.textContent =
+        "·";
+
+    elements.currentStageAnimation.classList.remove(
+        "hidden"
+    );
+
+    elements.robotCameraPanel.classList.add(
+        "hidden"
+    );
+
+    stopRobotCameraStream();
 
     elements.demoVideo.pause();
 
@@ -1428,85 +1535,180 @@ function resetRuntimeVisual() {
 
 
 function prepareDemoVideo() {
-
-    if (!dashboardState.activeExperiment) {
+    if (
+        !dashboardState.activeExperiment
+    ) {
         return;
     }
 
+    elements.demoVideoState.textContent =
+        "LOADING";
 
-    elements.visualDemoStatus.textContent =
-        "Loading demonstration video...";
-
+    elements.demoVideoState.className =
+        "artifact-state loading";
 
     elements.demoVideo.src =
         `/api/experiment/demo-video?run=${Date.now()}`;
-
 
     elements.demoVideo.load();
 }
 
 
-function showDemoVisual() {
+function renderActionPlanArtifact(event) {
+    const content =
+        (
+            event.content
+            ?? event.natural_language_plan
+            ?? ""
+        )
+            .toString()
+            .trim();
 
-    const alreadyVisible =
-        !elements.visualDemoCard.classList.contains(
-            "hidden"
-        );
+    if (!content) {
+        return;
+    }
 
+    elements.actionPlanText.textContent =
+        content;
 
-    elements.visualSetupCard.classList.remove(
-        "active",
+    elements.actionPlanState.textContent =
+        "READY";
+
+    elements.actionPlanState.className =
+        "artifact-state ready";
+
+    elements.actionPlanCard.classList.remove(
+        "waiting",
         "failed",
     );
 
-    elements.visualSetupCard.classList.add(
-        "completed"
+    elements.actionPlanCard.classList.add(
+        "ready"
+    );
+}
+
+
+function enqueueVisualPipelineEvent(event) {
+    dashboardState.visualEventQueue.push(
+        event
     );
 
-
-    elements.visualSetupStatus.textContent =
-        "Demonstration input ready.";
-
-
-    elements.visualDemoCard.classList.remove(
-        "hidden",
-        "completed",
-        "failed",
-    );
-
-    elements.visualDemoCard.classList.add(
-        "active"
-    );
+    processVisualEventQueue();
+}
 
 
-    setRuntimeView(
-        "visual"
-    );
+async function processVisualEventQueue() {
+    if (
+        dashboardState.visualEventProcessing
+    ) {
+        return;
+    }
 
+    dashboardState.visualEventProcessing =
+        true;
 
-    if (!alreadyVisible) {
-        elements.demoVideo
-            .play()
-            .catch(
-                () => {
-                    // Browser autoplay may be blocked.
-                }
-            );
+    const generation =
+        dashboardState.visualQueueGeneration;
+
+    try {
+        while (
+            dashboardState.visualEventQueue.length
+            > 0
+        ) {
+            if (
+                generation
+                !== dashboardState.visualQueueGeneration
+            ) {
+                break;
+            }
+
+            const event =
+                dashboardState
+                    .visualEventQueue
+                    .shift();
+
+            if (
+                !event
+                || !event.stage
+            ) {
+                continue;
+            }
+
+            if (
+                event.event
+                === "stage_started"
+            ) {
+                setCurrentStageState(
+                    event.stage,
+                    "running",
+                );
+
+                setRuntimeView(
+                    "visual"
+                );
+
+                continue;
+            }
+
+            if (
+                event.event
+                === "stage_completed"
+            ) {
+                setCurrentStageState(
+                    event.stage,
+                    "completed",
+                );
+
+                await delay(
+                    VISUAL_COMPLETION_HOLD_MS
+                );
+
+                continue;
+            }
+
+            if (
+                event.event
+                === "stage_failed"
+                ||
+                event.event
+                === "pipeline_error"
+            ) {
+                setCurrentStageState(
+                    event.stage,
+                    "failed",
+                    event.message
+                    ?? null,
+                );
+
+                await delay(
+                    VISUAL_COMPLETION_HOLD_MS
+                );
+            }
+        }
+    }
+
+    finally {
+        dashboardState.visualEventProcessing =
+            false;
+
+        if (
+            dashboardState.visualEventQueue.length
+            > 0
+        ) {
+            processVisualEventQueue();
+        }
     }
 }
 
 
 function hideExecutionError() {
-
     elements.executionErrorOverlay.classList.remove(
         "visible"
     );
 }
 
 
-function showVisualError(
-    process,
-) {
+function showVisualError(process) {
     const message =
         process.last_error
         ??
@@ -1515,35 +1717,32 @@ function showVisualError(
             + `with code ${process.return_code ?? "unknown"}.`
         );
 
+    dashboardState.visualEventQueue =
+        [];
 
-    elements.visualSetupCard.classList.add(
+    dashboardState.visualQueueGeneration +=
+        1;
+
+    stopRobotCameraStream();
+
+    elements.visualWorkspace.classList.add(
         "hidden"
     );
-
-
-    elements.visualDemoCard.classList.add(
-        "hidden"
-    );
-
 
     elements.visualErrorMessage.textContent =
         message;
-
 
     elements.visualErrorReturnCode.textContent =
         process.return_code
         ?? "—";
 
-
     elements.visualErrorCard.classList.remove(
         "hidden"
     );
 
-
     elements.visualErrorCard.classList.add(
         "failed"
     );
-
 
     setRuntimeView(
         "visual"
@@ -1551,9 +1750,7 @@ function showVisualError(
 }
 
 
-function showExecutionError(
-    process,
-) {
+function showExecutionError(process) {
     const message =
         process.last_error
         ??
@@ -1562,19 +1759,15 @@ function showExecutionError(
             + `with code ${process.return_code ?? "unknown"}.`
         );
 
-
     elements.executionErrorTitle.textContent =
         "Experiment failed";
-
 
     elements.executionErrorMessage.textContent =
         message;
 
-
     elements.executionErrorReturnCode.textContent =
         process.return_code
         ?? "—";
-
 
     elements.executionErrorOverlay.classList.add(
         "visible"
@@ -1587,44 +1780,35 @@ function showExecutionError(
    ============================================================ */
 
 
-function updateProcessStatus(
-    process,
-) {
+function updateProcessStatus(process) {
     const status =
-        process.status ?? "idle";
-
+        process.status
+        ?? "idle";
 
     dashboardState.processStatus =
         status;
 
-
     elements.processStatus.textContent =
         status.toUpperCase();
-
 
     elements.processStatus.className =
         `process-badge ${status}`;
 
-
     const showRuntime =
         status !== "idle";
-
 
     elements.runtimeIdle.classList.toggle(
         "hidden",
         showRuntime,
     );
 
-
     elements.runtimeActive.classList.toggle(
         "hidden",
         !showRuntime,
     );
 
-
     elements.runtimePid.textContent =
         process.pid ?? "—";
-
 
     const running =
         (
@@ -1632,27 +1816,24 @@ function updateProcessStatus(
             || status === "starting"
         );
 
-
     elements.runtimeLiveIndicator.classList.toggle(
         "visible",
         running,
     );
-
 
     elements.terminalStreamIndicator.classList.toggle(
         "visible",
         running,
     );
 
-
-    if (status === "failed") {
-
+    if (
+        status === "failed"
+    ) {
         const errorSignature =
             [
                 process.return_code,
                 process.last_error,
             ].join("|");
-
 
         if (
             dashboardState.lastErrorSignature
@@ -1661,11 +1842,9 @@ function updateProcessStatus(
             dashboardState.lastErrorSignature =
                 errorSignature;
 
-
             showVisualError(
                 process
             );
-
 
             showExecutionError(
                 process
@@ -1673,37 +1852,35 @@ function updateProcessStatus(
         }
     }
 
-
     updateStartAvailability();
 }
 
 
-function appendLogs(
-    logs,
-) {
-    if (!logs.length) {
+function appendLogs(logs) {
+    if (
+        !logs.length
+    ) {
         return;
     }
 
-
     const terminalBody =
         elements.runtimeConsole.parentElement;
-
 
     const distanceFromBottom =
         terminalBody.scrollHeight
         - terminalBody.scrollTop
         - terminalBody.clientHeight;
 
-
     const shouldAutoScroll =
-        distanceFromBottom < 60;
+        distanceFromBottom
+        < 60;
 
-
-    for (const entry of logs) {
+    for (
+        const entry
+        of logs
+    ) {
         elements.runtimeConsole.textContent +=
             entry.line + "\n";
-
 
         dashboardState.lastLogSequence =
             Math.max(
@@ -1712,8 +1889,9 @@ function appendLogs(
             );
     }
 
-
-    if (shouldAutoScroll) {
+    if (
+        shouldAutoScroll
+    ) {
         terminalBody.scrollTop =
             terminalBody.scrollHeight;
     }
@@ -1725,9 +1903,7 @@ function appendLogs(
    ============================================================ */
 
 
-function showInteraction(
-    interaction,
-) {
+function showInteraction(interaction) {
     dashboardState.currentInteractionId =
         interaction.interaction_id;
 
@@ -1735,41 +1911,33 @@ function showInteraction(
         interaction.interaction_type
         ?? "text";
 
-
     const enterOnly =
         dashboardState.currentInteractionType
         === "enter";
 
-
     elements.interactionPrompt.textContent =
         interaction.prompt;
 
-
     elements.interactionValue.value =
         "";
-
 
     elements.interactionResponseField.classList.toggle(
         "hidden",
         enterOnly,
     );
 
-
     elements.interactionSubmit.textContent =
         enterOnly
             ? "Press Enter"
             : "Send Response";
 
-
     elements.interactionError.classList.remove(
         "visible"
     );
 
-
     elements.interactionOverlay.classList.add(
         "visible"
     );
-
 
     setTimeout(
         () => {
@@ -1813,19 +1981,17 @@ async function pollInteraction() {
                 "/api/interactions/pending"
             );
 
-
-        if (!response.ok) {
+        if (
+            !response.ok
+        ) {
             return;
         }
-
 
         const payload =
             await response.json();
 
-
         const interaction =
             payload.interaction;
-
 
         if (!interaction) {
             if (
@@ -1837,7 +2003,6 @@ async function pollInteraction() {
 
             return;
         }
-
 
         if (
             interaction.interaction_id
@@ -1862,22 +2027,20 @@ async function submitInteraction() {
     const interactionId =
         dashboardState.currentInteractionId;
 
-
-    if (!interactionId) {
+    if (
+        !interactionId
+    ) {
         return;
     }
-
 
     elements.interactionSubmit.disabled =
         true;
 
-
     const value =
         dashboardState.currentInteractionType
-            === "enter"
+        === "enter"
             ? ""
             : elements.interactionValue.value;
-
 
     try {
         const response =
@@ -1898,10 +2061,8 @@ async function submitInteraction() {
                 }
             );
 
-
         const payload =
             await response.json();
-
 
         if (
             !response.ok
@@ -1914,14 +2075,12 @@ async function submitInteraction() {
             );
         }
 
-
         hideInteraction();
     }
 
     catch (error) {
         elements.interactionError.textContent =
             error.message;
-
 
         elements.interactionError.classList.add(
             "visible"
@@ -1945,38 +2104,38 @@ async function pollRuntime() {
         const [
             statusResponse,
             logsResponse,
-        ] = await Promise.all([
-            fetch(
-                "/api/process/status"
-            ),
+        ] =
+            await Promise.all([
+                fetch(
+                    "/api/process/status"
+                ),
 
-            fetch(
-                `/api/process/logs?after_sequence=${dashboardState.lastLogSequence}`
-            ),
-        ]);
+                fetch(
+                    `/api/process/logs?after_sequence=${dashboardState.lastLogSequence}`
+                ),
+            ]);
 
-
-        if (statusResponse.ok) {
+        if (
+            statusResponse.ok
+        ) {
             const process =
                 await statusResponse.json();
-
 
             updateProcessStatus(
                 process
             );
         }
 
-
-        if (logsResponse.ok) {
+        if (
+            logsResponse.ok
+        ) {
             const payload =
                 await logsResponse.json();
-
 
             appendLogs(
                 payload.logs ?? []
             );
         }
-
 
         await pollInteraction();
 
@@ -2005,44 +2164,33 @@ async function startExperiment() {
         return;
     }
 
-
     elements.startButton.disabled =
         true;
-
 
     elements.startButtonLabel.textContent =
         "Starting...";
 
-
     dashboardState.lastLogSequence =
         0;
 
-
     resetPipelineMonitor();
-
 
     elements.runtimeConsole.textContent =
         "";
 
-
     dashboardState.activeExperiment =
         null;
-
 
     dashboardState.lastErrorSignature =
         null;
 
-
     hideExecutionError();
-
 
     setRuntimeView(
         "visual"
     );
 
-
     resetRuntimeVisual();
-
 
     try {
         const response =
@@ -2063,31 +2211,27 @@ async function startExperiment() {
                 }
             );
 
-
         const payload =
             await response.json();
 
-
-        if (!response.ok) {
+        if (
+            !response.ok
+        ) {
             throw new Error(
                 payload.detail
                 ?? "Failed to start experiment."
             );
         }
 
-
         dashboardState.activeExperiment =
             payload.experiment
             ?? null;
 
-
         prepareDemoVideo();
-
 
         updateProcessStatus(
             payload.process
         );
-
 
         await pollRuntime();
     }
@@ -2102,21 +2246,20 @@ async function startExperiment() {
         elements.startButtonLabel.textContent =
             "Start Experiment";
 
-
         updateStartAvailability();
     }
 }
 
 
 async function stopExperiment() {
-    if (!processIsBusy()) {
+    if (
+        !processIsBusy()
+    ) {
         return;
     }
 
-
     elements.stopButton.disabled =
         true;
-
 
     try {
         const response =
@@ -2127,13 +2270,13 @@ async function stopExperiment() {
                 }
             );
 
-
-        if (!response.ok) {
+        if (
+            !response.ok
+        ) {
             throw new Error(
                 "Failed to stop experiment."
             );
         }
-
 
         await pollRuntime();
     }
@@ -2171,20 +2314,20 @@ function attachInteractions() {
         elements.precomputedDemoScene,
     ];
 
-
-    for (const element of formElements) {
+    for (
+        const element
+        of formElements
+    ) {
         element.addEventListener(
             "input",
             schedulePreview,
         );
-
 
         element.addEventListener(
             "change",
             schedulePreview,
         );
     }
-
 
     elements.taskSelect.addEventListener(
         "change",
@@ -2195,7 +2338,6 @@ function attachInteractions() {
         },
     );
 
-
     elements.executionTypeSelect.addEventListener(
         "change",
         () => {
@@ -2204,7 +2346,6 @@ function attachInteractions() {
             schedulePreview();
         },
     );
-
 
     elements.configureScene.addEventListener(
         "change",
@@ -2215,24 +2356,20 @@ function attachInteractions() {
         },
     );
 
-
     elements.startButton.addEventListener(
         "click",
         startExperiment,
     );
-
 
     elements.stopButton.addEventListener(
         "click",
         stopExperiment,
     );
 
-
     elements.interactionSubmit.addEventListener(
         "click",
         submitInteraction,
     );
-
 
     elements.interactionValue.addEventListener(
         "keydown",
@@ -2247,7 +2384,6 @@ function attachInteractions() {
         },
     );
 
-
     elements.runtimeVisualButton.addEventListener(
         "click",
         () => {
@@ -2256,7 +2392,6 @@ function attachInteractions() {
             );
         },
     );
-
 
     elements.runtimeTerminalButton.addEventListener(
         "click",
@@ -2267,12 +2402,10 @@ function attachInteractions() {
         },
     );
 
-
     elements.executionErrorClose.addEventListener(
         "click",
         hideExecutionError,
     );
-
 
     elements.visualErrorTerminal.addEventListener(
         "click",
@@ -2282,7 +2415,6 @@ function attachInteractions() {
             );
         },
     );
-
 
     elements.executionErrorTerminal.addEventListener(
         "click",
@@ -2295,23 +2427,69 @@ function attachInteractions() {
         },
     );
 
-
     elements.demoVideo.addEventListener(
         "loadeddata",
         () => {
-            elements.visualDemoStatus.textContent =
-                "Demonstration ready.";
+            elements.demoVideoState.textContent =
+                "READY";
 
-            showDemoVisual();
+            elements.demoVideoState.className =
+                "artifact-state ready";
+
+            elements.demoVideo
+                .play()
+                .catch(
+                    () => {
+                        // Browser autoplay may be blocked.
+                    }
+                );
         },
     );
-
 
     elements.demoVideo.addEventListener(
         "error",
         () => {
-            elements.visualDemoStatus.textContent =
-                "Unable to load demonstration video.";
+            elements.demoVideoState.textContent =
+                "UNAVAILABLE";
+
+            elements.demoVideoState.className =
+                "artifact-state failed";
+        },
+    );
+
+    elements.robotCameraStream.addEventListener(
+        "load",
+        () => {
+            elements.robotCameraState.textContent =
+                "LIVE";
+
+            elements.robotCameraState.classList.add(
+                "live"
+            );
+
+            elements.robotCameraState.classList.remove(
+                "failed"
+            );
+        },
+    );
+
+    elements.robotCameraStream.addEventListener(
+        "error",
+        () => {
+            if (
+                dashboardState.cameraStreamActive
+            ) {
+                elements.robotCameraState.textContent =
+                    "UNAVAILABLE";
+
+                elements.robotCameraState.classList.remove(
+                    "live"
+                );
+
+                elements.robotCameraState.classList.add(
+                    "failed"
+                );
+            }
         },
     );
 }
@@ -2328,20 +2506,20 @@ async function loadDashboard() {
             healthResponse,
             optionsResponse,
             processResponse,
-        ] = await Promise.all([
-            fetch(
-                "/api/health"
-            ),
+        ] =
+            await Promise.all([
+                fetch(
+                    "/api/health"
+                ),
 
-            fetch(
-                "/api/experiment/options"
-            ),
+                fetch(
+                    "/api/experiment/options"
+                ),
 
-            fetch(
-                "/api/process/status"
-            ),
-        ]);
-
+                fetch(
+                    "/api/process/status"
+                ),
+            ]);
 
         if (
             !healthResponse.ok
@@ -2353,22 +2531,17 @@ async function loadDashboard() {
             );
         }
 
-
         const health =
             await healthResponse.json();
-
 
         const options =
             await optionsResponse.json();
 
-
         const process =
             await processResponse.json();
 
-
         dashboardState.options =
             options;
-
 
         setConnectionState(
             true,
@@ -2377,13 +2550,11 @@ async function loadDashboard() {
                 : "Backend online · ROS 2 unavailable",
         );
 
-
         populateSelect(
             elements.controllerSelect,
             options.controllers,
             options.defaults.controller,
         );
-
 
         populateSelect(
             elements.taskSelect,
@@ -2391,13 +2562,11 @@ async function loadDashboard() {
             options.defaults.task,
         );
 
-
         populateSelect(
             elements.executionTypeSelect,
             options.execution_types,
             options.defaults.execution_type,
         );
-
 
         elements.executionTarget.textContent =
             formatExecutionMode(
@@ -2405,47 +2574,38 @@ async function loadDashboard() {
                     .execution_mode
             );
 
-
         elements.configPath.textContent =
             options.defaults.config;
 
-
         elements.demoTask.value =
             options.defaults.demo_task;
-
 
         elements.demoPath.value =
             options.defaults.demo_path
             ?? "";
 
-
         elements.configureScene.checked =
             options.defaults
                 .configure_isaac_scene;
 
-
         elements.sceneTask.value =
             options.defaults.scene_task
             ?? 0;
-
 
         elements.sceneTrajectory.value =
             options.defaults
                 .scene_trajectory
             ?? 0;
 
-
         elements.precomputedPlan.value =
             options.defaults
                 .precomputed_plan
             ?? "";
 
-
         elements.precomputedDemoScene.value =
             options.defaults
                 .precomputed_demo_scene
             ?? "";
-
 
         updateTaskDependentFields();
 
@@ -2457,17 +2617,15 @@ async function loadDashboard() {
             process
         );
 
-
         resetPipelineMonitor();
 
+        resetRuntimeVisual();
 
         attachInteractions();
-
 
         await refreshPreview();
 
         await pollRuntime();
-
 
         dashboardState.pollTimer =
             setInterval(
@@ -2480,7 +2638,6 @@ async function loadDashboard() {
         console.error(
             error
         );
-
 
         setConnectionState(
             false,

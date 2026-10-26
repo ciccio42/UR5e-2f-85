@@ -3107,6 +3107,8 @@ class SeeDoController(AIController):
         if t == 0:
             self.execution_status = "perceiving"
 
+            current_pipeline_stage: str | None = None
+
             required_inputs = (
                 "rgb",
                 "depth",
@@ -3136,6 +3138,14 @@ class SeeDoController(AIController):
                     with TIMING.measure(
                         "scene_perception"
                     ):
+
+                        current_pipeline_stage = "scene_perceiver"
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage=current_pipeline_stage,
+                        )
+                        
                         self.perception_result = self.scene_perceiver.run(
                             rgb_image=processed_input["rgb"],
                             depth_image=processed_input["depth"],
@@ -3147,6 +3157,11 @@ class SeeDoController(AIController):
                                 self.artifacts_dir
                                 / "scene_perceiver"
                             ),
+                        )
+
+                        emit_pipeline_event(
+                            "stage_completed",
+                            stage=current_pipeline_stage,
                         )
 
                 if (
@@ -3182,6 +3197,14 @@ class SeeDoController(AIController):
                     with TIMING.measure(
                         "scene_interpretation"
                     ):
+
+                        current_pipeline_stage = "scene_interpreter"
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage=current_pipeline_stage,
+                        )
+                        
                         self.scene_state = self.scene_interpreter.run(
                             perception_result=self.perception_result,
                             artifacts_dir=(
@@ -3190,10 +3213,25 @@ class SeeDoController(AIController):
                             ),
                         )
 
+                        emit_pipeline_event(
+                            "stage_completed",
+                            stage=current_pipeline_stage,
+                        )
+
                 if self.perception_mode == "generalized":
                     with TIMING.measure(
                         "runtime_structured_scene"
                     ):
+
+                        current_pipeline_stage = (
+                            "runtime_structured_scene_builder"
+                        )
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage=current_pipeline_stage,
+                        )
+
                         self.runtime_structured_scene = (
                             self.runtime_structured_scene_builder.run(
                                 scene_state=self.scene_state,
@@ -3202,6 +3240,11 @@ class SeeDoController(AIController):
                                     / "runtime_structured_scene"
                                 ),
                             )
+                        )
+
+                        emit_pipeline_event(
+                            "stage_completed",
+                            stage=current_pipeline_stage,
                         )
 
                     if self.demo_structured_scene is None:
@@ -3214,6 +3257,16 @@ class SeeDoController(AIController):
                     with TIMING.measure(
                         "structural_matching"
                     ):
+
+                        current_pipeline_stage = (
+                            "structural_matcher"
+                        )
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage=current_pipeline_stage,
+                        )
+
                         self.structural_matching_result = (
                             self.structural_matcher.run(
                                 demo_scene=self.demo_structured_scene,
@@ -3225,11 +3278,26 @@ class SeeDoController(AIController):
                             )
                         )
 
+                        emit_pipeline_event(
+                            "stage_completed",
+                            stage=current_pipeline_stage,
+                        )
+
                     self.execution_status = "checking_replicability"
 
                     with TIMING.measure(
                         "replicability_check"
                     ):
+
+                        current_pipeline_stage = (
+                            "replicability_checker"
+                        )
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage=current_pipeline_stage,
+                        )
+
                         self.replicability_result = (
                             self.replicability_checker.run(
                                 action_plan=self.action_plan,
@@ -3253,6 +3321,11 @@ class SeeDoController(AIController):
                             )
                         )
 
+                    emit_pipeline_event(
+                        "stage_completed",
+                        stage=current_pipeline_stage,
+                    )
+
                 self.execution_status = "generating_lmp"
 
                 with TOKEN_USAGE.stage(
@@ -3262,6 +3335,16 @@ class SeeDoController(AIController):
                     with TIMING.measure(
                         "lmp_generation"
                     ):
+
+                        current_pipeline_stage = (
+                            "lmp_generator"
+                        )
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage=current_pipeline_stage,
+                        )
+
                         self.primitive_plan = self.lmp_generator.run(
                             action_plan=self.action_plan,
                             scene_state=self.scene_state,
@@ -3273,6 +3356,13 @@ class SeeDoController(AIController):
                                 / "lmp_generator"
                             ),
                         )
+
+                        emit_pipeline_event(
+                            "stage_completed",
+                            stage=current_pipeline_stage,
+                        )
+
+                        current_pipeline_stage = None
 
                 if (
                     str(self.action_plan.task_type)
@@ -3307,6 +3397,13 @@ class SeeDoController(AIController):
             except Exception as exc:
                 self.execution_status = "failed"
                 self.execution_error = str(exc)
+
+                emit_pipeline_event(
+                    "pipeline_error",
+                    stage=current_pipeline_stage,
+                    message=str(exc),
+                )
+
                 raise
 
             self.execution_status = "plan_ready"
@@ -4411,6 +4508,19 @@ class SeeDoController(AIController):
                 )
             )
 
+            emit_pipeline_event(
+                "artifact_created",
+                stage=current_pipeline_stage,
+                artifact_type="action_plan",
+                content=(
+                    self.action_plan
+                    .natural_language_plan
+                ),
+                task_type=(
+                    self.action_plan
+                    .task_type
+                ),
+            )
 
             emit_pipeline_event(
                 "stage_completed",

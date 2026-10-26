@@ -29,6 +29,9 @@ from ai_controller.utils.utils import _euler2quat, _quat2mat, _mat2euler_sxyz, _
 from ai_controller.models.seedo_controller.ai_controller_node_utils import *
 from ai_controller.models.seedo_controller.timing_utils import TIMING
 from ai_controller.utils.gui.interaction_bridge import request_user_input
+from ai_controller.utils.gui.pipeline_bridge import (
+    emit_pipeline_event,
+)
 _trajectory_cls = None
 
 def set_seed(seed: int = 42) -> None:
@@ -1637,6 +1640,7 @@ class AIControllerNode(Node):
             # Timing state for the current episode
             end_to_end_start = None
             robot_execution_start = None
+            robot_execution_stage_started = False
             
             for step in range(self.max_step):
 
@@ -2087,6 +2091,16 @@ class AIControllerNode(Node):
                     self.ai_controller_target == 'seedo_controller'
                     and self.move_robot
                 ):
+
+                    if not robot_execution_stage_started:
+
+                        emit_pipeline_event(
+                            "stage_started",
+                            stage="robot_execution",
+                        )
+
+                        robot_execution_stage_started = True
+                    
                     # Start the global robot execution timer only once,
                     # immediately before the first physical action.
                     if robot_execution_start is None:
@@ -2494,6 +2508,15 @@ class AIControllerNode(Node):
                             f'Current status: '
                             f'{self.controller.execution_status}'
                         )
+
+                    if robot_execution_stage_started:
+
+                        emit_pipeline_event(
+                            "stage_completed",
+                            stage="robot_execution",
+                        )
+
+                        robot_execution_stage_started = False
 
                     self.get_logger().info(
                         'SeeDo PrimitivePlan consumed successfully.'
