@@ -26,6 +26,9 @@ from ai_controller.utils.gui.backend.event_manager import (
     EVENT_MANAGER,
 )
 
+from ai_controller.utils.gui.backend.artifact_manager import (
+    ARTIFACT_MANAGER,
+)
 
 class ProcessManager:
 
@@ -100,6 +103,7 @@ class ProcessManager:
 
         EVENT_MANAGER.clear()
 
+        ARTIFACT_MANAGER.clear()
 
         env = os.environ.copy()
 
@@ -260,6 +264,26 @@ class ProcessManager:
                         event = json.loads(
                             payload_text
                         )
+
+                        if (
+                            event.get("event")
+                            == "artifacts_root"
+                        ):
+                            artifact_root = (
+                                event.get("path")
+                            )
+
+                            if not isinstance(
+                                artifact_root,
+                                str,
+                            ) or not artifact_root:
+                                raise ValueError(
+                                    "Invalid artifact root event."
+                                )
+
+                            ARTIFACT_MANAGER.set_root(
+                                artifact_root
+                            )
 
                         EVENT_MANAGER.register(
                             event

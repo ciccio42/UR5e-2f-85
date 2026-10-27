@@ -866,6 +866,13 @@ mkdir -p "${RUN_DIR}/action_planning"
 mkdir -p "${RUN_DIR}/demo_structured_scene"
 mkdir -p "${RUN_DIR}/rollouts"
 
+if [[ "${SEEDO_GUI_TELEMETRY:-}" == "1" ]]; then
+
+    printf \
+        '__SEEDO_PIPELINE_EVENT__{"event":"artifacts_root","path":"%s"}\n' \
+        "${RUN_DIR}"
+
+fi
 
 # =============================================================================
 # TEST SUMMARY

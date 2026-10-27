@@ -4346,6 +4346,28 @@ class SeeDoController(AIController):
                         )
                     )
 
+                # -----------------------------------------------------
+                # GUI telemetry for precomputed demonstration artifacts
+                # -----------------------------------------------------
+
+                emit_pipeline_event(
+                    "precomputed_demo_loaded",
+                )
+
+                emit_pipeline_event(
+                    "artifact_created",
+                    stage="action_planner",
+                    artifact_type="action_plan",
+                    content=(
+                        self.action_plan
+                        .natural_language_plan
+                    ),
+                    task_type=(
+                        self.action_plan
+                        .task_type
+                    ),
+                )
+
             except Exception as exc:
                 self.execution_status = "failed"
                 self.execution_error = str(exc)

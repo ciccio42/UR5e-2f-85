@@ -32,6 +32,9 @@ from ai_controller.utils.gui.backend.event_manager import (
 from ai_controller.utils.gui.backend.camera_stream import (
     FRONT_CAMERA_STREAM,
 )
+from ai_controller.utils.gui.backend.artifact_manager import (
+    ARTIFACT_MANAGER,
+)
 
 app = FastAPI(
     title="SeeDo Experiment Dashboard",
@@ -269,3 +272,71 @@ def front_camera_stream():
 def shutdown_front_camera_stream():
 
     FRONT_CAMERA_STREAM.stop()
+
+@app.get("/api/artifacts/tree")
+def artifact_tree():
+
+    return ARTIFACT_MANAGER.tree()
+
+@app.get("/api/artifacts/preview")
+def artifact_preview(
+    path: str,
+):
+    try:
+        return ARTIFACT_MANAGER.preview(
+            path
+        )
+
+    except (
+        RuntimeError,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+@app.get("/api/artifacts/file")
+def artifact_file(
+    path: str,
+    download: bool = False,
+):
+
+    try:
+        artifact_path = (
+            ARTIFACT_MANAGER.resolve_file(
+                path
+            )
+        )
+
+        media_type = (
+            ARTIFACT_MANAGER.media_type(
+                path
+            )
+        )
+
+    except (
+        RuntimeError,
+        ValueError,
+        FileNotFoundError,
+    ) as exc:
+        raise HTTPException(
+            status_code=404,
+            detail=str(exc),
+        ) from exc
+
+
+    if download:
+
+        return FileResponse(
+            path=artifact_path,
+            media_type=media_type,
+            filename=artifact_path.name,
+        )
+
+
+    return FileResponse(
+        path=artifact_path,
+        media_type=media_type,
+    )

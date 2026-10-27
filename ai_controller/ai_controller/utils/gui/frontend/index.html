@@ -1076,6 +1076,14 @@
                             Terminal
                         </button>
 
+                        <button
+                            id="runtime-artifacts-button"
+                            class="runtime-view-button"
+                            type="button"
+                        >
+                            Artifacts
+                        </button>
+
                     </div>
 
                 </div>
@@ -1464,6 +1472,174 @@
                             <pre id="runtime-console"></pre>
 
                         </div>
+
+                    </div>
+
+                </div>
+
+                <!-- =====================================================
+                    ARTIFACTS VIEW
+                    ===================================================== -->
+
+                <div
+                    id="runtime-artifacts-view"
+                    class="runtime-view hidden"
+                >
+
+                    <div class="artifacts-header">
+
+                        <div class="artifacts-run-copy">
+
+                            <span class="visual-stage-kicker">
+                                CURRENT RUN
+                            </span>
+
+                            <strong id="artifacts-root-name">
+                                Waiting for experiment...
+                            </strong>
+
+                        </div>
+
+
+                        <div class="artifacts-status">
+
+                            <span
+                                id="artifacts-live-state"
+                                class="artifacts-live-state waiting"
+                            >
+                                WAITING
+                            </span>
+
+                            <span
+                                id="artifacts-file-count"
+                                class="artifacts-file-count"
+                            >
+                                0 FILES
+                            </span>
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="artifacts-layout">
+
+                        <!-- =============================================
+                            ARTIFACT TREE
+                            ============================================= -->
+
+                        <aside class="artifact-tree-panel">
+
+                            <div class="artifact-panel-header">
+
+                                <div>
+
+                                    <span class="visual-stage-kicker">
+                                        PIPELINE OUTPUT
+                                    </span>
+
+                                    <h4>
+                                        Artifact Tree
+                                    </h4>
+
+                                </div>
+
+                            </div>
+
+
+                            <div
+                                id="artifact-tree"
+                                class="artifact-tree"
+                            >
+
+                                <div class="artifact-empty-state">
+
+                                    <strong>
+                                        No active artifact directory
+                                    </strong>
+
+                                    <span>
+                                        Start an experiment to inspect
+                                        generated pipeline artifacts.
+                                    </span>
+
+                                </div>
+
+                            </div>
+
+                        </aside>
+
+
+                        <!-- =============================================
+                            ARTIFACT PREVIEW
+                            ============================================= -->
+
+                        <section class="artifact-preview-panel">
+
+                            <div class="artifact-preview-header">
+
+                                <div class="artifact-preview-title">
+
+                                    <span
+                                        id="artifact-preview-kind"
+                                        class="visual-stage-kicker"
+                                    >
+                                        ARTIFACT PREVIEW
+                                    </span>
+
+                                    <h4 id="artifact-preview-name">
+                                        Select an artifact
+                                    </h4>
+
+                                    <span
+                                        id="artifact-preview-path"
+                                        class="artifact-preview-path"
+                                    >
+                                        Choose a file from the artifact tree.
+                                    </span>
+
+                                </div>
+
+
+                                <a
+                                    id="artifact-download"
+                                    class="secondary-button artifact-download hidden"
+                                    href="#"
+                                    target="_blank"
+                                    rel="noopener"
+                                >
+                                    Download
+                                </a>
+
+                            </div>
+
+
+                            <div
+                                id="artifact-preview-body"
+                                class="artifact-preview-body"
+                            >
+
+                                <div class="artifact-preview-placeholder">
+
+                                    <div class="artifact-preview-placeholder-icon">
+                                        ◇
+                                    </div>
+
+                                    <strong>
+                                        Nothing selected
+                                    </strong>
+
+                                    <span>
+                                        Images, videos, JSON files,
+                                        text and NumPy artifacts can
+                                        be inspected here.
+                                    </span>
+
+                                </div>
+
+                            </div>
+
+                        </section>
 
                     </div>
 

@@ -45,9 +45,17 @@ const elements = {
 
     runtimeVisualButton: document.getElementById("runtime-visual-button"),
     runtimeTerminalButton: document.getElementById("runtime-terminal-button"),
+    runtimeArtifactsButton:
+        document.getElementById(
+            "runtime-artifacts-button"
+        ),
     runtimeViewCaption: document.getElementById("runtime-view-caption"),
     runtimeVisualView: document.getElementById("runtime-visual-view"),
     runtimeTerminalView: document.getElementById("runtime-terminal-view"),
+    runtimeArtifactsView:
+        document.getElementById(
+            "runtime-artifacts-view"
+        ),
 
     visualWorkspace: document.getElementById("visual-workspace"),
 
@@ -125,6 +133,51 @@ const elements = {
     interactionSubmit: document.getElementById("interaction-submit"),
     interactionError: document.getElementById("interaction-error"),
     interactionStop: document.getElementById("interaction-stop"),
+
+    artifactsRootName:
+        document.getElementById(
+            "artifacts-root-name"
+        ),
+
+    artifactsLiveState:
+        document.getElementById(
+            "artifacts-live-state"
+        ),
+
+    artifactsFileCount:
+        document.getElementById(
+            "artifacts-file-count"
+        ),
+
+    artifactTree:
+        document.getElementById(
+            "artifact-tree"
+        ),
+
+    artifactPreviewKind:
+        document.getElementById(
+            "artifact-preview-kind"
+        ),
+
+    artifactPreviewName:
+        document.getElementById(
+            "artifact-preview-name"
+        ),
+
+    artifactPreviewPath:
+        document.getElementById(
+            "artifact-preview-path"
+        ),
+
+    artifactPreviewBody:
+        document.getElementById(
+            "artifact-preview-body"
+        ),
+
+    artifactDownload:
+        document.getElementById(
+            "artifact-download"
+        ),
 };
 
 
@@ -153,6 +206,14 @@ const dashboardState = {
     activeVisualStage: null,
 
     cameraStreamActive: false,
+
+    artifactsRoot: null,
+
+    artifactTreeSignature: null,
+
+    artifactSelectedPath: null,
+
+    artifactRefreshInFlight: false,
 };
 
 
@@ -941,6 +1002,30 @@ function handlePipelineEvent(event) {
 
     if (
         event.event
+        === "precomputed_demo_loaded"
+    ) {
+        const precomputedDemoStages = [
+            "keyframe_selector",
+            "visual_prompter",
+            "demo_structured_scene_builder",
+            "action_planner",
+        ];
+
+        for (
+            const stage
+            of precomputedDemoStages
+        ) {
+            setPipelineStageState(
+                stage,
+                "completed",
+            );
+        }
+
+        return;
+    }
+
+    if (
+        event.event
         === "robot_execution_detail"
     ) {
         updateRobotExecutionDetail(
@@ -958,6 +1043,32 @@ function handlePipelineEvent(event) {
             event.stage,
             "running",
         );
+
+        /*
+        * Robot execution is live telemetry.
+        *
+        * Do not let delayed visual-stage transitions overwrite
+        * the first primitive while the visual queue is still
+        * catching up with previous pipeline stages.
+        */
+        if (
+            event.stage === "robot_execution"
+        ) {
+            dashboardState.visualEventQueue = [];
+
+            dashboardState.visualQueueGeneration += 1;
+
+            setCurrentStageState(
+                "robot_execution",
+                "running",
+            );
+
+            setRuntimeView(
+                "visual"
+            );
+
+            return;
+        }
 
         enqueueVisualPipelineEvent(
             event
@@ -1249,6 +1360,13 @@ function setRuntimeView(mode) {
     const visual =
         mode === "visual";
 
+    const terminal =
+        mode === "terminal";
+
+    const artifacts =
+        mode === "artifacts";
+
+
     elements.runtimeVisualView.classList.toggle(
         "hidden",
         !visual,
@@ -1256,8 +1374,14 @@ function setRuntimeView(mode) {
 
     elements.runtimeTerminalView.classList.toggle(
         "hidden",
-        visual,
+        !terminal,
     );
+
+    elements.runtimeArtifactsView.classList.toggle(
+        "hidden",
+        !artifacts,
+    );
+
 
     elements.runtimeVisualButton.classList.toggle(
         "active",
@@ -1266,15 +1390,1133 @@ function setRuntimeView(mode) {
 
     elements.runtimeTerminalButton.classList.toggle(
         "active",
-        !visual,
+        terminal,
     );
 
-    elements.runtimeViewCaption.textContent =
-        visual
-            ? "Live experiment visualization"
-            : "Raw SeeDo runtime output";
+    elements.runtimeArtifactsButton.classList.toggle(
+        "active",
+        artifacts,
+    );
+
+
+    if (visual) {
+
+        elements.runtimeViewCaption.textContent =
+            "Live experiment visualization";
+    }
+
+    else if (terminal) {
+
+        elements.runtimeViewCaption.textContent =
+            "Raw SeeDo runtime output";
+    }
+
+    else {
+
+        elements.runtimeViewCaption.textContent =
+            "Generated pipeline artifacts";
+    }
+
+
+    if (artifacts) {
+        pollArtifacts();
+    }
 }
 
+/* ============================================================
+   ARTIFACT EXPLORER
+   ============================================================ */
+
+
+function formatArtifactSize(bytes) {
+    const value =
+        Number(bytes);
+
+    if (
+        !Number.isFinite(value)
+        || value < 0
+    ) {
+        return "—";
+    }
+
+    if (value < 1024) {
+        return `${value} B`;
+    }
+
+    if (value < 1024 * 1024) {
+        return (
+            `${(value / 1024).toFixed(1)} KB`
+        );
+    }
+
+    if (
+        value
+        < 1024 * 1024 * 1024
+    ) {
+        return (
+            `${(
+                value
+                / (1024 * 1024)
+            ).toFixed(1)} MB`
+        );
+    }
+
+    return (
+        `${(
+            value
+            / (
+                1024
+                * 1024
+                * 1024
+            )
+        ).toFixed(2)} GB`
+    );
+}
+
+
+function artifactViewerLabel(viewer) {
+
+    const labels = {
+        image: "IMAGE",
+        video: "VIDEO",
+        json: "JSON",
+        text: "TEXT",
+        array: "NUMPY",
+        binary: "FILE",
+    };
+
+    return (
+        labels[viewer]
+        ?? "FILE"
+    );
+}
+
+
+function artifactViewerIcon(viewer) {
+
+    const icons = {
+        image: "IMG",
+        video: "VID",
+        json: "{}",
+        text: "TXT",
+        array: "NP",
+        binary: "FILE",
+    };
+
+    return (
+        icons[viewer]
+        ?? "FILE"
+    );
+}
+
+
+function artifactTreeSignature(node) {
+
+    if (!node) {
+        return "";
+    }
+
+    const values = [];
+
+
+    function walk(current) {
+
+        values.push(
+            `${current.type}:${current.path}`
+        );
+
+
+        if (
+            current.type
+            === "directory"
+        ) {
+            for (
+                const child
+                of current.children ?? []
+            ) {
+                walk(
+                    child
+                );
+            }
+        }
+    }
+
+
+    walk(
+        node
+    );
+
+    return values.join(
+        "|"
+    );
+}
+
+
+function collectExpandedArtifactDirectories() {
+
+    return new Set(
+        Array.from(
+            elements.artifactTree
+                .querySelectorAll(
+                    "details.artifact-directory[open]"
+                )
+        ).map(
+            item =>
+                item.dataset.path
+        )
+    );
+}
+
+
+function updateArtifactTreeSelection() {
+
+    elements.artifactTree
+        .querySelectorAll(
+            ".artifact-file-button"
+        )
+        .forEach(
+            button => {
+
+                button.classList.toggle(
+                    "active",
+                    button.dataset.path
+                    === dashboardState
+                        .artifactSelectedPath,
+                );
+
+            }
+        );
+}
+
+
+function createArtifactTreeNode(
+    node,
+    depth,
+    expandedPaths,
+) {
+
+    if (
+        node.type
+        === "directory"
+    ) {
+
+        const details =
+            document.createElement(
+                "details"
+            );
+
+        details.className =
+            "artifact-directory";
+
+        details.dataset.path =
+            node.path;
+
+
+        if (
+            expandedPaths.has(
+                node.path
+            )
+            || depth === 0
+        ) {
+            details.open = true;
+        }
+
+
+        const summary =
+            document.createElement(
+                "summary"
+            );
+
+        summary.className =
+            "artifact-directory-summary";
+
+
+        const icon =
+            document.createElement(
+                "span"
+            );
+
+        icon.className =
+            "artifact-directory-icon";
+
+        icon.textContent =
+            "DIR";
+
+
+        const name =
+            document.createElement(
+                "span"
+            );
+
+        name.textContent =
+            node.name;
+
+
+        summary.append(
+            icon,
+            name,
+        );
+
+
+        const children =
+            document.createElement(
+                "div"
+            );
+
+        children.className =
+            "artifact-directory-children";
+
+
+        for (
+            const child
+            of node.children ?? []
+        ) {
+
+            children.appendChild(
+                createArtifactTreeNode(
+                    child,
+                    depth + 1,
+                    expandedPaths,
+                )
+            );
+        }
+
+
+        details.append(
+            summary,
+            children,
+        );
+
+        return details;
+    }
+
+
+    const button =
+        document.createElement(
+            "button"
+        );
+
+    button.type =
+        "button";
+
+    button.className =
+        "artifact-file-button";
+
+    button.dataset.path =
+        node.path;
+
+
+    const icon =
+        document.createElement(
+            "span"
+        );
+
+    icon.className =
+        "artifact-file-icon";
+
+    icon.textContent =
+        artifactViewerIcon(
+            node.viewer
+        );
+
+
+    const copy =
+        document.createElement(
+            "span"
+        );
+
+    copy.className =
+        "artifact-file-copy";
+
+
+    const name =
+        document.createElement(
+            "span"
+        );
+
+    name.className =
+        "artifact-file-name";
+
+    name.textContent =
+        node.name;
+
+
+    const size =
+        document.createElement(
+            "span"
+        );
+
+    size.className =
+        "artifact-file-size";
+
+    size.textContent =
+        formatArtifactSize(
+            node.size
+        );
+
+
+    copy.append(
+        name,
+        size,
+    );
+
+
+    button.append(
+        icon,
+        copy,
+    );
+
+
+    button.addEventListener(
+        "click",
+        () => {
+            openArtifact(
+                node
+            );
+        },
+    );
+
+
+    if (
+        node.path
+        === dashboardState
+            .artifactSelectedPath
+    ) {
+        button.classList.add(
+            "active"
+        );
+    }
+
+
+    return button;
+}
+
+
+function renderArtifactTree(
+    tree,
+) {
+
+    const expandedPaths =
+        collectExpandedArtifactDirectories();
+
+
+    elements.artifactTree.replaceChildren();
+
+
+    if (
+        !tree
+        || !tree.children
+        || tree.children.length === 0
+    ) {
+
+        const empty =
+            document.createElement(
+                "div"
+            );
+
+        empty.className =
+            "artifact-empty-state";
+
+        empty.innerHTML = `
+            <strong>No artifacts yet</strong>
+            <span>
+                Files will appear here while
+                the pipeline is running.
+            </span>
+        `;
+
+        elements.artifactTree.appendChild(
+            empty
+        );
+
+        return;
+    }
+
+
+    for (
+        const node
+        of tree.children
+    ) {
+
+        elements.artifactTree.appendChild(
+            createArtifactTreeNode(
+                node,
+                0,
+                expandedPaths,
+            )
+        );
+    }
+
+
+    updateArtifactTreeSelection();
+}
+
+
+function resetArtifactPreview() {
+
+    dashboardState.artifactSelectedPath =
+        null;
+
+
+    elements.artifactPreviewKind.textContent =
+        "ARTIFACT PREVIEW";
+
+    elements.artifactPreviewName.textContent =
+        "Select an artifact";
+
+    elements.artifactPreviewPath.textContent =
+        "Choose a file from the artifact tree.";
+
+
+    elements.artifactDownload.classList.add(
+        "hidden"
+    );
+
+    elements.artifactDownload.removeAttribute(
+        "href"
+    );
+
+
+    elements.artifactPreviewBody.innerHTML = `
+        <div class="artifact-preview-placeholder">
+
+            <div class="artifact-preview-placeholder-icon">
+                ◇
+            </div>
+
+            <strong>
+                Nothing selected
+            </strong>
+
+            <span>
+                Images, videos, JSON files,
+                text and NumPy artifacts can
+                be inspected here.
+            </span>
+
+        </div>
+    `;
+}
+
+
+function resetArtifactsView() {
+
+    dashboardState.artifactsRoot =
+        null;
+
+    dashboardState.artifactTreeSignature =
+        null;
+
+    dashboardState.artifactSelectedPath =
+        null;
+
+
+    elements.artifactsRootName.textContent =
+        "Waiting for experiment...";
+
+    elements.artifactsFileCount.textContent =
+        "0 FILES";
+
+    elements.artifactsLiveState.textContent =
+        "WAITING";
+
+    elements.artifactsLiveState.classList.add(
+        "waiting"
+    );
+
+
+    elements.artifactTree.innerHTML = `
+        <div class="artifact-empty-state">
+
+            <strong>
+                No active artifact directory
+            </strong>
+
+            <span>
+                Start an experiment to inspect
+                generated pipeline artifacts.
+            </span>
+
+        </div>
+    `;
+
+
+    resetArtifactPreview();
+}
+
+
+function renderArtifactError(
+    message,
+) {
+
+    const container =
+        document.createElement(
+            "div"
+        );
+
+    container.className =
+        "artifact-preview-error";
+
+    container.textContent =
+        message;
+
+
+    elements.artifactPreviewBody.replaceChildren(
+        container
+    );
+}
+
+
+function renderArtifactText(
+    text,
+) {
+
+    const pre =
+        document.createElement(
+            "pre"
+        );
+
+    pre.className =
+        "artifact-code-preview";
+
+    pre.textContent =
+        text ?? "";
+
+
+    elements.artifactPreviewBody.replaceChildren(
+        pre
+    );
+}
+
+
+function renderArtifactArrays(
+    arrays,
+) {
+
+    const list =
+        document.createElement(
+            "div"
+        );
+
+    list.className =
+        "artifact-array-list";
+
+
+    for (
+        const array
+        of arrays ?? []
+    ) {
+
+        const card =
+            document.createElement(
+                "article"
+            );
+
+        card.className =
+            "artifact-array-card";
+
+
+        const title =
+            document.createElement(
+                "h5"
+            );
+
+        title.textContent =
+            array.name;
+
+
+        const meta =
+            document.createElement(
+                "div"
+            );
+
+        meta.className =
+            "artifact-array-meta";
+
+
+        for (
+            const value
+            of [
+                `shape: ${JSON.stringify(
+                    array.shape
+                )}`,
+                `dtype: ${array.dtype}`,
+                `size: ${array.size}`,
+            ]
+        ) {
+
+            const badge =
+                document.createElement(
+                    "span"
+                );
+
+            badge.textContent =
+                value;
+
+            meta.appendChild(
+                badge
+            );
+        }
+
+
+        const sample =
+            document.createElement(
+                "pre"
+            );
+
+        sample.className =
+            "artifact-array-sample";
+
+        sample.textContent =
+            JSON.stringify(
+                array.sample,
+                null,
+                2,
+            );
+
+
+        card.append(
+            title,
+            meta,
+            sample,
+        );
+
+        list.appendChild(
+            card
+        );
+    }
+
+
+    elements.artifactPreviewBody.replaceChildren(
+        list
+    );
+}
+
+
+async function openArtifact(
+    node,
+) {
+
+    dashboardState.artifactSelectedPath =
+        node.path;
+
+    updateArtifactTreeSelection();
+
+
+    elements.artifactPreviewKind.textContent =
+        artifactViewerLabel(
+            node.viewer
+        );
+
+    elements.artifactPreviewName.textContent =
+        node.name;
+
+    elements.artifactPreviewPath.textContent =
+        node.path;
+
+
+    const encodedPath =
+        encodeURIComponent(
+            node.path
+        );
+
+
+    elements.artifactDownload.href =
+        (
+            "/api/artifacts/file"
+            + `?path=${encodedPath}`
+            + "&download=true"
+        );
+
+    elements.artifactDownload.classList.remove(
+        "hidden"
+    );
+
+
+    elements.artifactPreviewBody.innerHTML = `
+        <div class="artifact-preview-loading">
+            Loading artifact...
+        </div>
+    `;
+
+
+    try {
+
+        /*
+         * Images can be served directly.
+         */
+        if (
+            node.viewer
+            === "image"
+        ) {
+
+            const container =
+                document.createElement(
+                    "div"
+                );
+
+            container.className =
+                "artifact-media-preview";
+
+
+            const image =
+                document.createElement(
+                    "img"
+                );
+
+            image.alt =
+                node.name;
+
+            image.src =
+                (
+                    "/api/artifacts/file"
+                    + `?path=${encodedPath}`
+                    + `&v=${node.modified_ns ?? Date.now()}`
+                );
+
+
+            image.addEventListener(
+                "error",
+                () => {
+                    renderArtifactError(
+                        "The image could not be displayed."
+                    );
+                },
+            );
+
+
+            container.appendChild(
+                image
+            );
+
+            elements.artifactPreviewBody.replaceChildren(
+                container
+            );
+
+            return;
+        }
+
+
+        /*
+         * Videos can also be streamed directly.
+         */
+        if (
+            node.viewer
+            === "video"
+        ) {
+
+            const container =
+                document.createElement(
+                    "div"
+                );
+
+            container.className =
+                "artifact-media-preview";
+
+
+            const video =
+                document.createElement(
+                    "video"
+                );
+
+            video.controls = true;
+
+            video.preload =
+                "metadata";
+
+            video.src =
+                (
+                    "/api/artifacts/file"
+                    + `?path=${encodedPath}`
+                    + `&v=${node.modified_ns ?? Date.now()}`
+                );
+
+
+            container.appendChild(
+                video
+            );
+
+            elements.artifactPreviewBody.replaceChildren(
+                container
+            );
+
+            return;
+        }
+
+
+        /*
+         * Unsupported/binary files are still downloadable.
+         */
+        if (
+            node.viewer
+            === "binary"
+        ) {
+
+            const placeholder =
+                document.createElement(
+                    "div"
+                );
+
+            placeholder.className =
+                "artifact-preview-placeholder";
+
+            placeholder.innerHTML = `
+                <div class="artifact-preview-placeholder-icon">
+                    ↓
+                </div>
+
+                <strong>
+                    Preview unavailable
+                </strong>
+
+                <span>
+                    This artifact cannot be rendered
+                    directly in the dashboard.
+                    Use Download to inspect the file.
+                </span>
+            `;
+
+
+            elements.artifactPreviewBody.replaceChildren(
+                placeholder
+            );
+
+            return;
+        }
+
+
+        /*
+         * JSON, text and NumPy files are interpreted
+         * by the backend.
+         */
+        const response =
+            await fetch(
+                (
+                    "/api/artifacts/preview"
+                    + `?path=${encodedPath}`
+                ),
+                {
+                    cache:
+                        "no-store",
+                },
+            );
+
+
+        const payload =
+            await response.json();
+
+
+        if (!response.ok) {
+            throw new Error(
+                payload.detail
+                ?? "Artifact preview failed."
+            );
+        }
+
+
+        if (
+            payload.viewer
+            === "json"
+            || payload.viewer
+            === "text"
+        ) {
+
+            renderArtifactText(
+                payload.text
+            );
+
+            return;
+        }
+
+
+        if (
+            payload.viewer
+            === "array"
+        ) {
+
+            renderArtifactArrays(
+                payload.arrays
+            );
+
+            return;
+        }
+
+
+        renderArtifactError(
+            "No preview renderer is available for this artifact."
+        );
+
+    }
+
+    catch (error) {
+
+        renderArtifactError(
+            error.message
+            ?? "Artifact preview failed."
+        );
+    }
+}
+
+
+async function pollArtifacts() {
+
+    if (
+        dashboardState.artifactRefreshInFlight
+    ) {
+        return;
+    }
+
+
+    dashboardState.artifactRefreshInFlight =
+        true;
+
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/artifacts/tree",
+                {
+                    cache:
+                        "no-store",
+                },
+            );
+
+
+        if (!response.ok) {
+            throw new Error(
+                "Could not load artifact tree."
+            );
+        }
+
+
+        const payload =
+            await response.json();
+
+
+        if (
+            !payload.ready
+            || !payload.tree
+        ) {
+
+            if (
+                dashboardState.artifactsRoot
+                !== null
+            ) {
+                resetArtifactsView();
+            }
+
+            return;
+        }
+
+
+        const rootChanged =
+            payload.root
+            !== dashboardState.artifactsRoot;
+
+
+        if (rootChanged) {
+
+            dashboardState.artifactsRoot =
+                payload.root;
+
+            dashboardState.artifactTreeSignature =
+                null;
+
+            resetArtifactPreview();
+        }
+
+
+        elements.artifactsRootName.textContent =
+            payload.root_name
+            ?? "Current experiment";
+
+
+        const fileCount =
+            Number(
+                payload.file_count
+                ?? 0
+            );
+
+
+        elements.artifactsFileCount.textContent =
+            (
+                fileCount === 1
+                    ? "1 FILE"
+                    : `${fileCount} FILES`
+            );
+
+
+        if (
+            dashboardState.processStatus
+            === "running"
+            ||
+            dashboardState.processStatus
+            === "starting"
+        ) {
+
+            elements.artifactsLiveState.textContent =
+                "LIVE";
+
+            elements.artifactsLiveState.classList.remove(
+                "waiting"
+            );
+        }
+
+        else {
+
+            elements.artifactsLiveState.textContent =
+                "READY";
+
+            elements.artifactsLiveState.classList.remove(
+                "waiting"
+            );
+        }
+
+
+        const signature =
+            artifactTreeSignature(
+                payload.tree
+            );
+
+
+        if (
+            signature
+            !== dashboardState
+                .artifactTreeSignature
+        ) {
+
+            dashboardState.artifactTreeSignature =
+                signature;
+
+            renderArtifactTree(
+                payload.tree
+            );
+        }
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "Artifact polling failed:",
+            error
+        );
+
+        elements.artifactsLiveState.textContent =
+            "ERROR";
+
+        elements.artifactsLiveState.classList.add(
+            "waiting"
+        );
+    }
+
+    finally {
+
+        dashboardState.artifactRefreshInFlight =
+            false;
+    }
+}
 
 function delay(milliseconds) {
     return new Promise(
@@ -1607,8 +2849,6 @@ function setCurrentStageState(
         if (
             state === "running"
         ) {
-            resetRobotExecutionDetail();
-
             elements.robotExecutionDetail.classList.remove(
                 "hidden"
             );
@@ -2379,6 +3619,13 @@ async function pollRuntime() {
         await pollInteraction();
 
         await pollPipelineEvents();
+
+        if (
+            dashboardState.runtimeView
+            === "artifacts"
+        ) {
+            await pollArtifacts();
+        }
     }
 
     catch (error) {
@@ -2430,6 +3677,8 @@ async function startExperiment() {
     );
 
     resetRuntimeVisual();
+
+    resetArtifactsView();
 
     try {
         const response =
@@ -2664,6 +3913,15 @@ function attachInteractions() {
         },
     );
 
+    elements.runtimeArtifactsButton.addEventListener(
+        "click",
+        () => {
+            setRuntimeView(
+                "artifacts"
+            );
+        },
+    );
+
     elements.executionErrorClose.addEventListener(
         "click",
         hideExecutionError,
@@ -2882,6 +4140,8 @@ async function loadDashboard() {
         resetPipelineMonitor();
 
         resetRuntimeVisual();
+
+        resetArtifactsView();
 
         attachInteractions();
 
