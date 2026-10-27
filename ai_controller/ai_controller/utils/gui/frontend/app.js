@@ -111,13 +111,11 @@ const elements = {
 
     visualErrorCard: document.getElementById("visual-error-card"),
     visualErrorMessage: document.getElementById("visual-error-message"),
-    visualErrorReturnCode: document.getElementById("visual-error-return-code"),
     visualErrorTerminal: document.getElementById("visual-error-terminal"),
 
     executionErrorOverlay: document.getElementById("execution-error-overlay"),
     executionErrorTitle: document.getElementById("execution-error-title"),
     executionErrorMessage: document.getElementById("execution-error-message"),
-    executionErrorReturnCode: document.getElementById("execution-error-return-code"),
     executionErrorTerminal: document.getElementById("execution-error-terminal"),
     executionErrorClose: document.getElementById("execution-error-close"),
 
@@ -199,6 +197,7 @@ const dashboardState = {
 
     activeExperiment: null,
     lastErrorSignature: null,
+    failedStage: null,
 
     visualEventQueue: [],
     visualEventProcessing: false,
@@ -1100,6 +1099,9 @@ function handlePipelineEvent(event) {
         )
         && event.stage
     ) {
+        dashboardState.failedStage =
+            event.stage;
+
         setPipelineStageState(
             event.stage,
             "failed",
@@ -2875,6 +2877,9 @@ function resetRuntimeVisual() {
     dashboardState.visualQueueGeneration +=
         1;
 
+    dashboardState.failedStage =
+        null;
+
     dashboardState.activeVisualStage =
         null;
 
@@ -2893,9 +2898,6 @@ function resetRuntimeVisual() {
 
     elements.visualErrorMessage.textContent =
         "";
-
-    elements.visualErrorReturnCode.textContent =
-        "—";
 
     elements.demoVideoState.textContent =
         "LOADING";
@@ -3113,8 +3115,6 @@ async function processVisualEventQueue() {
                 setCurrentStageState(
                     event.stage,
                     "failed",
-                    event.message
-                    ?? null,
                 );
 
                 await delay(
@@ -3145,14 +3145,16 @@ function hideExecutionError() {
 }
 
 
-function showVisualError(process) {
-    const message =
-        process.last_error
-        ??
-        (
-            "Experiment process exited "
-            + `with code ${process.return_code ?? "unknown"}.`
-        );
+function showVisualError(
+    stageName,
+) {
+    const stageTitle =
+        stageName
+            ? getVisualStageDefinition(
+                stageName
+            ).title
+            : "Experiment Initialization";
+
 
     dashboardState.visualEventQueue =
         [];
@@ -3162,16 +3164,15 @@ function showVisualError(process) {
 
     stopRobotCameraStream();
 
+
     elements.visualWorkspace.classList.add(
         "hidden"
     );
 
-    elements.visualErrorMessage.textContent =
-        message;
 
-    elements.visualErrorReturnCode.textContent =
-        process.return_code
-        ?? "—";
+    elements.visualErrorMessage.textContent =
+        stageTitle;
+
 
     elements.visualErrorCard.classList.remove(
         "hidden"
@@ -3181,30 +3182,30 @@ function showVisualError(process) {
         "failed"
     );
 
+
     setRuntimeView(
         "visual"
     );
 }
 
 
-function showExecutionError(process) {
-    const message =
-        process.last_error
-        ??
-        (
-            "Experiment process exited "
-            + `with code ${process.return_code ?? "unknown"}.`
-        );
+function showExecutionError(
+    stageName,
+) {
+    const stageTitle =
+        stageName
+            ? getVisualStageDefinition(
+                stageName
+            ).title
+            : "Experiment Initialization";
+
 
     elements.executionErrorTitle.textContent =
-        "Experiment failed";
+        "Pipeline stage failed";
 
     elements.executionErrorMessage.textContent =
-        message;
+        stageTitle;
 
-    elements.executionErrorReturnCode.textContent =
-        process.return_code
-        ?? "—";
 
     elements.executionErrorOverlay.classList.add(
         "visible"
@@ -3266,11 +3267,15 @@ function updateProcessStatus(process) {
     if (
         status === "failed"
     ) {
+        const failedStage =
+            dashboardState.failedStage
+            ?? dashboardState.activeVisualStage
+            ?? null;
+
         const errorSignature =
-            [
-                process.return_code,
-                process.last_error,
-            ].join("|");
+            failedStage
+            ?? "initialization";
+
 
         if (
             dashboardState.lastErrorSignature
@@ -3280,11 +3285,11 @@ function updateProcessStatus(process) {
                 errorSignature;
 
             showVisualError(
-                process
+                failedStage
             );
 
             showExecutionError(
-                process
+                failedStage
             );
         }
     }
@@ -3595,17 +3600,6 @@ async function pollRuntime() {
             ]);
 
         if (
-            statusResponse.ok
-        ) {
-            const process =
-                await statusResponse.json();
-
-            updateProcessStatus(
-                process
-            );
-        }
-
-        if (
             logsResponse.ok
         ) {
             const payload =
@@ -3616,9 +3610,24 @@ async function pollRuntime() {
             );
         }
 
-        await pollInteraction();
 
         await pollPipelineEvents();
+
+
+        if (
+            statusResponse.ok
+        ) {
+            const process =
+                await statusResponse.json();
+
+            updateProcessStatus(
+                process
+            );
+        }
+
+
+        await pollInteraction();
+
 
         if (
             dashboardState.runtimeView
@@ -3668,6 +3677,9 @@ async function startExperiment() {
         null;
 
     dashboardState.lastErrorSignature =
+        null;
+
+    dashboardState.failedStage =
         null;
 
     hideExecutionError();

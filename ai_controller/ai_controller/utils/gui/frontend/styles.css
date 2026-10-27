@@ -3765,37 +3765,11 @@ input:focus {
 
     display: flex;
     align-items: flex-end;
-    justify-content: space-between;
+    justify-content: flex-end;
 
     gap: 20px;
 }
 
-
-.visual-error-footer > div {
-    display: flex;
-    flex-direction: column;
-
-    align-items: flex-start;
-
-    gap: 5px;
-}
-
-
-.visual-error-footer span {
-    color: #667087;
-
-    font-size: 8px;
-    font-weight: 750;
-
-    letter-spacing: 0.11em;
-}
-
-
-.visual-error-footer strong {
-    color: #f08787;
-
-    font-size: 12px;
-}
 
 
 /* ============================================================
@@ -4163,28 +4137,6 @@ input:focus {
 
     font-size: 11px;
     line-height: 1.55;
-}
-
-
-.execution-error-meta {
-    margin-top: 14px;
-
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-
-    color: #667087;
-
-    font-size: 9px;
-
-    letter-spacing: 0.10em;
-}
-
-
-.execution-error-meta strong {
-    color: #ff9696;
-
-    font-size: 11px;
 }
 
 
