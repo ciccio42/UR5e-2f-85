@@ -235,13 +235,26 @@ docker exec -it seedo_ros2_container bash
 # FULL INFERENCE
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
-bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml
+
+
+unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
+export QT_QPA_PLATFORM=offscreen
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml
+
+unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
+export QT_QPA_PLATFORM=offscreen
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml \
+  --precomputed-plan /test_real/test_task10_1/action_planning/action_plan.json
 
 # PRECOMPUTED INFERENCE
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
-  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml
-  --precomputed-plan /test_real/test_task00_1/action_planning/action_plan.json \
-  --precomputed-demo-scene /test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --precomputed-plan /test_real/test_task15_1/action_planning/action_plan.json \
+  --precomputed-demo-scene /test_real/test_task15_1/demo_structured_scene/demo_structured_scene.json
 ```

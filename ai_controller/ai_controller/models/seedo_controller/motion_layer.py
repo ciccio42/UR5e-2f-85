@@ -2023,11 +2023,10 @@ class SeeDoMotionLayer:
             - hole_bottom_offset
         )
 
-        actions = self._nut_move_linear(
-            target_position,
-            self.current_pose.orientation,
-            max_step_m=(
-                cfg["insertion_step_m"]
+        actions = self._move_linear(
+            target_position=target_position,
+            target_orientation=(
+                self.current_pose.orientation
             ),
         )
 
@@ -2207,11 +2206,10 @@ class SeeDoMotionLayer:
         # entering the lower hole opening.
         # ---------------------------------------------------------
 
-        actions = self._nut_move_linear(
-            first_tcp_goal,
-            self.current_pose.orientation,
-            max_step_m=(
-                cfg["initial_entry_step_m"]
+        actions = self._move_linear(
+            target_position=first_tcp_goal,
+            target_orientation=(
+                self.current_pose.orientation
             ),
         )
 
@@ -2224,11 +2222,10 @@ class SeeDoMotionLayer:
         # ---------------------------------------------------------
 
         actions.extend(
-            self._nut_move_linear(
-                final_tcp_goal,
-                self.current_pose.orientation,
-                max_step_m=(
-                    cfg["insertion_slide_step_m"]
+            self._move_linear(
+                target_position=final_tcp_goal,
+                target_orientation=(
+                    self.current_pose.orientation
                 ),
             )
         )

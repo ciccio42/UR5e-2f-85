@@ -740,12 +740,51 @@ if [[ -z "${DEMO_PATH}" ]]; then
 
     if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
 
-        DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
+        STANDARD_DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
+        MODIFIED_DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264-30fps_modified.mp4"
 
     else
 
-        DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj_000_camera_front.mp4"
+        STANDARD_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj_000_camera_front.mp4"
+        MODIFIED_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj_000_camera_front_modified.mp4"
 
+    fi
+
+
+    echo
+    echo "Select demonstration video:"
+    echo "  [1] Standard"
+    echo "      ${STANDARD_DEMO_PATH}"
+    echo
+    echo "  [2] Modified"
+    echo "      ${MODIFIED_DEMO_PATH}"
+    echo
+
+    read -r -p "Choice [1/2]: " DEMO_VIDEO_CHOICE
+
+
+    case "${DEMO_VIDEO_CHOICE}" in
+
+        1)
+            DEMO_PATH="${STANDARD_DEMO_PATH}"
+            ;;
+
+        2)
+            DEMO_PATH="${MODIFIED_DEMO_PATH}"
+            ;;
+
+        *)
+            echo "[ERROR] Invalid demonstration video choice: ${DEMO_VIDEO_CHOICE}"
+            exit 1
+            ;;
+
+    esac
+
+
+    if [[ ! -f "${DEMO_PATH}" ]]; then
+        echo "[ERROR] Selected demonstration video does not exist:"
+        echo "        ${DEMO_PATH}"
+        exit 1
     fi
 
 fi
