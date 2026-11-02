@@ -1025,7 +1025,7 @@ def test_visual_prompting_nut_prompt_uses_ring_and_wooden_peg(
 # =====================================================================
 
 
-def test_scene_perceiver_contains_separate_prior_guided_nut_prompt():
+def test_scene_perceiver_contains_separate_prior_guided_task_prompts():
     """
     ScenePerceiver builds its prompt inline inside run(), so this audit
     deliberately checks the implementation source rather than executing
@@ -1053,7 +1053,7 @@ def test_scene_perceiver_contains_separate_prior_guided_nut_prompt():
     )
 
     assert (
-        "prior_guided_messages"
+        "prior_guided_pick_and_place_messages"
         in source
     )
 
