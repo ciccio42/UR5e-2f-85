@@ -427,6 +427,48 @@ class SeeDoController(AIController):
                 "Expected 'prior_guided' or 'generalized'."
             )
 
+        # ---------------------------------------------------------
+        # Prior-guided task domain
+        # ---------------------------------------------------------
+
+        raw_prior_guided_task = config.get(
+            "prior_guided_task"
+        )
+
+        if self.perception_mode == "prior_guided":
+
+            if raw_prior_guided_task is None:
+                raise ValueError(
+                    "prior_guided_task must be configured when "
+                    "perception_mode='prior_guided'."
+                )
+
+            self.prior_guided_task = str(
+                raw_prior_guided_task
+            ).strip().lower()
+
+            allowed_prior_guided_tasks = {
+                "pick_and_place",
+                "nut_assembly",
+            }
+
+            if (
+                self.prior_guided_task
+                not in allowed_prior_guided_tasks
+            ):
+                raise ValueError(
+                    "Invalid prior_guided_task: "
+                    f"{self.prior_guided_task!r}. "
+                    "Expected 'pick_and_place' or "
+                    "'nut_assembly'."
+                )
+
+        else:
+
+            # The task-domain discriminator is intentionally
+            # ignored in generalized perception mode.
+            self.prior_guided_task = None
+
         keyframe_config = config.get(
             "keyframe_selector",
             {},
@@ -541,6 +583,7 @@ class SeeDoController(AIController):
                 "gpt-4o-2024-08-06",
             ),
             perception_mode=self.perception_mode,
+            prior_guided_task=self.prior_guided_task,
         )
 
         self.runtime_structured_scene_builder = (
@@ -619,6 +662,7 @@ class SeeDoController(AIController):
                 )
             ),
             perception_mode=self.perception_mode,
+            prior_guided_task=self.prior_guided_task,
             grounding_dino_crop=self.grounding_dino_crop,
         )
 
@@ -711,6 +755,7 @@ class SeeDoController(AIController):
                 "objects"
             ),
             perception_mode=self.perception_mode,
+            prior_guided_task=self.prior_guided_task,
             grounding_dino_crop=self.grounding_dino_crop,
         )
 
@@ -730,6 +775,7 @@ class SeeDoController(AIController):
                 "left_to_right",
             ),
             perception_mode=self.perception_mode,
+            prior_guided_task=self.prior_guided_task,
         )
 
         if self.grasp_planning_enabled:

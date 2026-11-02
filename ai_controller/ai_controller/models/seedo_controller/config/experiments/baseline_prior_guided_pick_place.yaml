@@ -2,6 +2,14 @@
 # - generalized: discover object categories from the scene
 # - prior_guided: use prior knowledge about expected objects
 perception_mode: prior_guided
+
+# Prior-guided task domain.
+# Used only when perception_mode is prior_guided.
+# Supported values:
+# - pick_and_place
+# - nut_assembly
+prior_guided_task: pick_and_place
+
 grounding_dino:
   # Crop applied only to the image passed to GroundingDINO.
   # VLM discovery, SAM, SAM2, depth and camera geometry keep

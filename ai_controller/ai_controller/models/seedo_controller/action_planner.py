@@ -12,6 +12,7 @@ class ActionPlanner:
         model: str = "gpt-4o-2024-08-06",
         demonstration_bin_order: str = "left_to_right",
         perception_mode: str = "generalized",
+        prior_guided_task: str | None = None,
     ) -> None:
         self.model = model
 
@@ -21,6 +22,27 @@ class ActionPlanner:
                 "Invalid perception_mode: "
                 f"{self.perception_mode!r}"
             )
+
+        if self.perception_mode == "prior_guided":
+
+            self.prior_guided_task = str(
+                prior_guided_task
+            ).strip().lower()
+
+            if self.prior_guided_task not in {
+                "pick_and_place",
+                "nut_assembly",
+            }:
+                raise ValueError(
+                    "Invalid prior_guided_task: "
+                    f"{self.prior_guided_task!r}. "
+                    "Expected 'pick_and_place' or "
+                    "'nut_assembly'."
+                )
+
+        else:
+
+            self.prior_guided_task = None
 
         self.demonstration_bin_order = (
             str(demonstration_bin_order)
@@ -112,6 +134,7 @@ class ActionPlanner:
             model=self.model,
             demonstration_bin_order=self.demonstration_bin_order,
             perception_mode=self.perception_mode,
+            prior_guided_task=self.prior_guided_task,
         )
 
         if result is None:

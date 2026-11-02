@@ -994,7 +994,7 @@ def test_prior_guided_vlm_returns_valid_mapping(
         captured["messages"][0][
             "content"
         ]
-        == scene_interpreter_module.PRIOR_GUIDED_SCENE_INTERPRETER_SYSTEM_PROMPT
+        == scene_interpreter_module.PRIOR_GUIDED_PICK_AND_PLACE_SCENE_INTERPRETER_SYSTEM_PROMPT
     )
 
     assert captured["response_format"] == {

@@ -75,6 +75,7 @@ class ScenePerceiver:
         translation_noise_std_mm: float = 0.0,
         rotation_noise_std_deg: float = 0.0,
         perception_mode: str = "generalized",
+        prior_guided_task: str | None = None,
         grounding_dino_crop: dict[str, int] | None = None,
     ) -> None:
         self.camera_calibration_path = (
@@ -112,6 +113,27 @@ class ScenePerceiver:
                 "Invalid perception_mode: "
                 f"{self.perception_mode!r}"
             )
+
+        if self.perception_mode == "prior_guided":
+
+            self.prior_guided_task = str(
+                prior_guided_task
+            ).strip().lower()
+
+            if self.prior_guided_task not in {
+                "pick_and_place",
+                "nut_assembly",
+            }:
+                raise ValueError(
+                    "Invalid prior_guided_task: "
+                    f"{self.prior_guided_task!r}. "
+                    "Expected 'pick_and_place' or "
+                    "'nut_assembly'."
+                )
+
+        else:
+
+            self.prior_guided_task = None
 
         crop_config = grounding_dino_crop or {}
 
@@ -4159,7 +4181,7 @@ class ScenePerceiver:
         # Prior-guided object-discovery prompt
         # ---------------------------------------------------------
 
-        prior_guided_messages = [
+        prior_guided_pick_and_place_messages = [
             {
                 "role": "system",
                 "content": (
@@ -4219,15 +4241,101 @@ class ScenePerceiver:
             },
         ]
 
+        prior_guided_nut_assembly_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a visual object detector whose output will be used "
+                    "directly as text queries for GroundingDINO. "
+                    "The scene contains colored rings and wooden pegs. "
+                    "For every ring, include its visible color in the detector "
+                    "label using the exact form '<color> ring'. "
+                    "The only valid ring colors in this benchmark are: "
+                    "gray, yellow, and blue. "
+                    "For every ring, the detector label MUST therefore be exactly "
+                    "one of: 'gray ring', 'yellow ring', or 'blue ring'. "
+                    "Do not use any other ring color. "
+                    "For every wooden peg, always use the exact detector label "
+                    "'wooden peg' without adding color, position, material, "
+                    "or other attributes."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Inspect the physical objects visible on the table "
+                            "and classify them using these rules:\n"
+                            "1. For every visible ring, identify its visible "
+                            "color and return '<color> ring'.\n"
+                            "The only valid ring colors in this benchmark are: "
+                            "gray, yellow, and blue. "
+                            "For every ring, the detector label MUST therefore "
+                            "be exactly one of: 'gray ring', 'yellow ring', "
+                            "or 'blue ring'. "
+                            "Do not use any other ring color.\n"
+                            "2. Examples are 'gray ring', 'yellow ring', "
+                            "and 'blue ring'.\n"
+                            "3. For every visible peg, return exactly "
+                            "'wooden peg'.\n"
+                            "4. Count every physical instance separately.\n"
+                            "5. Repeat 'wooden peg' once for every visible peg.\n"
+                            "6. Do not include the robot, gripper, table, "
+                            "or background objects.\n"
+                            "7. Never use spatial descriptions such as "
+                            "'first peg from the left'.\n"
+                            "8. Do not add objects that are not visible.\n\n"
+                            "Return exactly two lines and no additional explanation:\n"
+                            "Number: <total number of instances>\n"
+                            "Objects: <comma-separated detector labels, "
+                            "repeated once per instance>"
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": (
+                                "data:image/jpeg;base64,"
+                                + image_base64
+                            ),
+                            "detail": "high",
+                        },
+                    },
+                ],
+            },
+        ]
+
         if self.perception_mode == "generalized":
+
             messages = generalized_messages
+
+        elif self.prior_guided_task == "pick_and_place":
+
+            messages = prior_guided_pick_and_place_messages
+
+        elif self.prior_guided_task == "nut_assembly":
+
+            messages = prior_guided_nut_assembly_messages
+
         else:
-            messages = prior_guided_messages
+
+            raise ValueError(
+                "Invalid prior_guided_task: "
+                f"{self.prior_guided_task!r}"
+            )
 
         print(
             "[ScenePerceiver] Perception mode: "
             f"{self.perception_mode}"
         )
+
+        if self.perception_mode == "prior_guided":
+            print(
+                "[ScenePerceiver] Prior-guided task: "
+                f"{self.prior_guided_task}"
+            )
 
         params = {
             "model": "gpt-4o-2024-08-06",

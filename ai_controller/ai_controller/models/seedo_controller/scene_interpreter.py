@@ -17,7 +17,8 @@ from results import (
 )
 from ai_controller.models.seedo_controller.scene_interpreter_prompts import (
     GENERALIZED_SCENE_INTERPRETER_SYSTEM_PROMPT,
-    PRIOR_GUIDED_SCENE_INTERPRETER_SYSTEM_PROMPT,
+    PRIOR_GUIDED_PICK_AND_PLACE_SCENE_INTERPRETER_SYSTEM_PROMPT,
+    PRIOR_GUIDED_NUT_ASSEMBLY_SCENE_INTERPRETER_SYSTEM_PROMPT,
 )
 
 SCENE_INTERPRETATION_SCHEMA: dict[str, Any] = {
@@ -60,6 +61,7 @@ class SceneInterpreter:
         self,
         model: str = "gpt-4o-2024-08-06",
         perception_mode: str = "generalized",
+        prior_guided_task: str | None = None,
     ) -> None:
         self.model = model
 
@@ -75,6 +77,27 @@ class SceneInterpreter:
                 "Invalid perception_mode: "
                 f"{self.perception_mode!r}"
             )
+
+        if self.perception_mode == "prior_guided":
+
+            self.prior_guided_task = str(
+                prior_guided_task
+            ).strip().lower()
+
+            if self.prior_guided_task not in {
+                "pick_and_place",
+                "nut_assembly",
+            }:
+                raise ValueError(
+                    "Invalid prior_guided_task: "
+                    f"{self.prior_guided_task!r}. "
+                    "Expected 'pick_and_place' or "
+                    "'nut_assembly'."
+                )
+
+        else:
+
+            self.prior_guided_task = None
 
     def run(
         self,
@@ -370,18 +393,40 @@ class SceneInterpreter:
         # ---------------------------------------------------------
 
         if self.perception_mode == "generalized":
+
             system_prompt = (
                 GENERALIZED_SCENE_INTERPRETER_SYSTEM_PROMPT
             )
-        else:
+
+        elif self.prior_guided_task == "pick_and_place":
+
             system_prompt = (
-                PRIOR_GUIDED_SCENE_INTERPRETER_SYSTEM_PROMPT
+                PRIOR_GUIDED_PICK_AND_PLACE_SCENE_INTERPRETER_SYSTEM_PROMPT
+            )
+
+        elif self.prior_guided_task == "nut_assembly":
+
+            system_prompt = (
+                PRIOR_GUIDED_NUT_ASSEMBLY_SCENE_INTERPRETER_SYSTEM_PROMPT
+            )
+
+        else:
+
+            raise ValueError(
+                "Invalid prior_guided_task: "
+                f"{self.prior_guided_task!r}"
             )
 
         print(
             "[SceneInterpreter] Perception mode: "
             f"{self.perception_mode}"
         )
+
+        if self.perception_mode == "prior_guided":
+            print(
+                "[SceneInterpreter] Prior-guided task: "
+                f"{self.prior_guided_task}"
+            )
 
         messages = [
             {
@@ -489,18 +534,92 @@ class SceneInterpreter:
                 f"unexpected={sorted(unexpected)}."
             )
 
-        # Detector labels are authoritative for non-bin objects.
-        for raw_object in raw_scene.objects:
+        if self.prior_guided_task == "pick_and_place":
 
-            detector_label = (
-                raw_object.label
-                .strip()
-                .lower()
+            # detector labels are authoritative for non-bin objects.
+            for raw_object in raw_scene.objects:
+
+                detector_label = (
+                    raw_object.label
+                    .strip()
+                    .lower()
+                )
+
+                if detector_label != "storage bin":
+
+                    returned_name = (
+                        semantic_names[
+                            raw_object.object_id
+                        ]
+                        .strip()
+                        .lower()
+                    )
+
+                    if returned_name != detector_label:
+                        raise RuntimeError(
+                            "Scene interpretation changed an authoritative "
+                            "semantic detector label: "
+                            f"raw_object_id={raw_object.object_id!r}, "
+                            f"detector_label={detector_label!r}, "
+                            f"semantic_name={returned_name!r}"
+                        )
+
+
+        elif self.prior_guided_task == "nut_assembly":
+
+            # In Nut-Assembly, ring detector labels are authoritative.
+            # Wooden pegs are instead assigned ordinal semantic names.
+            for raw_object in raw_scene.objects:
+
+                detector_label = (
+                    raw_object.label
+                    .strip()
+                    .lower()
+                )
+
+                if detector_label != "wooden peg":
+
+                    returned_name = (
+                        semantic_names[
+                            raw_object.object_id
+                        ]
+                        .strip()
+                        .lower()
+                    )
+
+                    if returned_name != detector_label:
+                        raise RuntimeError(
+                            "Scene interpretation changed an authoritative "
+                            "semantic detector label: "
+                            f"raw_object_id={raw_object.object_id!r}, "
+                            f"detector_label={detector_label!r}, "
+                            f"semantic_name={returned_name!r}"
+                        )
+
+
+        else:
+
+            raise ValueError(
+                "Invalid prior_guided_task: "
+                f"{self.prior_guided_task!r}"
             )
 
-            if detector_label != "storage bin":
+        if self.prior_guided_task == "nut_assembly":
 
-                returned_name = (
+            peg_names = []
+
+            for raw_object in raw_scene.objects:
+
+                detector_label = (
+                    raw_object.label
+                    .strip()
+                    .lower()
+                )
+
+                if detector_label != "wooden peg":
+                    continue
+
+                peg_names.append(
                     semantic_names[
                         raw_object.object_id
                     ]
@@ -508,13 +627,15 @@ class SceneInterpreter:
                     .lower()
                 )
 
-                if returned_name != detector_label:
+            for peg_name in peg_names:
+
+                if not peg_name.endswith(
+                    "peg from the left"
+                ):
                     raise RuntimeError(
-                        "Scene interpretation changed an authoritative "
-                        "semantic detector label: "
-                        f"raw_object_id={raw_object.object_id!r}, "
-                        f"detector_label={detector_label!r}, "
-                        f"semantic_name={returned_name!r}"
+                        "Scene interpretation returned an invalid "
+                        "wooden-peg semantic name: "
+                        f"{peg_name!r}"
                     )
 
         expected_ids = {

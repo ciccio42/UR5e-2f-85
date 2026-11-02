@@ -2,6 +2,15 @@
 # - generalized: discover object categories from the scene
 # - prior_guided: use prior knowledge about expected objects
 perception_mode: prior_guided
+
+# Prior-guided task domain.
+# Used only when perception_mode is prior_guided.
+# Supported values:
+# - pick_and_place
+# - nut_assembly
+prior_guided_task: nut_assembly
+
+
 grounding_dino:
   # Crop applied only to the image passed to GroundingDINO.
   # VLM discovery, SAM, SAM2, depth and camera geometry keep
@@ -112,8 +121,8 @@ scene_perceiver:
         rotation_std_deg: 0.0
 
   detector_labels:
-    - cube
-    - storage bin
+    - ring
+    - wooden peg
 
 lmp_generator:
   model: gpt-4o-2024-08-06

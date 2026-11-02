@@ -2,6 +2,10 @@
 # - generalized: discover object categories from the scene
 # - prior_guided: use prior knowledge about expected objects
 perception_mode: generalized
+
+# Used only when perception_mode is prior_guided.
+prior_guided_task: null
+
 grounding_dino:
   # Crop applied only to the image passed to GroundingDINO.
   # VLM discovery, SAM, SAM2, depth and camera geometry keep

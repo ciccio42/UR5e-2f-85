@@ -31,6 +31,7 @@ class VisualPrompter:
         ),
         objects: str | None = None,
         perception_mode: str = "generalized",
+        prior_guided_task: str | None = None,
         grounding_dino_crop: dict[str, int] | None = None,
     ) -> None:
         self.grounding_config = Path(grounding_config)
@@ -40,6 +41,7 @@ class VisualPrompter:
         self.sam2_checkpoint = Path(sam2_checkpoint)
         self.objects = objects
         self.perception_mode = perception_mode
+        self.prior_guided_task = prior_guided_task
         crop_config = grounding_dino_crop or {}
 
         self.grounding_dino_crop = {
@@ -110,6 +112,7 @@ class VisualPrompter:
             sam_checkpoint=str(self.sam_checkpoint),
             sam2_checkpoint=str(self.sam2_checkpoint),
             perception_mode=self.perception_mode,
+            prior_guided_task=self.prior_guided_task,
             grounding_dino_crop=self.grounding_dino_crop,
         )
 
