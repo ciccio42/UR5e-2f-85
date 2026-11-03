@@ -9,6 +9,7 @@ const elements = {
 
     demoTask: document.getElementById("demo-task"),
     demoTaskHint: document.getElementById("demo-task-hint"),
+    demoVariant: document.getElementById("demo-variant"),
     demoPath: document.getElementById("demo-path"),
 
     isaacPanel: document.getElementById("isaac-panel"),
@@ -131,6 +132,16 @@ const elements = {
     interactionSubmit: document.getElementById("interaction-submit"),
     interactionError: document.getElementById("interaction-error"),
     interactionStop: document.getElementById("interaction-stop"),
+
+    interactionSaveStreamRow:
+        document.getElementById(
+            "interaction-save-stream-row"
+        ),
+
+    interactionSaveStream:
+        document.getElementById(
+            "interaction-save-stream"
+        ),
 
     artifactsRootName:
         document.getElementById(
@@ -417,6 +428,9 @@ function buildRequest() {
             Number(
                 elements.demoTask.value
             ),
+
+        demo_variant:
+            elements.demoVariant.value,
 
         demo_path:
             demoPath || null,
@@ -2847,21 +2861,21 @@ function setCurrentStageState(
     );
 
     if (robotExecution) {
-
-        if (
-            state === "running"
-        ) {
+        if (state === "running") {
             elements.robotExecutionDetail.classList.remove(
                 "hidden"
             );
+
+            startRobotCameraStream();
         }
 
-        startRobotCameraStream();
+        else {
+            stopRobotCameraStream();
+        }
     }
 
     else {
         resetRobotExecutionDetail();
-
         stopRobotCameraStream();
     }
 }
@@ -3383,6 +3397,14 @@ function showInteraction(interaction) {
         !continueStop,
     );
 
+    elements.interactionSaveStreamRow.classList.toggle(
+        "hidden",
+        !continueStop,
+    );
+
+    elements.interactionSaveStream.checked =
+        false;
+
 
     if (continueStop) {
         elements.interactionSubmit.textContent =
@@ -3449,6 +3471,13 @@ function hideInteraction() {
     elements.interactionStop.classList.add(
         "hidden"
     );
+
+    elements.interactionSaveStreamRow.classList.add(
+        "hidden"
+    );
+
+    elements.interactionSaveStream.checked =
+        false;
 }
 
 
@@ -3526,6 +3555,14 @@ async function submitInteraction(
                     : elements.interactionValue.value
             );
 
+    const saveStream =
+        (
+            dashboardState.currentInteractionType
+            === "continue_stop"
+            && value === "stop"
+            && elements.interactionSaveStream.checked
+        );
+
     try {
         const response =
             await fetch(
@@ -3541,6 +3578,7 @@ async function submitInteraction(
                     body:
                         JSON.stringify({
                             value: value,
+                            save_stream: saveStream,
                         }),
                 }
             );
@@ -3806,6 +3844,7 @@ function attachInteractions() {
         elements.taskSelect,
         elements.executionTypeSelect,
         elements.demoTask,
+        elements.demoVariant,
         elements.demoPath,
         elements.configureScene,
         elements.sceneTask,
@@ -4098,6 +4137,12 @@ async function loadDashboard() {
             elements.executionTypeSelect,
             options.execution_types,
             options.defaults.execution_type,
+        );
+
+        populateSelect(
+            elements.demoVariant,
+            options.demo.variants,
+            options.defaults.demo_variant,
         );
 
         elements.executionTarget.textContent =

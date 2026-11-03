@@ -70,6 +70,16 @@ EXECUTION_TYPES = [
     },
 ]
 
+DEMO_VARIANTS = [
+    {
+        "id": "standard",
+        "label": "Standard",
+    },
+    {
+        "id": "modified",
+        "label": "Modified",
+    },
+]
 
 def get_experiment_options() -> dict:
     execution_mode, detection_source = detect_execution_mode()
@@ -95,6 +105,7 @@ def get_experiment_options() -> dict:
         "execution_types": EXECUTION_TYPES,
 
         "demo": {
+            "variants": DEMO_VARIANTS,
             "custom_path_supported": True,
             "custom_path_required": False,
         },
@@ -119,6 +130,7 @@ def get_experiment_options() -> dict:
             "controller": "seedo",
             "task": "pick_place",
             "demo_task": 0,
+            "demo_variant": "standard",
             "demo_path": None,
             "execution_type": "full",
             "config": default_controller.default_config,

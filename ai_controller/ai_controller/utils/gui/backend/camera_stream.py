@@ -1,5 +1,10 @@
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
+
+from pathlib import Path
 
 import cv2
 import rclpy
@@ -43,6 +48,31 @@ class FrontCameraStream:
         self._started = False
 
         self._bridge = CvBridge()
+
+        # -----------------------------------------------------
+        # Temporary robot-execution video recording
+        # -----------------------------------------------------
+
+        self._recording_lock = threading.RLock()
+
+        self._recording_requested = False
+        self._recording_process = None
+
+        self._recording_temp_path = None
+
+        self._recording_width = None
+        self._recording_height = None
+
+        self._recording_frame_count = 0
+
+        self._recording_fps = float(
+            os.environ.get(
+                "SEEDO_GUI_RECORDING_FPS",
+                "11",
+            )
+        )
+
+        self._recording_error = None
 
 
     def start(self):
@@ -118,6 +148,9 @@ class FrontCameraStream:
                 desired_encoding="bgr8",
             )
 
+            self._record_frame(
+                frame
+            )
 
             success, encoded = cv2.imencode(
                 ".jpg",
@@ -147,6 +180,368 @@ class FrontCameraStream:
         except Exception:
             return
 
+    def _start_ffmpeg_locked(
+        self,
+        frame,
+    ) -> None:
+
+        if self._recording_process is not None:
+            return
+
+        height, width = frame.shape[:2]
+
+        self._recording_width = width
+        self._recording_height = height
+
+
+        temp_file = tempfile.NamedTemporaryFile(
+            prefix="seedo_gui_robot_execution_",
+            suffix=".mp4",
+            delete=False,
+        )
+
+        temp_path = Path(
+            temp_file.name
+        )
+
+        temp_file.close()
+
+
+        command = [
+            "/usr/bin/ffmpeg",
+            "-y",
+
+            "-loglevel",
+            "error",
+
+            "-f",
+            "rawvideo",
+
+            "-pix_fmt",
+            "bgr24",
+
+            "-s:v",
+            f"{width}x{height}",
+
+            "-r",
+            str(self._recording_fps),
+
+            "-i",
+            "-",
+
+            "-an",
+
+            "-c:v",
+            "libx264",
+
+            "-preset",
+            "veryfast",
+
+            "-crf",
+            "18",
+
+            "-pix_fmt",
+            "yuv420p",
+
+            "-movflags",
+            "+faststart",
+
+            str(temp_path),
+        ]
+
+
+        try:
+            process = subprocess.Popen(
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+        except Exception:
+            try:
+                temp_path.unlink(
+                    missing_ok=True
+                )
+            except Exception:
+                pass
+
+            raise
+
+
+        self._recording_process = process
+        self._recording_temp_path = temp_path
+
+    def _record_frame(
+        self,
+        frame,
+    ) -> None:
+
+        with self._recording_lock:
+
+            if not self._recording_requested:
+                return
+
+
+            try:
+                if self._recording_process is None:
+                    self._start_ffmpeg_locked(
+                        frame
+                    )
+
+
+                process = (
+                    self._recording_process
+                )
+
+                if (
+                    process is None
+                    or process.stdin is None
+                ):
+                    return
+
+
+                if process.poll() is not None:
+                    self._recording_error = (
+                        "FFmpeg recording process "
+                        "terminated unexpectedly."
+                    )
+
+                    self._recording_requested = False
+
+                    return
+
+
+                process.stdin.write(
+                    frame.tobytes()
+                )
+
+                self._recording_frame_count += 1
+
+
+            except Exception as exc:
+                self._recording_error = str(
+                    exc
+                )
+
+                self._recording_requested = False
+
+    def begin_recording(
+        self,
+    ) -> None:
+
+        self.start()
+
+        with self._recording_lock:
+
+            # A new robot execution must never reuse
+            # a previous temporary recording.
+            self._discard_recording_locked()
+
+            self._recording_requested = True
+
+            self._recording_frame_count = 0
+
+            self._recording_width = None
+            self._recording_height = None
+
+            self._recording_error = None
+
+    def _finalize_recording_locked(
+        self,
+    ) -> None:
+
+        self._recording_requested = False
+
+        process = self._recording_process
+
+        if process is None:
+            return
+
+
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+
+        except Exception:
+            pass
+
+
+        try:
+            process.wait(
+                timeout=10
+            )
+
+        except subprocess.TimeoutExpired:
+
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+            try:
+                process.wait(
+                    timeout=2
+                )
+            except Exception:
+                pass
+
+
+        self._recording_process = None
+
+    def end_recording(
+        self,
+    ) -> None:
+
+        with self._recording_lock:
+            self._finalize_recording_locked()
+
+    def _discard_recording_locked(
+        self,
+    ) -> None:
+
+        self._finalize_recording_locked()
+
+        temp_path = (
+            self._recording_temp_path
+        )
+
+        if temp_path is not None:
+
+            try:
+                temp_path.unlink(
+                    missing_ok=True
+                )
+
+            except Exception:
+                pass
+
+
+        self._recording_temp_path = None
+
+        self._recording_frame_count = 0
+
+        self._recording_width = None
+        self._recording_height = None
+
+    def discard_recording(
+        self,
+    ) -> None:
+
+        with self._recording_lock:
+            self._discard_recording_locked()
+
+    def commit_recording(
+        self,
+        artifact_root: str | Path,
+    ) -> Path:
+
+        with self._recording_lock:
+
+            self._finalize_recording_locked()
+
+            temp_path = (
+                self._recording_temp_path
+            )
+
+
+            if (
+                temp_path is None
+                or not temp_path.is_file()
+            ):
+                raise RuntimeError(
+                    "No robot execution recording "
+                    "is available to save."
+                )
+
+
+            if temp_path.stat().st_size == 0:
+                raise RuntimeError(
+                    "Robot execution recording is empty."
+                )
+
+
+            artifact_root = (
+                Path(artifact_root)
+                .expanduser()
+                .resolve()
+            )
+
+
+            rollout_dir = (
+                artifact_root
+                / "rollouts"
+            )
+
+            rollout_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+
+            output_path = (
+                rollout_dir
+                / "robot_execution_front_camera.mp4"
+            )
+
+
+            if output_path.exists():
+                output_path.unlink()
+
+
+            shutil.move(
+                str(temp_path),
+                str(output_path),
+            )
+
+
+            self._recording_temp_path = None
+
+            return output_path
+
+    def get_recording_status(
+        self,
+    ) -> dict:
+
+        with self._recording_lock:
+
+            temp_path = (
+                self._recording_temp_path
+            )
+
+            return {
+                "recording":
+                    self._recording_requested,
+
+                "finalized":
+                    (
+                        not self._recording_requested
+                        and temp_path is not None
+                        and temp_path.is_file()
+                    ),
+
+                "frame_count":
+                    self._recording_frame_count,
+
+                "width":
+                    self._recording_width,
+
+                "height":
+                    self._recording_height,
+
+                "fps":
+                    self._recording_fps,
+
+                "temp_path":
+                    (
+                        str(temp_path)
+                        if temp_path is not None
+                        else None
+                    ),
+
+                "error":
+                    self._recording_error,
+            }
 
     def mjpeg_frames(self):
 
@@ -199,6 +594,8 @@ class FrontCameraStream:
 
 
     def stop(self):
+
+        self.discard_recording()
 
         self._stop_event.set()
 

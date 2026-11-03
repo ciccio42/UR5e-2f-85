@@ -49,6 +49,11 @@ class ExperimentRequest(BaseModel):
 
     demo_task: int
 
+    demo_variant: Literal[
+        "standard",
+        "modified",
+    ] = "standard"
+
     demo_path: str | None = None
 
     execution_type: Literal[
@@ -214,21 +219,31 @@ def _resolve_demo_path(
 
     demo_task_id = f"{request.demo_task:02d}"
 
+    if request.demo_variant == "modified":
+        demo_filename = (
+            "traj000-h264-30fps_modified.mp4"
+        )
+    else:
+        demo_filename = (
+            "traj000-h264-30fps.mp4"
+        )
+
     if request.task == "pick_place":
-        demo_path = Path(
-            "/test_dataset"
-            "/pick_place"
-            "/human_rgb_pick_place"
-            f"/task_{demo_task_id}"
-            "/traj000"
-            "/converted"
-            "/traj000-h264-30fps.mp4"
+        demo_path = (
+            Path("/test_dataset")
+            / "pick_place"
+            / "human_rgb_pick_place"
+            / f"task_{demo_task_id}"
+            / "traj000"
+            / "converted"
+            / demo_filename
         )
 
     elif request.task == "nut_assembly":
-        demo_path = Path(
-            f"/dataset_nut/task_{demo_task_id}"
-            "/traj000-h264-30fps.mp4"
+        demo_path = (
+            Path("/dataset_nut")
+            / f"task_{demo_task_id}"
+            / demo_filename
         )
 
     else:
@@ -415,6 +430,7 @@ def build_experiment_command(
         "execution_type": request.execution_type,
         "config": str(config_path),
         "perception_mode": perception_mode,
+        "demo_variant": request.demo_variant,
         "demo_path": str(demo_path),
         "launcher": str(launcher),
         "command": command,

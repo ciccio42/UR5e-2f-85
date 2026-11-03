@@ -61,6 +61,7 @@ def dashboard():
 
 class InteractionResponse(BaseModel):
     value: str
+    save_stream: bool = False
 
 
 @app.get("/api/health")
@@ -100,11 +101,65 @@ def respond_to_interaction(
     interaction_id: str,
     response: InteractionResponse,
 ):
+    saved_video = None
+
     try:
+        pending = (
+            INTERACTION_MANAGER.get_pending()
+        )
+
+        is_continue_stop = (
+            pending is not None
+            and pending.get("interaction_id")
+            == interaction_id
+            and pending.get("interaction_type")
+            == "continue_stop"
+        )
+
+
+        if is_continue_stop:
+
+            if response.value == "continue":
+
+                FRONT_CAMERA_STREAM.discard_recording()
+
+
+            elif response.value == "stop":
+
+                if response.save_stream:
+
+                    artifact_root = (
+                        ARTIFACT_MANAGER.get_root()
+                    )
+
+                    if artifact_root is None:
+                        raise RuntimeError(
+                            "Cannot save robot execution video: "
+                            "no active artifact directory."
+                        )
+
+                    saved_video = (
+                        FRONT_CAMERA_STREAM.commit_recording(
+                            artifact_root
+                        )
+                    )
+
+                else:
+                    FRONT_CAMERA_STREAM.discard_recording()
+
+
+            else:
+                raise RuntimeError(
+                    "Continue/Stop interaction received "
+                    f"unsupported response: {response.value}"
+                )
+
+
         INTERACTION_MANAGER.respond(
             interaction_id=interaction_id,
             value=response.value,
         )
+
 
     except (LookupError, RuntimeError) as exc:
         return {
@@ -112,9 +167,15 @@ def respond_to_interaction(
             "message": str(exc),
         }
 
+
     return {
         "status": "ok",
         "interaction_id": interaction_id,
+        "saved_video": (
+            str(saved_video)
+            if saved_video is not None
+            else None
+        ),
     }
 
 

@@ -230,6 +230,16 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml
   --precomputed-plan /test_real/test_task00_1/action_planning/action_plan.json \
   --precomputed-demo-scene /test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json
+
+# GUI LAUNCH
+export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
+export QT_QPA_PLATFORM=offscreen
+cd /home/ros2_ws/src/UR5e-2f-85/ai_controller && \
+/opt/seedo_gui_venv/bin/python -m uvicorn \
+ai_controller.utils.gui.backend.app:app \
+--host 0.0.0.0 \
+--port 8765 \
+--reload
 ```
 
 The script can automatically configure the scene by asking for the **task** and **trajectory**.

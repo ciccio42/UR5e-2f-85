@@ -30,6 +30,10 @@ from ai_controller.utils.gui.backend.artifact_manager import (
     ARTIFACT_MANAGER,
 )
 
+from ai_controller.utils.gui.backend.camera_stream import (
+    FRONT_CAMERA_STREAM,
+)
+
 class ProcessManager:
 
     def __init__(
@@ -104,6 +108,8 @@ class ProcessManager:
         EVENT_MANAGER.clear()
 
         ARTIFACT_MANAGER.clear()
+
+        FRONT_CAMERA_STREAM.discard_recording()
 
         env = os.environ.copy()
 
@@ -265,6 +271,28 @@ class ProcessManager:
                             payload_text
                         )
 
+                        event_type = event.get(
+                            "event"
+                        )
+
+                        event_stage = event.get(
+                            "stage"
+                        )
+
+
+                        if (
+                            event_type == "stage_started"
+                            and event_stage == "robot_execution"
+                        ):
+                            FRONT_CAMERA_STREAM.begin_recording()
+
+
+                        elif (
+                            event_type == "stage_completed"
+                            and event_stage == "robot_execution"
+                        ):
+                            FRONT_CAMERA_STREAM.end_recording()
+
                         if (
                             event.get("event")
                             == "artifacts_root"
@@ -316,6 +344,7 @@ class ProcessManager:
 
             return_code = process.wait()
 
+            FRONT_CAMERA_STREAM.end_recording()
 
             self._interaction_manager.clear()
 
@@ -349,8 +378,9 @@ class ProcessManager:
 
         except Exception as exc:
 
-            self._interaction_manager.clear()
+            FRONT_CAMERA_STREAM.end_recording()
 
+            self._interaction_manager.clear()
 
             with self._lock:
 
