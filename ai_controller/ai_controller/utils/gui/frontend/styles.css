@@ -3149,6 +3149,9 @@ input:focus {
     color: #ff8989;
 }
 
+.camera-live-state.completed {
+    color: #62dba4;
+}
 
 .robot-camera-frame {
     position: relative;
@@ -3184,6 +3187,76 @@ input:focus {
     background: #05070c;
 }
 
+.robot-camera-completed {
+    position: absolute;
+    inset: 0;
+
+    display: flex;
+    flex-direction: column;
+
+    align-items: center;
+    justify-content: center;
+
+    gap: 12px;
+
+    padding: 32px;
+
+    text-align: center;
+
+    background:
+        radial-gradient(
+            circle at center,
+            rgba(63, 148, 112, 0.12),
+            #05070c 72%
+        );
+}
+
+
+.robot-camera-completed-icon {
+    width: 58px;
+    height: 58px;
+
+    display: grid;
+    place-items: center;
+
+    margin-bottom: 5px;
+
+    border:
+        1px solid
+        rgba(98, 219, 164, 0.28);
+
+    border-radius: 50%;
+
+    color: #62dba4;
+
+    background:
+        rgba(98, 219, 164, 0.08);
+
+    font-size: 25px;
+    font-weight: 800;
+}
+
+
+.robot-camera-completed-title {
+    color: #e7edf8;
+
+    font-size: 17px;
+    font-weight: 750;
+
+    letter-spacing: 0.01em;
+}
+
+
+.robot-camera-completed-message {
+    max-width: 430px;
+
+    color: #75829b;
+
+    font-size: 11px;
+    font-weight: 500;
+
+    line-height: 1.6;
+}
 
 /* ============================================================
    TERMINAL
@@ -4083,12 +4156,120 @@ input:focus {
     font-size: 10px;
 }
 
+.interaction-save-stream-row {
+    margin-top: 20px;
 
-.interaction-actions {
-    margin-top: 22px;
+    padding: 15px 16px;
 
     display: flex;
-    justify-content: flex-end;
+    align-items: center;
+    justify-content: space-between;
+
+    gap: 18px;
+
+    border:
+        1px solid
+        rgba(255, 255, 255, 0.06);
+
+    border-radius: 11px;
+
+    background:
+        rgba(5, 8, 14, 0.42);
+}
+
+
+.interaction-save-stream-label {
+    color: #aeb7c8;
+
+    font-size: 11px;
+    font-weight: 650;
+}
+
+
+.interaction-save-stream-toggle {
+    display: flex;
+
+    padding: 3px;
+
+    gap: 3px;
+
+    border-radius: 9px;
+
+    background:
+        rgba(255, 255, 255, 0.045);
+
+    border:
+        1px solid
+        rgba(255, 255, 255, 0.06);
+}
+
+
+.save-stream-option {
+    width: 54px;
+    height: 31px;
+
+    border: 0;
+
+    border-radius: 7px;
+
+    color: #667187;
+
+    background: transparent;
+
+    font-size: 9px;
+    font-weight: 800;
+
+    letter-spacing: 0.08em;
+
+    cursor: pointer;
+
+    transition:
+        color 180ms ease,
+        background 180ms ease,
+        box-shadow 180ms ease;
+}
+
+
+.save-stream-option.active {
+    color: #eef2ff;
+
+    background:
+        rgba(103, 122, 255, 0.22);
+
+    box-shadow:
+        inset 0 0 0 1px
+        rgba(118, 136, 255, 0.18);
+}
+
+.interaction-actions {
+    margin-top: 28px;
+
+    display: flex;
+    justify-content: space-between;
+
+    gap: 22px;
+}
+
+
+.interaction-actions button {
+    min-width: 145px;
+
+    transition:
+        transform 160ms ease,
+        box-shadow 160ms ease,
+        border-color 160ms ease;
+}
+
+
+.interaction-actions button.selected {
+    transform:
+        translateY(-2px);
+
+    box-shadow:
+        0 0 0 2px
+        rgba(117, 136, 255, 0.28),
+        0 10px 30px
+        rgba(0, 0, 0, 0.24);
 }
 
 

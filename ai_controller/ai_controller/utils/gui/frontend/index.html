@@ -1358,6 +1358,24 @@
                                         alt="Robot front camera"
                                     >
 
+                                    <div
+                                        id="robot-camera-completed"
+                                        class="robot-camera-completed hidden"
+                                    >
+                                        <div class="robot-camera-completed-icon">
+                                            ✓
+                                        </div>
+
+                                        <div class="robot-camera-completed-title">
+                                            Robot execution completed
+                                        </div>
+
+                                        <div class="robot-camera-completed-message">
+                                            The robot execution finished successfully.
+                                            The live camera stream has been closed.
+                                        </div>
+                                    </div>
+
                                 </div>
 
                             </div>
@@ -1724,7 +1742,7 @@
             </div>
 
 
-            <h2>
+            <h2 id="interaction-title">
                 Controller paused
             </h2>
 
@@ -1756,25 +1774,36 @@
 
             <div
                 id="interaction-save-stream-row"
-                class="hidden"
+                class="interaction-save-stream-row hidden"
             >
 
-                <label class="switch-row">
+                <div class="interaction-save-stream-label">
+                    Save robot execution video
+                </div>
 
-                    <span>
-                        Save robot execution video if Stop is selected
-                    </span>
+                <div
+                    class="interaction-save-stream-toggle"
+                    role="group"
+                    aria-label="Save robot execution video"
+                >
 
-                    <input
-                        id="interaction-save-stream"
-                        type="checkbox"
+                    <button
+                        id="interaction-save-stream-no"
+                        class="save-stream-option active"
+                        type="button"
                     >
+                        NO
+                    </button>
 
-                    <span class="switch">
-                        <span class="switch-knob"></span>
-                    </span>
+                    <button
+                        id="interaction-save-stream-yes"
+                        class="save-stream-option"
+                        type="button"
+                    >
+                        YES
+                    </button>
 
-                </label>
+                </div>
 
             </div>
 

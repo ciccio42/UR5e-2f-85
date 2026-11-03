@@ -109,6 +109,10 @@ const elements = {
     robotCameraPanel: document.getElementById("robot-camera-panel"),
     robotCameraState: document.getElementById("robot-camera-state"),
     robotCameraStream: document.getElementById("robot-camera-stream"),
+    robotCameraCompleted:
+        document.getElementById(
+            "robot-camera-completed"
+        ),
 
     visualErrorCard: document.getElementById("visual-error-card"),
     visualErrorMessage: document.getElementById("visual-error-message"),
@@ -133,14 +137,24 @@ const elements = {
     interactionError: document.getElementById("interaction-error"),
     interactionStop: document.getElementById("interaction-stop"),
 
+    interactionTitle:
+        document.getElementById(
+            "interaction-title"
+        ),
+
     interactionSaveStreamRow:
         document.getElementById(
             "interaction-save-stream-row"
         ),
 
-    interactionSaveStream:
+    interactionSaveStreamNo:
         document.getElementById(
-            "interaction-save-stream"
+            "interaction-save-stream-no"
+        ),
+
+    interactionSaveStreamYes:
+        document.getElementById(
+            "interaction-save-stream-yes"
         ),
 
     artifactsRootName:
@@ -202,6 +216,9 @@ const dashboardState = {
 
     currentInteractionId: null,
     currentInteractionType: "text",
+
+    continueStopSelection: "stop",
+    saveStreamSelection: false,
 
     pollTimer: null,
     runtimeView: "visual",
@@ -2575,12 +2592,49 @@ function getVisualStageDefinition(stageName) {
 }
 
 
-function stopRobotCameraStream() {
+function stopRobotCameraStream(
+    reason = "offline",
+) {
     dashboardState.cameraStreamActive =
         false;
 
     elements.robotCameraStream.removeAttribute(
         "src"
+    );
+
+
+    if (reason === "completed") {
+
+        elements.robotCameraStream.classList.add(
+            "hidden"
+        );
+
+        elements.robotCameraCompleted.classList.remove(
+            "hidden"
+        );
+
+        elements.robotCameraState.textContent =
+            "COMPLETED";
+
+        elements.robotCameraState.classList.remove(
+            "live",
+            "failed",
+        );
+
+        elements.robotCameraState.classList.add(
+            "completed"
+        );
+
+        return;
+    }
+
+
+    elements.robotCameraCompleted.classList.add(
+        "hidden"
+    );
+
+    elements.robotCameraStream.classList.add(
+        "hidden"
     );
 
     elements.robotCameraState.textContent =
@@ -2589,6 +2643,7 @@ function stopRobotCameraStream() {
     elements.robotCameraState.classList.remove(
         "live",
         "failed",
+        "completed",
     );
 }
 
@@ -2603,12 +2658,21 @@ function startRobotCameraStream() {
     dashboardState.cameraStreamActive =
         true;
 
+    elements.robotCameraCompleted.classList.add(
+        "hidden"
+    );
+
+    elements.robotCameraStream.classList.remove(
+        "hidden"
+    );
+
     elements.robotCameraState.textContent =
         "CONNECTING";
 
     elements.robotCameraState.classList.remove(
         "live",
         "failed",
+        "completed",
     );
 
     elements.robotCameraStream.src =
@@ -2869,8 +2933,16 @@ function setCurrentStageState(
             startRobotCameraStream();
         }
 
+        else if (state === "completed") {
+            stopRobotCameraStream(
+                "completed"
+            );
+        }
+
         else {
-            stopRobotCameraStream();
+            stopRobotCameraStream(
+                "offline"
+            );
         }
     }
 
@@ -3358,6 +3430,40 @@ function appendLogs(logs) {
    USER INTERACTION
    ============================================================ */
 
+   function setSaveStreamSelection(
+    enabled,
+) {
+    dashboardState.saveStreamSelection =
+        enabled;
+
+    elements.interactionSaveStreamNo.classList.toggle(
+        "active",
+        !enabled,
+    );
+
+    elements.interactionSaveStreamYes.classList.toggle(
+        "active",
+        enabled,
+    );
+}
+
+
+function setContinueStopSelection(
+    value,
+) {
+    dashboardState.continueStopSelection =
+        value;
+
+    elements.interactionStop.classList.toggle(
+        "selected",
+        value === "stop",
+    );
+
+    elements.interactionSubmit.classList.toggle(
+        "selected",
+        value === "continue",
+    );
+}
 
 function showInteraction(interaction) {
     dashboardState.currentInteractionId =
@@ -3402,8 +3508,26 @@ function showInteraction(interaction) {
         !continueStop,
     );
 
-    elements.interactionSaveStream.checked =
-        false;
+
+    if (continueStop) {
+
+        elements.interactionTitle.textContent =
+            "Experiment completed";
+
+        setSaveStreamSelection(
+            false
+        );
+
+        setContinueStopSelection(
+            "stop"
+        );
+    }
+
+    else {
+
+        elements.interactionTitle.textContent =
+            "Controller paused";
+    }
 
 
     if (continueStop) {
@@ -3434,10 +3558,12 @@ function showInteraction(interaction) {
 
     setTimeout(
         () => {
-            if (
-                enterOnly
-                || continueStop
-            ) {
+
+            if (continueStop) {
+                elements.interactionStop.focus();
+            }
+
+            else if (enterOnly) {
                 elements.interactionSubmit.focus();
             }
 
@@ -3476,8 +3602,16 @@ function hideInteraction() {
         "hidden"
     );
 
-    elements.interactionSaveStream.checked =
-        false;
+    setSaveStreamSelection(
+        false
+    );
+
+    setContinueStopSelection(
+        "stop"
+    );
+
+    elements.interactionTitle.textContent =
+        "Controller paused";
 }
 
 
@@ -3560,7 +3694,7 @@ async function submitInteraction(
             dashboardState.currentInteractionType
             === "continue_stop"
             && value === "stop"
-            && elements.interactionSaveStream.checked
+            && dashboardState.saveStreamSelection
         );
 
     try {
@@ -3913,6 +4047,10 @@ function attachInteractions() {
                 dashboardState.currentInteractionType
                 === "continue_stop"
             ) {
+                setContinueStopSelection(
+                    "continue"
+                );
+
                 submitInteraction(
                     "continue"
                 );
@@ -3927,6 +4065,11 @@ function attachInteractions() {
     elements.interactionStop.addEventListener(
         "click",
         () => {
+
+            setContinueStopSelection(
+                "stop"
+            );
+
             submitInteraction(
                 "stop"
             );
@@ -4059,6 +4202,79 @@ function attachInteractions() {
 
                 elements.robotCameraState.classList.add(
                     "failed"
+                );
+            }
+        },
+    );
+
+    elements.interactionSaveStreamNo.addEventListener(
+        "click",
+        () => {
+            setSaveStreamSelection(
+                false
+            );
+        },
+    );
+
+
+    elements.interactionSaveStreamYes.addEventListener(
+        "click",
+        () => {
+            setSaveStreamSelection(
+                true
+            );
+        },
+    );
+
+    document.addEventListener(
+        "keydown",
+        event => {
+
+            if (
+                dashboardState.currentInteractionType
+                !== "continue_stop"
+                || !elements.interactionOverlay.classList.contains(
+                    "visible"
+                )
+            ) {
+                return;
+            }
+
+
+            if (event.key === "ArrowLeft") {
+
+                event.preventDefault();
+
+                setContinueStopSelection(
+                    "stop"
+                );
+
+                elements.interactionStop.focus();
+
+                return;
+            }
+
+
+            if (event.key === "ArrowRight") {
+
+                event.preventDefault();
+
+                setContinueStopSelection(
+                    "continue"
+                );
+
+                elements.interactionSubmit.focus();
+
+                return;
+            }
+
+
+            if (event.key === "Enter") {
+
+                event.preventDefault();
+
+                submitInteraction(
+                    dashboardState.continueStopSelection
                 );
             }
         },
