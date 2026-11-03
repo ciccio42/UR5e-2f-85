@@ -4,10 +4,6 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-import json
-import select
-import threading
-import time
 
 import numpy as np
 
@@ -28,10 +24,6 @@ class GraspGenXRemoteClient:
     The SeeDo environment does not need graspgenx, pyzmq,
     msgpack, or other GraspGen-X dependencies installed.
     """
-
-    WORKER_RESPONSE_PREFIX = (
-        "__GRASPGENX_WORKER_RESPONSE__"
-    )
 
     def __init__(
         self,
@@ -71,9 +63,6 @@ class GraspGenXRemoteClient:
             THIS_DIR / "worker.py"
         )
 
-        self._worker_process = None
-        self._worker_lock = threading.Lock()
-
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
 
@@ -100,297 +89,67 @@ class GraspGenXRemoteClient:
 
         return env
 
-    def _stop_worker(
+    def _run_worker(
         self,
-    ) -> None:
-
-        process = self._worker_process
-
-        self._worker_process = None
-
-        if process is None:
-            return
-
-        try:
-            if process.stdin is not None:
-                process.stdin.close()
-
-        except Exception:
-            pass
-
-        try:
-            process.wait(
-                timeout=2.0
-            )
-
-        except subprocess.TimeoutExpired:
-
-            try:
-                process.kill()
-
-            except Exception:
-                pass
-
-            try:
-                process.wait(
-                    timeout=2.0
-                )
-
-            except Exception:
-                pass
-
-
-    def _ensure_worker(
-        self,
-    ) -> subprocess.Popen:
-
-        process = self._worker_process
-
-        if (
-            process is not None
-            and process.poll() is None
-        ):
-            return process
-
-
-        self._stop_worker()
-
+        arguments: list[str],
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
 
         command = [
             str(self.python_executable),
             str(self.worker_path),
-
-            "--persistent",
-
-            "--host",
-            self.host,
-
-            "--port",
-            str(self.port),
+            *arguments,
         ]
 
-
         try:
-            process = subprocess.Popen(
+            result = subprocess.run(
                 command,
-
                 cwd=str(
                     self.graspgenx_root
                 ),
-
                 env=self._build_env(),
-
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-
+                capture_output=True,
                 text=True,
-                bufsize=1,
+                timeout=timeout,
+                check=False,
             )
 
-        except OSError as exc:
+        except (
+            OSError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             raise GraspGenXRemoteUnavailable(
-                "Could not start the persistent "
+                "Could not execute the "
                 "GraspGen-X client worker."
             ) from exc
 
-
-        self._worker_process = process
-
-        return process
-
-
-    def _request_worker(
-        self,
-        request: dict,
-        timeout: float,
-    ) -> dict:
-
-        with self._worker_lock:
-
-            process = self._ensure_worker()
-
-            if (
-                process.stdin is None
-                or process.stdout is None
-            ):
-                self._stop_worker()
-
-                raise GraspGenXRemoteUnavailable(
-                    "Persistent GraspGen-X worker "
-                    "pipes are unavailable."
-                )
-
-
-            try:
-                process.stdin.write(
-                    json.dumps(
-                        request
-                    )
-                    + "\n"
-                )
-
-                process.stdin.flush()
-
-            except Exception as exc:
-                self._stop_worker()
-
-                raise GraspGenXRemoteUnavailable(
-                    "Could not send request to "
-                    "persistent GraspGen-X worker."
-                ) from exc
-
-
-            deadline = (
-                time.monotonic()
-                + float(timeout)
+        if result.returncode != 0:
+            raise GraspGenXRemoteUnavailable(
+                "GraspGen-X client worker failed.\n"
+                f"stdout:\n{result.stdout}\n"
+                f"stderr:\n{result.stderr}"
             )
 
-            worker_output = []
-
-
-            while True:
-
-                remaining = (
-                    deadline
-                    - time.monotonic()
-                )
-
-                if remaining <= 0.0:
-
-                    self._stop_worker()
-
-                    raise GraspGenXRemoteUnavailable(
-                        "Persistent GraspGen-X worker "
-                        "timed out."
-                    )
-
-
-                ready, _, _ = select.select(
-                    [process.stdout],
-                    [],
-                    [],
-                    remaining,
-                )
-
-
-                if not ready:
-
-                    self._stop_worker()
-
-                    raise GraspGenXRemoteUnavailable(
-                        "Persistent GraspGen-X worker "
-                        "timed out."
-                    )
-
-
-                line = process.stdout.readline()
-
-
-                if line == "":
-
-                    return_code = (
-                        process.poll()
-                    )
-
-                    self._stop_worker()
-
-                    raise GraspGenXRemoteUnavailable(
-                        "Persistent GraspGen-X worker "
-                        "terminated unexpectedly "
-                        f"with code {return_code}.\n"
-                        + "\n".join(
-                            worker_output[-50:]
-                        )
-                    )
-
-
-                line = line.rstrip(
-                    "\r\n"
-                )
-
-
-                if line.startswith(
-                    self.WORKER_RESPONSE_PREFIX
-                ):
-
-                    payload_text = line[
-                        len(
-                            self.WORKER_RESPONSE_PREFIX
-                        ):
-                    ]
-
-                    try:
-                        payload = json.loads(
-                            payload_text
-                        )
-
-                    except json.JSONDecodeError as exc:
-                        raise GraspGenXRemoteUnavailable(
-                            "Persistent GraspGen-X worker "
-                            "returned invalid JSON."
-                        ) from exc
-
-
-                    if not payload.get(
-                        "ok",
-                        False,
-                    ):
-                        raise GraspGenXRemoteUnavailable(
-                            "GraspGen-X client worker failed: "
-                            + str(
-                                payload.get(
-                                    "error",
-                                    "unknown error",
-                                )
-                            )
-                        )
-
-
-                    return payload
-
-
-                if line:
-                    worker_output.append(
-                        line
-                    )
-
-
-    def __del__(
-        self,
-    ):
-
-        try:
-            self._stop_worker()
-
-        except Exception:
-            pass
+        return result
 
     def health(
         self,
         timeout: float = 20.0,
     ) -> bool:
 
-        result = self._request_worker(
-            {
-                "action": "health",
-            },
+        result = self._run_worker(
+            [
+                "--action",
+                "health",
+                "--host",
+                self.host,
+                "--port",
+                str(self.port),
+            ],
             timeout=timeout,
         )
 
-        health_result = result.get(
-            "result"
-        )
-
-        return (
-            isinstance(
-                health_result,
-                dict,
-            )
-            and health_result.get(
-                "status"
-            ) == "ok"
-        )
+        return '"status": "ok"' in result.stdout
 
     def predict_grasps(
         self,
@@ -445,28 +204,27 @@ class GraspGenXRemoteClient:
                 point_cloud=point_cloud,
             )
 
-            self._request_worker(
-                {
-                    "action": "infer",
-
-                    "input":
-                        str(input_path),
-
-                    "output":
-                        str(output_path),
-
-                    "gripper_name":
-                        self.gripper_name,
-
-                    "num_grasps":
-                        int(num_grasps),
-
-                    "grasp_threshold":
-                        float(grasp_threshold),
-
-                    "topk_num_grasps":
-                        int(topk_num_grasps),
-                },
+            self._run_worker(
+                [
+                    "--action",
+                    "infer",
+                    "--host",
+                    self.host,
+                    "--port",
+                    str(self.port),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--gripper-name",
+                    self.gripper_name,
+                    "--num-grasps",
+                    str(num_grasps),
+                    "--grasp-threshold",
+                    str(grasp_threshold),
+                    "--topk-num-grasps",
+                    str(topk_num_grasps),
+                ],
                 timeout=timeout,
             )
 
@@ -684,36 +442,31 @@ class GraspGenXRemoteClient:
                 **request_data,
             )
 
-            self._request_worker(
-                {
-                    "action": "infer_object",
-
-                    "input":
-                        str(input_path),
-
-                    "output":
-                        str(output_path),
-
-                    "planner":
-                        planner,
-
-                    "num_grasps":
-                        int(num_grasps),
-
-                    "grasp_threshold":
-                        float(grasp_threshold),
-
-                    "topk_num_grasps":
-                        int(topk_num_grasps),
-
-                    "obb_density":
-                        str(obb_density),
-
-                    "obb_position_spacing_m":
-                        float(
-                            obb_position_spacing_m
-                        ),
-                },
+            self._run_worker(
+                [
+                    "--action",
+                    "infer_object",
+                    "--host",
+                    self.host,
+                    "--port",
+                    str(self.port),
+                    "--input",
+                    str(input_path),
+                    "--output",
+                    str(output_path),
+                    "--planner",
+                    planner,
+                    "--num-grasps",
+                    str(num_grasps),
+                    "--grasp-threshold",
+                    str(grasp_threshold),
+                    "--topk-num-grasps",
+                    str(topk_num_grasps),
+                    "--obb-density",
+                    str(obb_density),
+                    "--obb-position-spacing-m",
+                    str(obb_position_spacing_m),
+                ],
                 timeout=timeout,
             )
 

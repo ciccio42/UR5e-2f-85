@@ -2,320 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
-import traceback
 
 import numpy as np
 
 from graspgenx.serving.zmq_client import GraspGenXClient
 
-WORKER_RESPONSE_PREFIX = (
-    "__GRASPGENX_WORKER_RESPONSE__"
-)
-
-def execute_request(
-    client: GraspGenXClient,
-    request: dict,
-) -> dict:
-
-    action = request.get(
-        "action"
-    )
-
-
-    if action == "health":
-
-        return {
-            "result":
-                client.health(),
-        }
-
-
-    input_path = request.get(
-        "input"
-    )
-
-    output_path = request.get(
-        "output"
-    )
-
-
-    if not input_path:
-        raise ValueError(
-            "input is required for inference."
-        )
-
-    if not output_path:
-        raise ValueError(
-            "output is required for inference."
-        )
-
-
-    with np.load(
-        input_path,
-        allow_pickle=False,
-    ) as data:
-
-        point_cloud = np.asarray(
-            data["point_cloud"],
-            dtype=np.float32,
-        )
-
-        sweep_volume = None
-
-
-        if action == "infer_object":
-
-            required_keys = (
-                "extents_open",
-                "offset_open",
-                "extents_mid",
-                "offset_mid",
-            )
-
-            missing = [
-                key
-                for key in required_keys
-                if key not in data.files
-            ]
-
-            if missing:
-                raise ValueError(
-                    "Missing sweep-volume fields: "
-                    f"{missing}"
-                )
-
-
-            sweep_volume = {
-                "extents_open":
-                    np.asarray(
-                        data["extents_open"],
-                        dtype=np.float32,
-                    ),
-
-                "offset_open":
-                    np.asarray(
-                        data["offset_open"],
-                        dtype=np.float32,
-                    ),
-
-                "extents_mid":
-                    np.asarray(
-                        data["extents_mid"],
-                        dtype=np.float32,
-                    ),
-
-                "offset_mid":
-                    np.asarray(
-                        data["offset_mid"],
-                        dtype=np.float32,
-                    ),
-            }
-
-
-            if "gripper_type" in data.files:
-                sweep_volume[
-                    "gripper_type"
-                ] = int(
-                    np.asarray(
-                        data["gripper_type"]
-                    ).item()
-                )
-
-
-            if "fingertip_depth" in data.files:
-                sweep_volume[
-                    "fingertip_depth"
-                ] = float(
-                    np.asarray(
-                        data["fingertip_depth"]
-                    ).item()
-                )
-
-
-    if action == "infer":
-
-        grasps, confidences = (
-            client.infer(
-                point_cloud,
-
-                gripper_name=request.get(
-                    "gripper_name",
-                    "robotiq_2f_85",
-                ),
-
-                num_grasps=int(
-                    request.get(
-                        "num_grasps",
-                        200,
-                    )
-                ),
-
-                grasp_threshold=float(
-                    request.get(
-                        "grasp_threshold",
-                        -1.0,
-                    )
-                ),
-
-                topk_num_grasps=int(
-                    request.get(
-                        "topk_num_grasps",
-                        100,
-                    )
-                ),
-            )
-        )
-
-        branch_tags = np.empty(
-            (0,),
-            dtype="<U8",
-        )
-
-
-    elif action == "infer_object":
-
-        grasps, confidences, branch_tags = (
-            client.infer_object(
-                point_cloud=point_cloud,
-
-                sweep_volume_params=(
-                    sweep_volume
-                ),
-
-                planner=request.get(
-                    "planner",
-                    "graspmoe",
-                ),
-
-                num_grasps=int(
-                    request.get(
-                        "num_grasps",
-                        200,
-                    )
-                ),
-
-                grasp_threshold=float(
-                    request.get(
-                        "grasp_threshold",
-                        -1.0,
-                    )
-                ),
-
-                topk_num_grasps=int(
-                    request.get(
-                        "topk_num_grasps",
-                        100,
-                    )
-                ),
-
-                return_branch_tags=True,
-
-                moe_obb_density=(
-                    request.get(
-                        "obb_density",
-                        "sparse",
-                    )
-                ),
-
-                moe_obb_position_spacing_cm=(
-                    float(
-                        request.get(
-                            "obb_position_spacing_m",
-                            0.01,
-                        )
-                    )
-                    * 100.0
-                ),
-            )
-        )
-
-        branch_tags = np.asarray(
-            branch_tags,
-            dtype="<U8",
-        )
-
-
-    else:
-        raise ValueError(
-            f"Unsupported action: {action}"
-        )
-
-    np.savez(
-        output_path,
-
-        grasps=np.asarray(
-            grasps,
-            dtype=np.float32,
-        ),
-
-        confidences=np.asarray(
-            confidences,
-            dtype=np.float32,
-        ),
-
-        branch_tags=branch_tags,
-    )
-
-
-    return {
-        "output":
-            str(output_path),
-    }
-
-def run_persistent(
-    host: str,
-    port: int,
-) -> None:
-
-    with GraspGenXClient(
-        host=host,
-        port=port,
-    ) as client:
-
-        for line in sys.stdin:
-
-            line = line.strip()
-
-            if not line:
-                continue
-
-
-            try:
-                request = json.loads(
-                    line
-                )
-
-                result = execute_request(
-                    client,
-                    request,
-                )
-
-                response = {
-                    "ok": True,
-                    **result,
-                }
-
-
-            except Exception as exc:
-
-                response = {
-                    "ok": False,
-
-                    "error": (
-                        f"{type(exc).__name__}: "
-                        f"{exc}"
-                    ),
-                }
-
-
-            print(
-                WORKER_RESPONSE_PREFIX
-                + json.dumps(
-                    response
-                ),
-                flush=True,
-            )
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -327,7 +18,7 @@ def main() -> None:
             "infer",
             "infer_object",
         ),
-        default=None,
+        required=True,
     )
 
     parser.add_argument(
@@ -399,21 +90,11 @@ def main() -> None:
         default=0.01,
     )
 
-    parser.add_argument(
-        "--persistent",
-        action="store_true",
-    )
+
+
+
 
     args = parser.parse_args()
-
-    if args.persistent:
-
-        run_persistent(
-            host=args.host,
-            port=args.port,
-        )
-
-        return
 
     with GraspGenXClient(
         host=args.host,
@@ -545,7 +226,7 @@ def main() -> None:
                 dtype="<U8",
             )
 
-        np.savez_compressed(
+        np.savez(
             args.output,
             grasps=np.asarray(
                 grasps,
