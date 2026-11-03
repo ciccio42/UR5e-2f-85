@@ -221,7 +221,8 @@ docker exec -it seedo_ros2_container bash
 # FULL INFERENCE 
 export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
 export QT_QPA_PLATFORM=offscreen
-bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml
 
 # PRECOMPUTED INFERENCE
 export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020

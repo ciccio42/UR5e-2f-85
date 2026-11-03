@@ -3211,6 +3211,29 @@ class SeeDoController(AIController):
                         )
 
                 if (
+                    self.grasp_planner is not None
+                    and self.grasp_planner.backend_name
+                    == "graspgenx"
+                ):
+
+                    attach_shared_sam_model = getattr(
+                        self.grasp_planner,
+                        "attach_shared_sam_model",
+                        None,
+                    )
+
+                    if attach_shared_sam_model is None:
+                        raise RuntimeError(
+                            "GraspGen-X backend does not expose "
+                            "attach_shared_sam_model()."
+                        )
+
+                    attach_shared_sam_model(
+                        self.scene_perceiver.sam,
+                        self.scene_perceiver.sam_checkpoint,
+                    )
+
+                if (
                     str(
                         self.action_plan.task_type
                     )

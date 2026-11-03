@@ -138,7 +138,11 @@ class GraspMolmoRuntime:
                     seed,
                 )
 
+        t_total_start = time.perf_counter()
+
         image = self._to_pil_rgb(rgb)
+
+        t_image = time.perf_counter()
 
         t0 = time.perf_counter()
 
@@ -172,10 +176,6 @@ class GraspMolmoRuntime:
 
         t3 = time.perf_counter()
 
-        print(f"[GraspMolmo] processor: {t1 - t0:.3f} s")
-        print(f"[GraspMolmo] tensor prep: {t2 - t1:.3f} s")
-        print(f"[GraspMolmo] generation: {t3 - t2:.3f} s")
-
         generated_tokens = output[
             0,
             inputs["input_ids"].size(1):,
@@ -186,12 +186,51 @@ class GraspMolmoRuntime:
             skip_special_tokens=True,
         )
 
+        t4 = time.perf_counter()
+
         if verbosity >= 1:
             print("Output:", generated_text)
 
         point = parse_point(
             generated_text,
             image.size,
+        )
+
+        t5 = time.perf_counter()
+
+        print(
+            f"[GraspMolmo] image prep: "
+            f"{t_image - t_total_start:.3f} s"
+        )
+
+        print(
+            f"[GraspMolmo] processor: "
+            f"{t1 - t0:.3f} s"
+        )
+
+        print(
+            f"[GraspMolmo] tensor prep: "
+            f"{t2 - t1:.3f} s"
+        )
+
+        print(
+            f"[GraspMolmo] generation: "
+            f"{t3 - t2:.3f} s"
+        )
+
+        print(
+            f"[GraspMolmo] decode: "
+            f"{t4 - t3:.3f} s"
+        )
+
+        print(
+            f"[GraspMolmo] parse point: "
+            f"{t5 - t4:.3f} s"
+        )
+
+        print(
+            f"[GraspMolmo] total inference: "
+            f"{t5 - t_total_start:.3f} s"
         )
 
         if verbosity >= 1:

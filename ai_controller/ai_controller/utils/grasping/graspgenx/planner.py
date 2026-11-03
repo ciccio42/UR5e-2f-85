@@ -14,7 +14,9 @@ from scipy.spatial.transform import Rotation
 from ai_controller.utils.grasping.graspgenx.inference_core import (
     GraspGenXInferenceCore,
 )
-
+from ai_controller.models.seedo_controller.timing_utils import (
+    TIMING,
+)
 
 class GraspGenXPlanner(GraspGenXInferenceCore):
     # SeeDo MotionLayer consumes the standard TCP grasp interface.
@@ -242,14 +244,17 @@ class GraspGenXPlanner(GraspGenXInferenceCore):
                 str(self.geometry_semantic_radius_px),
             ]
 
-            process = subprocess.run(
-                cmd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=self.worker_timeout_s,
-                check=False,
-            )
+            with TIMING.measure(
+                "grasp.geometry_worker"
+            ):
+                process = subprocess.run(
+                    cmd,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.worker_timeout_s,
+                    check=False,
+                )
 
             if process.stdout:
                 print(process.stdout, flush=True)

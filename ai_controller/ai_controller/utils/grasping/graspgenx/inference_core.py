@@ -15,7 +15,9 @@ from ai_controller.utils.grasping.graspmolmo.client import (
 from ai_controller.utils.grasping.graspgenx.artifacts import (
     save_graspgenx_artifacts,
 )
-
+from ai_controller.models.seedo_controller.timing_utils import (
+    TIMING,
+)
 from dataclasses import dataclass
 from scipy.spatial.transform import Rotation
 
@@ -163,7 +165,64 @@ class GraspGenXInferenceCore:
             grasp_depth_offset_m
         )
 
+    def attach_shared_sam_model(
+        self,
+        sam_model,
+        checkpoint_path: str | Path,
+    ) -> None:
 
+        from segment_anything import SamPredictor
+
+        shared_checkpoint = (
+            Path(checkpoint_path)
+            .expanduser()
+            .resolve()
+        )
+
+        expected_checkpoint = (
+            self.sam_checkpoint_path
+            .expanduser()
+            .resolve()
+        )
+
+        if shared_checkpoint != expected_checkpoint:
+            raise RuntimeError(
+                "Shared SAM checkpoint does not match "
+                "GraspGen-X SAM checkpoint: "
+                f"{shared_checkpoint} != "
+                f"{expected_checkpoint}"
+            )
+
+        if sam_model is None:
+            raise RuntimeError(
+                "Cannot attach an unloaded SAM model."
+            )
+
+        if self._sam_predictor is not None:
+
+            if (
+                getattr(
+                    self._sam_predictor,
+                    "model",
+                    None,
+                )
+                is sam_model
+            ):
+                return
+
+            raise RuntimeError(
+                "GraspGen-X SAM predictor was already "
+                "initialized with another model."
+            )
+
+        self._sam_predictor = SamPredictor(
+            sam_model
+        )
+
+        print(
+            "[GRASP] Reusing ScenePerceiver SAM model.",
+            flush=True,
+        )
 
     def _get_sam_predictor(self):
         if self._sam_predictor is not None:
@@ -238,14 +297,20 @@ class GraspGenXInferenceCore:
         semantic_point_px: np.ndarray,
     ) -> np.ndarray:
 
-        predictor = self._get_sam_predictor()
+        with TIMING.measure(
+            "grasp.sam_get_predictor"
+        ):
+            predictor = self._get_sam_predictor()
 
-        predictor.set_image(
-            np.asarray(
-                rgb_image,
-                dtype=np.uint8,
+        with TIMING.measure(
+            "grasp.sam_set_image"
+        ):
+            predictor.set_image(
+                np.asarray(
+                    rgb_image,
+                    dtype=np.uint8,
+                )
             )
-        )
 
         point = np.asarray(
             [
@@ -266,11 +331,14 @@ class GraspGenXInferenceCore:
             dtype=np.int32,
         )
 
-        masks, scores, logits = predictor.predict(
-            point_coords=point,
-            point_labels=label,
-            multimask_output=True,
-        )
+        with TIMING.measure(
+            "grasp.sam_predict"
+        ):
+            masks, scores, logits = predictor.predict(
+                point_coords=point,
+                point_labels=label,
+                multimask_output=True,
+            )
 
         if len(masks) == 0:
             raise RuntimeError(
@@ -775,29 +843,38 @@ class GraspGenXInferenceCore:
                 "T_base_camera must have shape (4, 4)."
             )
 
-        semantic_point_px = (
-            self._predict_semantic_point(
+        with TIMING.measure(
+            "grasp.semantic_point"
+        ):
+            semantic_point_px = (
+                self._predict_semantic_point(
+                    rgb_image=rgb_image,
+                    grasp_instruction=(
+                        grasp_instruction
+                    ),
+                )
+            )
+
+        with TIMING.measure(
+            "grasp.sam_total"
+        ):
+            target_mask = self._segment_target(
                 rgb_image=rgb_image,
-                grasp_instruction=(
-                    grasp_instruction
+                semantic_point_px=(
+                    semantic_point_px
                 ),
             )
-        )
 
-        target_mask = self._segment_target(
-            rgb_image=rgb_image,
-            semantic_point_px=(
-                semantic_point_px
-            ),
-        )
-
-        semantic_point_camera = (
-            self._semantic_point_to_camera_point(
-                semantic_point_px=semantic_point_px,
-                depth_image=depth_image,
-                camera_matrix=camera_matrix,
+        with TIMING.measure(
+            "grasp.semantic_depth"
+        ):
+            semantic_point_camera = (
+                self._semantic_point_to_camera_point(
+                    semantic_point_px=semantic_point_px,
+                    depth_image=depth_image,
+                    camera_matrix=camera_matrix,
+                )
             )
-        )
 
         semantic_point_base = (
             semantic_point_camera.astype(
@@ -813,13 +890,16 @@ class GraspGenXInferenceCore:
             ]
         )
 
-        target_point_cloud_camera = (
-            self._mask_to_camera_point_cloud(
-                mask=target_mask,
-                depth_image=depth_image,
-                camera_matrix=camera_matrix,
+        with TIMING.measure(
+            "grasp.target_point_cloud"
+        ):
+            target_point_cloud_camera = (
+                self._mask_to_camera_point_cloud(
+                    mask=target_mask,
+                    depth_image=depth_image,
+                    camera_matrix=camera_matrix,
+                )
             )
-        )
 
         # Use the FULL eye-in-hand depth image as background collision
         # geometry. Only pixels belonging to the selected SAM target mask
@@ -833,29 +913,35 @@ class GraspGenXInferenceCore:
             ~target_mask
         )
 
-        background_scene_point_cloud_camera = (
-            self._mask_to_camera_point_cloud(
-                mask=background_scene_mask,
-                depth_image=depth_image,
-                camera_matrix=camera_matrix,
+        with TIMING.measure(
+            "grasp.background_point_cloud"
+        ):
+            background_scene_point_cloud_camera = (
+                self._mask_to_camera_point_cloud(
+                    mask=background_scene_mask,
+                    depth_image=depth_image,
+                    camera_matrix=camera_matrix,
+                )
             )
-        )
 
-        background_scene_point_cloud_base = (
-            background_scene_point_cloud_camera.astype(
-                np.float64
+        with TIMING.measure(
+            "grasp.background_to_base"
+        ):
+            background_scene_point_cloud_base = (
+                background_scene_point_cloud_camera.astype(
+                    np.float64
+                )
+                @ T_base_camera[
+                    :3,
+                    :3,
+                ].T
+                + T_base_camera[
+                    :3,
+                    3,
+                ]
+            ).astype(
+                np.float32
             )
-            @ T_base_camera[
-                :3,
-                :3,
-            ].T
-            + T_base_camera[
-                :3,
-                3,
-            ]
-        ).astype(
-            np.float32
-        )
 
         print(
             "[GRASP] Full-resolution background points:",
@@ -864,17 +950,20 @@ class GraspGenXInferenceCore:
             ),
         )
 
-        (
-            grasps_base,
-            confidences,
-            branch_tags,
-            target_point_cloud_base,
-        ) = self._generate_grasp_candidates_base(
-            target_point_cloud_camera=(
-                target_point_cloud_camera
-            ),
-            T_base_camera=T_base_camera,
-        )
+        with TIMING.measure(
+            "grasp.graspgenx_inference"
+        ):
+            (
+                grasps_base,
+                confidences,
+                branch_tags,
+                target_point_cloud_base,
+            ) = self._generate_grasp_candidates_base(
+                target_point_cloud_camera=(
+                    target_point_cloud_camera
+                ),
+                T_base_camera=T_base_camera,
+            )
 
         # ---------------------------------------------------------
         # DEBUG: target / table height consistency
@@ -989,23 +1078,26 @@ class GraspGenXInferenceCore:
             f"{self.grasp_depth_offset_m * 1000.0:.1f} mm",
         )
 
-        selected_index = (
-            self._select_safe_grasp(
-                grasps_base=grasps_base,
-                confidences=confidences,
-                branch_tags=branch_tags,
-                T_base_table=T_base_table,
-                semantic_point_px=semantic_point_px,
-                T_base_camera=T_base_camera,
-                camera_matrix=camera_matrix,
-                target_point_cloud_base=(
-                    target_point_cloud_base
-                ),
-                background_scene_point_cloud_base=(
-                    background_scene_point_cloud_base
-                ),
+        with TIMING.measure(
+            "grasp.geometry_selection_total"
+        ):
+            selected_index = (
+                self._select_safe_grasp(
+                    grasps_base=grasps_base,
+                    confidences=confidences,
+                    branch_tags=branch_tags,
+                    T_base_table=T_base_table,
+                    semantic_point_px=semantic_point_px,
+                    T_base_camera=T_base_camera,
+                    camera_matrix=camera_matrix,
+                    target_point_cloud_base=(
+                        target_point_cloud_base
+                    ),
+                    background_scene_point_cloud_base=(
+                        background_scene_point_cloud_base
+                    ),
+                )
             )
-        )
 
         selected_grasp = np.asarray(
             grasps_base[
@@ -1069,93 +1161,96 @@ class GraspGenXInferenceCore:
         )
 
         if artifacts_dir is not None:
-            save_graspgenx_artifacts(
-                artifacts_dir=(
-                    artifacts_dir
-                ),
-                rgb_image=(
-                    rgb_image
-                ),
-                depth_image=(
-                    depth_image
-                ),
-                camera_matrix=(
-                    camera_matrix
-                ),
-                T_base_camera=(
-                    T_base_camera
-                ),
-                T_base_table=(
-                    T_base_table
-                ),
-                semantic_point_px=(
-                    semantic_point_px
-                ),
-                target_mask=(
-                    target_mask
-                ),
-                target_point_cloud_camera=(
-                    target_point_cloud_camera
-                ),
-                target_point_cloud_base=(
-                    target_point_cloud_base
-                ),
-                grasps_base=(
-                    grasps_base
-                ),
-                confidences=(
-                    confidences
-                ),
-                branch_tags=(
-                    branch_tags
-                ),
-                selected_index=(
-                    selected_index
-                ),
-                tcp_position_base=(
-                    tcp_position_base
-                ),
-                tcp_orientation_base=(
-                    tcp_orientation_base
-                ),
-                approach_direction_base=(
-                    approach_direction_base
-                ),
-                fingertip_depth=(
-                    self.FINGERTIP_DEPTH
-                ),
-                gripper_opening=(
-                    self.ROBOTIQ_SWEEP_VOLUME[
-                        "extents_open"
-                    ][0]
-                ),
-                bbox_min=(
-                    self.ROBOTIQ_BBOX_MIN
-                ),
-                bbox_max=(
-                    self.ROBOTIQ_BBOX_MAX
-                ),
-                sam_masks=getattr(
-                    self,
-                    "_last_sam_masks",
-                    None,
-                ),
-                sam_scores=getattr(
-                    self,
-                    "_last_sam_scores",
-                    None,
-                ),
-                sam_logits=getattr(
-                    self,
-                    "_last_sam_logits",
-                    None,
-                ),
-                sam_best_index=getattr(
-                    self,
-                    "_last_sam_best_index",
-                    None,
-                ),
-            )
+            with TIMING.measure(
+                "grasp.artifacts"
+            ):
+                save_graspgenx_artifacts(
+                    artifacts_dir=(
+                        artifacts_dir
+                    ),
+                    rgb_image=(
+                        rgb_image
+                    ),
+                    depth_image=(
+                        depth_image
+                    ),
+                    camera_matrix=(
+                        camera_matrix
+                    ),
+                    T_base_camera=(
+                        T_base_camera
+                    ),
+                    T_base_table=(
+                        T_base_table
+                    ),
+                    semantic_point_px=(
+                        semantic_point_px
+                    ),
+                    target_mask=(
+                        target_mask
+                    ),
+                    target_point_cloud_camera=(
+                        target_point_cloud_camera
+                    ),
+                    target_point_cloud_base=(
+                        target_point_cloud_base
+                    ),
+                    grasps_base=(
+                        grasps_base
+                    ),
+                    confidences=(
+                        confidences
+                    ),
+                    branch_tags=(
+                        branch_tags
+                    ),
+                    selected_index=(
+                        selected_index
+                    ),
+                    tcp_position_base=(
+                        tcp_position_base
+                    ),
+                    tcp_orientation_base=(
+                        tcp_orientation_base
+                    ),
+                    approach_direction_base=(
+                        approach_direction_base
+                    ),
+                    fingertip_depth=(
+                        self.FINGERTIP_DEPTH
+                    ),
+                    gripper_opening=(
+                        self.ROBOTIQ_SWEEP_VOLUME[
+                            "extents_open"
+                        ][0]
+                    ),
+                    bbox_min=(
+                        self.ROBOTIQ_BBOX_MIN
+                    ),
+                    bbox_max=(
+                        self.ROBOTIQ_BBOX_MAX
+                    ),
+                    sam_masks=getattr(
+                        self,
+                        "_last_sam_masks",
+                        None,
+                    ),
+                    sam_scores=getattr(
+                        self,
+                        "_last_sam_scores",
+                        None,
+                    ),
+                    sam_logits=getattr(
+                        self,
+                        "_last_sam_logits",
+                        None,
+                    ),
+                    sam_best_index=getattr(
+                        self,
+                        "_last_sam_best_index",
+                        None,
+                    ),
+                )
 
         result = GraspGenXPlanResult(
             grasp_instruction=str(
