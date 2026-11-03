@@ -1027,29 +1027,20 @@ def test_visual_prompting_nut_prompt_uses_ring_and_wooden_peg(
 
 def test_scene_perceiver_contains_separate_prior_guided_task_prompts():
     """
-    ScenePerceiver builds its prompt inline inside run(), so this audit
-    deliberately checks the implementation source rather than executing
-    the complete RGB-D / GroundingDINO / SAM runtime pipeline.
+    ScenePerceiver builds its object-discovery prompts inside
+    _discover_detector_labels(), so this audit checks that method
+    directly without executing the RGB-D / GroundingDINO / SAM pipeline.
     """
 
     source = inspect.getsource(
-        scene_perceiver_module.ScenePerceiver.run
+        scene_perceiver_module.ScenePerceiver._discover_detector_labels
     )
 
     compact_source = (
         source
-        .replace(
-            "'",
-            '"',
-        )
-        .replace(
-            " ",
-            "",
-        )
-        .replace(
-            "\n",
-            "",
-        )
+        .replace("'", '"')
+        .replace(" ", "")
+        .replace("\n", "")
     )
 
     assert (
@@ -1078,10 +1069,7 @@ def test_scene_perceiver_contains_separate_prior_guided_task_prompts():
         "blue ring",
         "wooden peg",
     ):
-        assert (
-            label
-            in source
-        )
+        assert label in source
 
 
 # =====================================================================
