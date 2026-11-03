@@ -96,7 +96,7 @@ docker run --rm -it \
   -v "$(pwd)/.runtime/graspgenx_venv":/opt/graspgenx_venv \
   -v "$(pwd)/.runtime/graspgenx_checkpoints":/opt/graspgenx_checkpoints \
   -v "$(pwd)/.runtime/graspgenx_gripper_descriptions":/opt/graspgenx_gripper_descriptions \
-  -v "$(pwd)/../dataset_nut_assembly/video":/dataset_nut:ro \
+  -v "$(pwd)/../dataset_nut_assembly/video":/dataset_nut:rw \
   -v "$(pwd)/../test_dataset":/test_dataset:ro \
   -v "$(pwd)/../seedo_tests":/seedo_tests \
   -v "$(pwd)/../scene_capture":/scene_capture:ro \

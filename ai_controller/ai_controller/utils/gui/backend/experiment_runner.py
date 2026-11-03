@@ -228,7 +228,7 @@ def _resolve_demo_path(
     elif request.task == "nut_assembly":
         demo_path = Path(
             f"/dataset_nut/task_{demo_task_id}"
-            "/traj_000_camera_front.mp4"
+            "/traj000-h264-30fps.mp4"
         )
 
     else:

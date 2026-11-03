@@ -745,8 +745,8 @@ if [[ -z "${DEMO_PATH}" ]]; then
 
     else
 
-        STANDARD_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj_000_camera_front.mp4"
-        MODIFIED_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj_000_camera_front_modified.mp4"
+        STANDARD_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj000-h264-30fps.mp4"
+        MODIFIED_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj000-h264-30fps_modified.mp4"
 
     fi
 
