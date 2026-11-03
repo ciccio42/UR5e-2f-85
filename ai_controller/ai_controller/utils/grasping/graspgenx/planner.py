@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-
+import select
+import threading
+import time
 import numpy as np
 from scipy.spatial.transform import Rotation
 
@@ -19,7 +21,10 @@ from ai_controller.utils.grasping.graspgenx.inference_core import (
 class GraspGenXPlanner(GraspGenXInferenceCore):
     # SeeDo MotionLayer consumes the standard TCP grasp interface.
     backend_name = "graspgenx"
-
+    GEOMETRY_RESPONSE_PREFIX = (
+        "__GRASPGENX_GEOMETRY_RESPONSE__"
+    )
+    
     def __init__(
         self,
         *,
@@ -60,6 +65,12 @@ class GraspGenXPlanner(GraspGenXInferenceCore):
         self._selected_rotation = None
         self._tcp_orientation = None
         self._last_details = None
+
+        self._geometry_worker_process = None
+
+        self._geometry_worker_lock = (
+            threading.Lock()
+        )
 
     def _compute_plan(self, *args, **kwargs):
         # Capture the PRE-grasp TCP orientation; index selection needs this.
@@ -166,6 +177,297 @@ class GraspGenXPlanner(GraspGenXInferenceCore):
             **kwargs,
         )
 
+    def _geometry_worker_env(
+        self,
+    ) -> dict:
+
+        package_root = (
+            Path(__file__)
+            .resolve()
+            .parents[4]
+        )
+
+        env = os.environ.copy()
+
+        env["PYTHONPATH"] = (
+            os.pathsep.join(
+                [
+                    str(package_root),
+                    env.get(
+                        "PYTHONPATH",
+                        "",
+                    ),
+                ]
+            )
+        )
+
+        env[
+            "PYTHONDONTWRITEBYTECODE"
+        ] = "1"
+
+        return env
+
+
+    def _stop_geometry_worker(
+        self,
+    ) -> None:
+
+        process = (
+            self._geometry_worker_process
+        )
+
+        self._geometry_worker_process = None
+
+        if process is None:
+            return
+
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+
+        except Exception:
+            pass
+
+        try:
+            process.wait(
+                timeout=2.0
+            )
+
+        except subprocess.TimeoutExpired:
+
+            try:
+                process.kill()
+
+            except Exception:
+                pass
+
+
+    def _ensure_geometry_worker(
+        self,
+    ) -> subprocess.Popen:
+
+        process = (
+            self._geometry_worker_process
+        )
+
+        if (
+            process is not None
+            and process.poll() is None
+        ):
+            return process
+
+
+        self._stop_geometry_worker()
+
+
+        cmd = [
+            str(self.worker_python),
+
+            "-m",
+
+            (
+                "ai_controller.utils.grasping."
+                "graspgenx.runtime_worker"
+            ),
+
+            "--persistent",
+        ]
+
+
+        process = subprocess.Popen(
+            cmd,
+
+            env=self._geometry_worker_env(),
+
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+
+            text=True,
+            bufsize=1,
+        )
+
+
+        self._geometry_worker_process = (
+            process
+        )
+
+        return process
+
+
+    def _run_geometry_worker(
+        self,
+        input_path: Path,
+        output_path: Path,
+    ) -> None:
+
+        with self._geometry_worker_lock:
+
+            process = (
+                self._ensure_geometry_worker()
+            )
+
+            if (
+                process.stdin is None
+                or process.stdout is None
+            ):
+                raise RuntimeError(
+                    "Geometry worker pipes "
+                    "are unavailable."
+                )
+
+
+            request = {
+                "input":
+                    str(input_path),
+
+                "output":
+                    str(output_path),
+
+                "table_margin_mm":
+                    self.table_margin_mm,
+
+                "semantic_radius_px":
+                    self.geometry_semantic_radius_px,
+            }
+
+
+            try:
+                process.stdin.write(
+                    json.dumps(
+                        request
+                    )
+                    + "\n"
+                )
+
+                process.stdin.flush()
+
+            except Exception as exc:
+                self._stop_geometry_worker()
+
+                raise RuntimeError(
+                    "Could not send request to "
+                    "persistent geometry worker."
+                ) from exc
+
+
+            deadline = (
+                time.monotonic()
+                + self.worker_timeout_s
+            )
+
+            worker_output = []
+
+
+            while True:
+
+                remaining = (
+                    deadline
+                    - time.monotonic()
+                )
+
+                if remaining <= 0.0:
+
+                    self._stop_geometry_worker()
+
+                    raise RuntimeError(
+                        "Persistent geometry worker "
+                        "timed out."
+                    )
+
+
+                ready, _, _ = select.select(
+                    [process.stdout],
+                    [],
+                    [],
+                    remaining,
+                )
+
+
+                if not ready:
+
+                    self._stop_geometry_worker()
+
+                    raise RuntimeError(
+                        "Persistent geometry worker "
+                        "timed out."
+                    )
+
+
+                line = process.stdout.readline()
+
+
+                if line == "":
+
+                    self._stop_geometry_worker()
+
+                    raise RuntimeError(
+                        "Persistent geometry worker "
+                        "terminated unexpectedly.\n"
+                        + "\n".join(
+                            worker_output[-50:]
+                        )
+                    )
+
+
+                line = line.rstrip(
+                    "\r\n"
+                )
+
+
+                if line.startswith(
+                    self.GEOMETRY_RESPONSE_PREFIX
+                ):
+
+                    payload = json.loads(
+                        line[
+                            len(
+                                self.GEOMETRY_RESPONSE_PREFIX
+                            ):
+                        ]
+                    )
+
+
+                    if not payload.get(
+                        "ok",
+                        False,
+                    ):
+                        raise RuntimeError(
+                            "[GRASPGENX] Geometry worker failed: "
+                            + str(
+                                payload.get(
+                                    "error",
+                                    "unknown error",
+                                )
+                            )
+                        )
+
+
+                    return
+
+
+                if line:
+
+                    worker_output.append(
+                        line
+                    )
+
+                    print(
+                        line,
+                        flush=True,
+                    )
+
+
+    def __del__(
+        self,
+    ):
+
+        try:
+            self._stop_geometry_worker()
+
+        except Exception:
+            pass
+
     def _select_safe_grasp(
         self, *, grasps_base, confidences, branch_tags, T_base_table,
         semantic_point_px, T_base_camera, camera_matrix,
@@ -215,50 +517,12 @@ class GraspGenXPlanner(GraspGenXInferenceCore):
             inp = Path(tmp) / "input.npz"
             out = Path(tmp) / "choice.json"
 
-            np.savez_compressed(inp, **inputs)
+            np.savez(inp, **inputs)
 
-            package_root = Path(__file__).resolve().parents[4]
-
-            env = os.environ.copy()
-            env["PYTHONPATH"] = os.pathsep.join(
-                [
-                    str(package_root),
-                    env.get("PYTHONPATH", ""),
-                ]
+            self._run_geometry_worker(
+                input_path=inp,
+                output_path=out,
             )
-            env["PYTHONDONTWRITEBYTECODE"] = "1"
-
-            cmd = [
-                str(self.worker_python),
-                "-m",
-                "ai_controller.utils.grasping.graspgenx.runtime_worker",
-                "--input",
-                str(inp),
-                "--output",
-                str(out),
-                "--table-margin-mm",
-                str(self.table_margin_mm),
-                "--semantic-radius-px",
-                str(self.geometry_semantic_radius_px),
-            ]
-
-            process = subprocess.run(
-                cmd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=self.worker_timeout_s,
-                check=False,
-            )
-
-            if process.stdout:
-                print(process.stdout, flush=True)
-
-            if process.returncode != 0:
-                raise RuntimeError(
-                    "[GRASPGENX] Worker failed or rejected all grasps:\n"
-                    + process.stderr[-7000:]
-                )
 
             details = json.loads(
                 out.read_text(encoding="utf-8")

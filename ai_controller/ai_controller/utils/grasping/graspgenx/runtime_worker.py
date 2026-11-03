@@ -8,7 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-
+import sys
 import numpy as np
 
 from .geometry_utils import (
@@ -18,6 +18,9 @@ from .geometry_selector import (
     GraspGenXGeometrySelector,
 )
 
+WORKER_RESPONSE_PREFIX = (
+    "__GRASPGENX_GEOMETRY_RESPONSE__"
+)
 
 def run(
     input_path: Path,
@@ -163,6 +166,68 @@ def run(
         encoding="utf-8",
     )
 
+def run_persistent() -> None:
+
+    for line in sys.stdin:
+
+        line = line.strip()
+
+        if not line:
+            continue
+
+
+        try:
+            request = json.loads(
+                line
+            )
+
+            run(
+                input_path=Path(
+                    request["input"]
+                ),
+
+                output_path=Path(
+                    request["output"]
+                ),
+
+                table_margin_mm=float(
+                    request[
+                        "table_margin_mm"
+                    ]
+                ),
+
+                semantic_radius_px=float(
+                    request[
+                        "semantic_radius_px"
+                    ]
+                ),
+            )
+
+
+            response = {
+                "ok": True,
+            }
+
+
+        except Exception as exc:
+
+            response = {
+                "ok": False,
+
+                "error": (
+                    f"{type(exc).__name__}: "
+                    f"{exc}"
+                ),
+            }
+
+
+        print(
+            WORKER_RESPONSE_PREFIX
+            + json.dumps(
+                response
+            ),
+            flush=True,
+        )
 
 def main():
     parser = argparse.ArgumentParser()
@@ -170,12 +235,12 @@ def main():
     parser.add_argument(
         "--input",
         type=Path,
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "--output",
         type=Path,
-        required=True,
+        required=False,
     )
     parser.add_argument(
         "--table-margin-mm",
@@ -185,8 +250,17 @@ def main():
     parser.add_argument(
         "--semantic-radius-px", type=float, default=100.0,
     )
-
+    parser.add_argument(
+        "--persistent",
+        action="store_true",
+    )
     args = parser.parse_args()
+
+    if args.persistent:
+
+        run_persistent()
+
+        return
 
     run(
         args.input,
