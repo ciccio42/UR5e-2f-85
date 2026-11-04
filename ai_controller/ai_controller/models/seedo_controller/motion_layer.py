@@ -123,6 +123,20 @@ class SeeDoMotionLayer:
                 )
             ),
 
+            "visual_alignment_clearance_m": float(
+                raw.get(
+                    "visual_alignment_clearance_m",
+                    0.050,
+                )
+            ),
+
+            "max_pre_insert_lateral_correction_m": float(
+                raw.get(
+                    "max_pre_insert_lateral_correction_m",
+                    0.040,
+                )
+            ),
+
             "transport_clearance_margin_m": float(
                 raw.get(
                     "transport_clearance_margin_m",
@@ -205,6 +219,14 @@ class SeeDoMotionLayer:
             "peg_clearance_m"
         ]
 
+        visual_alignment_clearance = out[
+            "visual_alignment_clearance_m"
+        ]
+
+        max_pre_insert_lateral_correction = out[
+            "max_pre_insert_lateral_correction_m"
+        ]
+
         clearance_margin = out[
             "transport_clearance_margin_m"
         ]
@@ -245,6 +267,35 @@ class SeeDoMotionLayer:
             raise ValueError(
                 "peg_clearance_m must be "
                 "between 5 and 80 mm."
+            )
+
+        if not (
+            0.020
+            <= visual_alignment_clearance
+            <= 0.100
+        ):
+            raise ValueError(
+                "visual_alignment_clearance_m must be "
+                "between 20 and 100 mm."
+            )
+
+        if (
+            visual_alignment_clearance
+            < clearance
+        ):
+            raise ValueError(
+                "visual_alignment_clearance_m must be greater "
+                "than or equal to peg_clearance_m."
+            )
+
+        if not (
+            0.005
+            <= max_pre_insert_lateral_correction
+            <= 0.050
+        ):
+            raise ValueError(
+                "max_pre_insert_lateral_correction_m must be "
+                "between 5 and 50 mm."
             )
 
         if not (
@@ -2218,7 +2269,9 @@ class SeeDoMotionLayer:
 
         desired_hole_bottom = (
             peg_tip
-            + cfg["peg_clearance_m"]
+            + cfg[
+                "visual_alignment_clearance_m"
+            ]
             * peg_axis
         )
 
@@ -2250,8 +2303,8 @@ class SeeDoMotionLayer:
             "[NUT] ALIGNING | "
             f"target={peg_target!r} | "
             f"hole_bottom={desired_hole_bottom} | "
-            f"clearance="
-            f"{cfg['peg_clearance_m'] * 1000.0:.1f} mm",
+            f"visual_clearance="
+            f"{cfg['visual_alignment_clearance_m'] * 1000.0:.1f} mm",
             flush=True,
         )
 
@@ -2334,7 +2387,7 @@ class SeeDoMotionLayer:
 
         (
             _,
-            _,
+            current_hole_bottom,
             current_hole_axis,
         ) = self._nut_current_hole_geometry()
 
@@ -2348,8 +2401,98 @@ class SeeDoMotionLayer:
         if axis_alignment < 0.999:
             raise RuntimeError(
                 "Hole and peg axes are not aligned "
-                "before insertion."
+                "before insertion: "
+                f"dot={axis_alignment:.6f}."
             )
+
+        # ---------------------------------------------------------
+        # PRE-INSERT lateral correction.
+        #
+        # Hole and peg have just been re-observed from the fresh
+        # eye-in-hand frame. Move the TCP only perpendicular to the
+        # peg axis before starting the vertical insertion.
+        # ---------------------------------------------------------
+
+        axis_coordinate = float(
+            np.dot(
+                current_hole_bottom
+                - peg_tip,
+                peg_axis,
+            )
+        )
+
+        closest_peg_axis_point = (
+            peg_tip
+            + axis_coordinate
+            * peg_axis
+        )
+
+        lateral_correction = (
+            closest_peg_axis_point
+            - current_hole_bottom
+        )
+
+        # Remove any numerical component along the peg axis.
+        lateral_correction = (
+            lateral_correction
+            - np.dot(
+                lateral_correction,
+                peg_axis,
+            )
+            * peg_axis
+        )
+
+        lateral_correction_m = float(
+            np.linalg.norm(
+                lateral_correction
+            )
+        )
+
+        if (
+            lateral_correction_m
+            > cfg[
+                "max_pre_insert_lateral_correction_m"
+            ]
+        ):
+            raise RuntimeError(
+                "Pre-insert lateral correction is unexpectedly large: "
+                f"{lateral_correction_m * 1000.0:.2f} mm."
+            )
+
+        actions: list[np.ndarray] = []
+
+        if lateral_correction_m > 0.0005:
+
+            corrected_tcp_position = (
+                np.asarray(
+                    self.current_pose.position,
+                    dtype=np.float64,
+                )
+                + lateral_correction
+            )
+
+            actions.extend(
+                self._nut_move_linear(
+                    goal=corrected_tcp_position,
+                    orientation=(
+                        self.current_pose.orientation
+                    ),
+                    max_step_m=(
+                        cfg[
+                            "initial_entry_step_m"
+                        ]
+                    ),
+                )
+            )
+
+        print(
+            "[NUT] PRE-INSERT lateral correction | "
+            f"dx={lateral_correction[0] * 1000.0:.2f} mm | "
+            f"dy={lateral_correction[1] * 1000.0:.2f} mm | "
+            f"dz={lateral_correction[2] * 1000.0:.2f} mm | "
+            f"norm={lateral_correction_m * 1000.0:.2f} mm",
+            flush=True,
+        )
 
         # ---------------------------------------------------------
         # Stage 0: pre-entry.
@@ -2455,14 +2598,16 @@ class SeeDoMotionLayer:
         # Stage 0: approach the peg tip conservatively.
         # ---------------------------------------------------------
 
-        actions = self._nut_move_linear(
-            goal=pre_entry_tcp_goal,
-            orientation=(
-                self.current_pose.orientation
-            ),
-            max_step_m=(
-                cfg["initial_entry_step_m"]
-            ),
+        actions.extend(
+            self._nut_move_linear(
+                goal=pre_entry_tcp_goal,
+                orientation=(
+                    self.current_pose.orientation
+                ),
+                max_step_m=(
+                    cfg["initial_entry_step_m"]
+                ),
+            )
         )
 
         # ---------------------------------------------------------

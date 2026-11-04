@@ -4,6 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 import json
+import cv2
 import numpy as np
 import os
 
@@ -572,6 +573,32 @@ class SeeDoController(AIController):
             )
         )
 
+        pre_insert_config = config.get(
+            "pre_insert_refinement",
+            {},
+        )
+
+        self.pre_insert_refinement_enabled = bool(
+            pre_insert_config.get(
+                "enabled",
+                False,
+            )
+        )
+
+        self.pre_insert_max_hole_model_disagreement_m = float(
+            pre_insert_config.get(
+                "max_hole_model_disagreement_m",
+                0.050,
+            )
+        )
+
+        self.pre_insert_peg_xy_consistency_gate_m = float(
+            pre_insert_config.get(
+                "peg_xy_consistency_gate_m",
+                0.030,
+            )
+        )
+
         motion_config = config.get(
             "motion_layer",
             {},
@@ -1002,6 +1029,15 @@ class SeeDoController(AIController):
         if "post_grasp_input" in input_data:
             processed_input["post_grasp_input"] = (
                 input_data["post_grasp_input"]
+            )
+
+        if "pre_insert_input" in input_data:
+            processed_input[
+                "pre_insert_input"
+            ] = (
+                input_data[
+                    "pre_insert_input"
+                ]
             )
 
         return processed_input
@@ -4359,6 +4395,69 @@ class SeeDoController(AIController):
                 )
                 print()
 
+            if (
+                self.pre_insert_refinement_enabled
+                and is_nut_assembly
+                and primitive_name == "inserting"
+            ):
+
+                pre_insert_input = (
+                    processed_input.get(
+                        "pre_insert_input"
+                    )
+                )
+
+                robot_state = (
+                    processed_input.get(
+                        "robot_state"
+                    )
+                )
+
+                place_target = (
+                    primitive_step.arguments.get(
+                        "target"
+                    )
+                )
+
+                if (
+                    pre_insert_input is not None
+                    and robot_state is not None
+                    and isinstance(
+                        place_target,
+                        str,
+                    )
+                ):
+
+                    self.execution_status = (
+                        "refining_pre_insert"
+                    )
+
+                    with TIMING.measure(
+                        "nut_pre_insert_refinement"
+                    ):
+                        self._run_pre_insert_nut_refinement(
+                            pre_insert_input=(
+                                pre_insert_input
+                            ),
+
+                            robot_state=(
+                                robot_state
+                            ),
+
+                            place_target=(
+                                place_target
+                            ),
+                        )
+
+                else:
+
+                    print(
+                        "[NUT][WARN] Pre-insert visual refinement "
+                        "input unavailable. Continuing with the "
+                        "previous valid geometry.",
+                        flush=True,
+                    )
+
             # ---------------------------------------------------------
             # Primitive -> robot actions
             # ---------------------------------------------------------
@@ -4454,6 +4553,1040 @@ class SeeDoController(AIController):
             raise
 
         return actions
+
+    def _run_pre_insert_nut_refinement(
+        self,
+        *,
+        pre_insert_input: dict[str, Any],
+        robot_state: dict[str, Any],
+        place_target: str,
+    ) -> dict[str, Any]:
+
+        pick_target = str(
+            self.grasp_plan_target
+        ).strip()
+
+        place_target = str(
+            place_target
+        ).strip()
+
+        current_position = robot_state[
+            EEF_POS_NAME
+        ]
+
+        current_orientation = robot_state[
+            EEF_QUAT_NAME
+        ]
+
+        initial_pick_refinement = (
+            self._resolve_nut_pick_refinement(
+                pick_target
+            )
+        )
+
+        old_place_refinement = (
+            self._resolve_nut_place_refinement(
+                place_target
+            )
+        )
+
+        known_thickness_m = float(
+            initial_pick_refinement[
+                "nut_thickness_estimate_m"
+            ]
+        )
+
+        (
+            expected_hole_center_base,
+            expected_hole_bottom_base,
+            expected_hole_axis_base,
+        ) = (
+            self.motion_layer
+            .predict_nut_hole_geometry_at_tcp(
+                tcp_position=current_position,
+                tcp_orientation=current_orientation,
+            )
+        )
+
+        pre_insert_dir = None
+
+        if self.artifacts_dir is not None:
+
+            pre_insert_dir = (
+                self.artifacts_dir
+                / "scene_perceiver"
+                / "pre_insert"
+            )
+
+            pre_insert_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+        hole_updated = False
+        peg_updated = False
+        hole_detection = None
+        hole_refinement = None
+        peg_refinement = None
+        expected_peg_pixel = None
+        peg_xy_shift_m = None
+        applied_place_refinement = (
+            old_place_refinement
+        )
+
+        # =========================================================
+        # Fresh hole refinement.
+        # =========================================================
+
+        try:
+
+            hole_detection = (
+                self.scene_perceiver
+                .detect_post_grasp_target_mask(
+                    rgb_image=(
+                        pre_insert_input[
+                            "rgb_image"
+                        ]
+                    ),
+                    target_label=pick_target,
+                    artifacts_dir=(
+                        None
+                        if pre_insert_dir is None
+                        else pre_insert_dir
+                        / "ring"
+                    ),
+                )
+            )
+
+            hole_refinement = (
+                self.scene_perceiver
+                .refine_post_grasp_nut_hole(
+                    mask=np.asarray(
+                        hole_detection[
+                            "mask"
+                        ],
+                        dtype=bool,
+                    ),
+
+                    depth_image=(
+                        pre_insert_input[
+                            "depth_image"
+                        ]
+                    ),
+
+                    camera_matrix=(
+                        pre_insert_input[
+                            "camera_matrix"
+                        ]
+                    ),
+
+                    T_base_camera=(
+                        pre_insert_input[
+                            "T_base_camera"
+                        ]
+                    ),
+
+                    T_base_table=(
+                        pre_insert_input[
+                            "T_base_table"
+                        ]
+                    ),
+
+                    expected_hole_center_base=(
+                        expected_hole_center_base
+                    ),
+
+                    expected_hole_axis_base=(
+                        expected_hole_axis_base
+                    ),
+
+                    known_thickness_m=(
+                        known_thickness_m
+                    ),
+
+                    allow_deep_hole_background=True,
+
+                    max_lateral_correction_m=(
+                        self.pre_insert_max_hole_model_disagreement_m
+                    ),
+
+                    artifacts_dir=(
+                        None
+                        if pre_insert_dir is None
+                        else pre_insert_dir
+                        / "ring"
+                    ),
+                )
+            )
+
+            if hole_refinement.get(
+                "accepted"
+            ) is True:
+
+                self.motion_layer\
+                    .update_nut_grasp_geometry_from_measured_tcp(
+                        target_id=pick_target,
+
+                        hole_center_base=(
+                            hole_refinement[
+                                "hole_center_base"
+                            ]
+                        ),
+
+                        hole_bottom_center_base=(
+                            hole_refinement[
+                                "hole_bottom_center_base"
+                            ]
+                        ),
+
+                        hole_axis_base=(
+                            hole_refinement[
+                                "hole_axis_base"
+                            ]
+                        ),
+
+                        current_tcp_position=(
+                            current_position
+                        ),
+
+                        current_tcp_orientation=(
+                            current_orientation
+                        ),
+                    )
+
+                hole_updated = True
+
+        except RuntimeError as exc:
+
+            print(
+                "[NUT][WARN] Pre-insert hole refinement failed | "
+                f"{exc}",
+                flush=True,
+            )
+
+        if not hole_updated:
+
+            self.motion_layer\
+                .synchronize_nut_measured_tcp(
+                    tcp_position=current_position,
+                    tcp_orientation=current_orientation,
+                )
+
+        # =========================================================
+        # Fresh peg top-face refinement.
+        # =========================================================
+
+        try:
+
+            if (
+                hole_refinement is None
+                or hole_refinement.get(
+                    "accepted"
+                ) is not True
+            ):
+                raise RuntimeError(
+                    "Fresh peg-top refinement requires an accepted "
+                    "fresh hole refinement."
+                )
+
+            if "axis_point_base" in old_place_refinement:
+
+                expected_peg_point = np.asarray(
+                    old_place_refinement[
+                        "axis_point_base"
+                    ],
+                    dtype=np.float64,
+                )
+
+            else:
+
+                expected_peg_point = 0.5 * (
+                    np.asarray(
+                        old_place_refinement[
+                            "peg_tip_point_base"
+                        ],
+                        dtype=np.float64,
+                    )
+                    + np.asarray(
+                        old_place_refinement[
+                            "peg_support_point_base"
+                        ],
+                        dtype=np.float64,
+                    )
+                )
+
+            expected_peg_pixel = (
+                self._project_base_point_to_pixel(
+                    point_base=expected_peg_point,
+                    camera_matrix=(
+                        pre_insert_input[
+                            "camera_matrix"
+                        ]
+                    ),
+                    T_base_camera=(
+                        pre_insert_input[
+                            "T_base_camera"
+                        ]
+                    ),
+                )
+            )
+
+            peg_refinement = (
+                self.scene_perceiver
+                .refine_pre_insert_peg_top(
+                    hole_refinement=(
+                        hole_refinement
+                    ),
+                    depth_image=(
+                        pre_insert_input[
+                            "depth_image"
+                        ]
+                    ),
+                    camera_matrix=(
+                        pre_insert_input[
+                            "camera_matrix"
+                        ]
+                    ),
+                    T_base_camera=(
+                        pre_insert_input[
+                            "T_base_camera"
+                        ]
+                    ),
+                    expected_peg_pixel=(
+                        expected_peg_pixel
+                    ),
+                    expected_axis_direction_base=np.asarray(
+                        old_place_refinement[
+                            "axis_direction_base"
+                        ],
+                        dtype=np.float64,
+                    ),
+                    expected_radius_m=float(
+                        old_place_refinement.get(
+                            "peg_radius_m",
+                            0.015,
+                        )
+                    ),
+                    artifacts_dir=(
+                        pre_insert_dir
+                    ),
+                )
+            )
+
+            if peg_refinement.get(
+                "accepted"
+            ) is True:
+
+                old_xy = np.asarray(
+                    old_place_refinement[
+                        "axis_xy_base"
+                    ],
+                    dtype=np.float64,
+                )
+
+                new_xy = np.asarray(
+                    peg_refinement[
+                        "axis_xy_base"
+                    ],
+                    dtype=np.float64,
+                )
+
+                peg_xy_shift_m = float(
+                    np.linalg.norm(
+                        new_xy
+                        - old_xy
+                    )
+                )
+
+                if (
+                    peg_xy_shift_m
+                    <= self.pre_insert_peg_xy_consistency_gate_m
+                ):
+
+                    # Keep the globally estimated peg axis, height and
+                    # support geometry. Only refresh the lateral axis
+                    # position from the top-face observation.
+                    merged_refinement = dict(
+                        old_place_refinement
+                    )
+
+                    merged_refinement[
+                        "accepted"
+                    ] = True
+
+                    merged_refinement[
+                        "axis_xy_base"
+                    ] = (
+                        float(new_xy[0]),
+                        float(new_xy[1]),
+                    )
+
+                    for point_key in (
+                        "axis_point_base",
+                        "peg_tip_point_base",
+                        "peg_support_point_base",
+                    ):
+                        point = np.asarray(
+                            old_place_refinement[
+                                point_key
+                            ],
+                            dtype=np.float64,
+                        ).copy()
+
+                        point[:2] = new_xy
+
+                        merged_refinement[
+                            point_key
+                        ] = tuple(
+                            float(value)
+                            for value
+                            in point
+                        )
+
+                    matching_key = next(
+                        key
+                        for key
+                        in self.nut_place_refinements
+                        if (
+                            str(key)
+                            .strip()
+                            .casefold()
+                            == place_target.casefold()
+                        )
+                    )
+
+                    self.nut_place_refinements[
+                        matching_key
+                    ] = merged_refinement
+
+                    self.motion_layer\
+                        .set_nut_place_refinements(
+                            self.nut_place_refinements
+                        )
+
+                    applied_place_refinement = (
+                        merged_refinement
+                    )
+
+                    peg_updated = True
+
+                else:
+
+                    print(
+                        "[NUT][WARN] Fresh pre-insert peg "
+                        "refinement rejected by consistency gate | "
+                        f"xy_shift="
+                        f"{peg_xy_shift_m * 1000.0:.2f} mm | "
+                        f"gate="
+                        f"{self.pre_insert_peg_xy_consistency_gate_m * 1000.0:.1f} mm",
+                        flush=True,
+                    )
+
+        except RuntimeError as exc:
+
+            print(
+                "[NUT][WARN] Pre-insert peg-top refinement failed | "
+                f"{exc}",
+                flush=True,
+            )
+
+        # =========================================================
+        # Controller-equivalent relative correction diagnostics.
+        # =========================================================
+
+        if hole_updated:
+            current_hole_bottom = np.asarray(
+                hole_refinement[
+                    "hole_bottom_center_base"
+                ],
+                dtype=np.float64,
+            )
+            current_hole_axis = np.asarray(
+                hole_refinement[
+                    "hole_axis_base"
+                ],
+                dtype=np.float64,
+            )
+        else:
+            current_hole_bottom = np.asarray(
+                expected_hole_bottom_base,
+                dtype=np.float64,
+            )
+            current_hole_axis = np.asarray(
+                expected_hole_axis_base,
+                dtype=np.float64,
+            )
+
+        current_hole_axis /= np.linalg.norm(
+            current_hole_axis
+        )
+
+        peg_axis = np.asarray(
+            applied_place_refinement[
+                "axis_direction_base"
+            ],
+            dtype=np.float64,
+        )
+        peg_axis /= np.linalg.norm(
+            peg_axis
+        )
+
+        peg_tip = np.asarray(
+            applied_place_refinement[
+                "peg_tip_point_base"
+            ],
+            dtype=np.float64,
+        )
+
+        axis_alignment = float(
+            np.dot(
+                current_hole_axis,
+                peg_axis,
+            )
+        )
+
+        axis_coordinate = float(
+            np.dot(
+                current_hole_bottom
+                - peg_tip,
+                peg_axis,
+            )
+        )
+
+        closest_peg_axis_point = (
+            peg_tip
+            + axis_coordinate
+            * peg_axis
+        )
+
+        lateral_correction = (
+            closest_peg_axis_point
+            - current_hole_bottom
+        )
+
+        lateral_correction = (
+            lateral_correction
+            - np.dot(
+                lateral_correction,
+                peg_axis,
+            )
+            * peg_axis
+        )
+
+        lateral_correction_m = float(
+            np.linalg.norm(
+                lateral_correction
+            )
+        )
+
+        motion_gate_m = float(
+            self.motion_layer
+            ._nut_config()[
+                "max_pre_insert_lateral_correction_m"
+            ]
+        )
+
+        # =========================================================
+        # Save the same diagnostics used by the offline replay.
+        # =========================================================
+
+        if pre_insert_dir is not None:
+
+            try:
+                rgb_image = np.asarray(
+                    pre_insert_input[
+                        "rgb_image"
+                    ],
+                    dtype=np.uint8,
+                )
+                ring_mask = (
+                    np.asarray(
+                        hole_detection[
+                            "mask"
+                        ],
+                        dtype=bool,
+                    )
+                    if hole_detection is not None
+                    else np.zeros(
+                        pre_insert_input[
+                            "depth_image"
+                        ].shape,
+                        dtype=bool,
+                    )
+                )
+
+                cv2.imwrite(
+                    str(
+                        pre_insert_dir
+                        / "input_eye_in_hand.png"
+                    ),
+                    cv2.cvtColor(
+                        rgb_image,
+                        cv2.COLOR_RGB2BGR,
+                    ),
+                )
+
+                cv2.imwrite(
+                    str(
+                        pre_insert_dir
+                        / "ring_mask.png"
+                    ),
+                    ring_mask.astype(
+                        np.uint8
+                    ) * 255,
+                )
+
+                np.savez_compressed(
+                    pre_insert_dir
+                    / "pre_insert_raw_input.npz",
+                    rgb_image=rgb_image,
+                    depth_image=np.asarray(
+                        pre_insert_input[
+                            "depth_image"
+                        ],
+                        dtype=np.float32,
+                    ),
+                    camera_matrix=np.asarray(
+                        pre_insert_input[
+                            "camera_matrix"
+                        ],
+                        dtype=np.float64,
+                    ),
+                    T_base_camera=np.asarray(
+                        pre_insert_input[
+                            "T_base_camera"
+                        ],
+                        dtype=np.float64,
+                    ),
+                    T_base_table=np.asarray(
+                        pre_insert_input[
+                            "T_base_table"
+                        ],
+                        dtype=np.float64,
+                    ),
+                    measured_tcp_position=np.asarray(
+                        current_position,
+                        dtype=np.float64,
+                    ),
+                    measured_tcp_orientation=np.asarray(
+                        current_orientation,
+                        dtype=np.float64,
+                    ),
+                )
+
+                overlay = cv2.cvtColor(
+                    rgb_image,
+                    cv2.COLOR_RGB2BGR,
+                )
+
+                ring_layer = overlay.copy()
+                ring_layer[
+                    ring_mask
+                ] = (
+                    255,
+                    180,
+                    0,
+                )
+                overlay = cv2.addWeighted(
+                    overlay,
+                    0.78,
+                    ring_layer,
+                    0.22,
+                    0.0,
+                )
+
+                current_hole_px = (
+                    self._project_base_point_to_pixel(
+                        point_base=current_hole_bottom,
+                        camera_matrix=(
+                            pre_insert_input[
+                                "camera_matrix"
+                            ]
+                        ),
+                        T_base_camera=(
+                            pre_insert_input[
+                                "T_base_camera"
+                            ]
+                        ),
+                    )
+                )
+
+                target_axis_px = (
+                    self._project_base_point_to_pixel(
+                        point_base=closest_peg_axis_point,
+                        camera_matrix=(
+                            pre_insert_input[
+                                "camera_matrix"
+                            ]
+                        ),
+                        T_base_camera=(
+                            pre_insert_input[
+                                "T_base_camera"
+                            ]
+                        ),
+                    )
+                )
+
+                if expected_peg_pixel is not None:
+                    old_u = int(round(expected_peg_pixel[0]))
+                    old_v = int(round(expected_peg_pixel[1]))
+                    cv2.circle(
+                        overlay,
+                        (old_u, old_v),
+                        6,
+                        (0, 0, 255),
+                        -1,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        overlay,
+                        "old peg",
+                        (old_u + 10, old_v - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (0, 0, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+                if peg_refinement is not None:
+                    fresh_u = int(
+                        round(
+                            peg_refinement[
+                                "center_pixel"
+                            ][0]
+                        )
+                    )
+                    fresh_v = int(
+                        round(
+                            peg_refinement[
+                                "center_pixel"
+                            ][1]
+                        )
+                    )
+                    cv2.circle(
+                        overlay,
+                        (fresh_u, fresh_v),
+                        7,
+                        (0, 255, 255),
+                        -1,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        overlay,
+                        "fresh peg",
+                        (fresh_u + 10, fresh_v - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (0, 255, 255),
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+                hole_u = int(
+                    round(
+                        current_hole_px[0]
+                    )
+                )
+                hole_v = int(
+                    round(
+                        current_hole_px[1]
+                    )
+                )
+                target_u = int(
+                    round(
+                        target_axis_px[0]
+                    )
+                )
+                target_v = int(
+                    round(
+                        target_axis_px[1]
+                    )
+                )
+
+                cv2.circle(
+                    overlay,
+                    (hole_u, hole_v),
+                    7,
+                    (255, 255, 0),
+                    -1,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    overlay,
+                    "hole",
+                    (hole_u + 10, hole_v - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (255, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+                cv2.circle(
+                    overlay,
+                    (target_u, target_v),
+                    7,
+                    (0, 255, 0),
+                    -1,
+                    cv2.LINE_AA,
+                )
+                cv2.putText(
+                    overlay,
+                    "corrected target",
+                    (target_u + 10, target_v - 8),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.55,
+                    (0, 255, 0),
+                    2,
+                    cv2.LINE_AA,
+                )
+
+                cv2.arrowedLine(
+                    overlay,
+                    (hole_u, hole_v),
+                    (target_u, target_v),
+                    (0, 255, 0),
+                    3,
+                    cv2.LINE_AA,
+                    tipLength=0.18,
+                )
+
+                text_lines = [
+                    (
+                        f"hole fresh={hole_updated} | "
+                        f"peg fresh={peg_updated}"
+                    ),
+                    (
+                        "dXYZ = "
+                        f"[{lateral_correction[0] * 1000.0:+.1f}, "
+                        f"{lateral_correction[1] * 1000.0:+.1f}, "
+                        f"{lateral_correction[2] * 1000.0:+.1f}] mm"
+                    ),
+                    (
+                        f"norm={lateral_correction_m * 1000.0:.1f} mm | "
+                        f"axis dot={axis_alignment:.5f}"
+                    ),
+                    (
+                        f"axis gate={'PASS' if axis_alignment >= 0.999 else 'FAIL'} | "
+                        f"{motion_gate_m * 1000.0:.0f}mm gate="
+                        f"{'PASS' if lateral_correction_m <= motion_gate_m else 'FAIL'}"
+                    ),
+                ]
+
+                y = 24
+                for line in text_lines:
+                    cv2.putText(
+                        overlay,
+                        line,
+                        (12, y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.52,
+                        (255, 255, 255),
+                        3,
+                        cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        overlay,
+                        line,
+                        (12, y),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.52,
+                        (0, 0, 0),
+                        1,
+                        cv2.LINE_AA,
+                    )
+                    y += 22
+
+                cv2.imwrite(
+                    str(
+                        pre_insert_dir
+                        / "pre_insert_alignment_overlay.png"
+                    ),
+                    overlay,
+                )
+
+            except Exception as exc:
+                print(
+                    "[NUT][WARN] Could not save complete pre-insert "
+                    f"debug artifacts | {type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+
+        serializable_hole_detection = (
+            None
+            if hole_detection is None
+            else {
+                key: value
+                for key, value
+                in hole_detection.items()
+                if key != "mask"
+            }
+        )
+
+        serializable_peg_refinement = (
+            None
+            if peg_refinement is None
+            else {
+                key: value
+                for key, value
+                in peg_refinement.items()
+                if key not in {
+                    "mask",
+                    "aperture_mask",
+                    "near_depth_mask",
+                }
+            }
+        )
+
+        result = {
+            "hole_updated": bool(
+                hole_updated
+            ),
+            "peg_updated": bool(
+                peg_updated
+            ),
+            "pick_target": pick_target,
+            "place_target": place_target,
+            "expected_hole_center_base": (
+                np.asarray(
+                    expected_hole_center_base,
+                    dtype=np.float64,
+                ).tolist()
+            ),
+            "expected_hole_bottom_base": (
+                np.asarray(
+                    expected_hole_bottom_base,
+                    dtype=np.float64,
+                ).tolist()
+            ),
+            "ring_detection": (
+                serializable_hole_detection
+            ),
+            "hole_refinement": (
+                hole_refinement
+            ),
+            "peg_refinement": (
+                serializable_peg_refinement
+            ),
+            "old_to_fresh_peg_xy_shift_m": (
+                peg_xy_shift_m
+            ),
+            "axis_alignment_dot": float(
+                axis_alignment
+            ),
+            "lateral_correction_base_m": (
+                lateral_correction.tolist()
+            ),
+            "lateral_correction_norm_m": float(
+                lateral_correction_m
+            ),
+            "motion_gate_m": float(
+                motion_gate_m
+            ),
+            "axis_gate_ok": bool(
+                axis_alignment >= 0.999
+            ),
+            "lateral_correction_gate_ok": bool(
+                lateral_correction_m
+                <= motion_gate_m
+            ),
+        }
+
+        if pre_insert_dir is not None:
+
+            output_path = (
+                pre_insert_dir
+                / "pre_insert_refinement.json"
+            )
+
+            with output_path.open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+                json.dump(
+                    result,
+                    stream,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+        print(
+            "[NUT] PRE-INSERT refinement COMPLETE | "
+            f"hole_updated={hole_updated} | "
+            f"peg_updated={peg_updated}",
+            flush=True,
+        )
+
+        return result
+
+    @staticmethod
+    def _project_base_point_to_pixel(
+        *,
+        point_base,
+        camera_matrix,
+        T_base_camera,
+    ) -> tuple[float, float]:
+
+        point_base = np.asarray(
+            point_base,
+            dtype=np.float64,
+        )
+
+        K = np.asarray(
+            camera_matrix,
+            dtype=np.float64,
+        )
+
+        T_base_camera = np.asarray(
+            T_base_camera,
+            dtype=np.float64,
+        )
+
+        T_camera_base = np.linalg.inv(
+            T_base_camera
+        )
+
+        point_camera_h = (
+            T_camera_base
+            @ np.array(
+                [
+                    point_base[0],
+                    point_base[1],
+                    point_base[2],
+                    1.0,
+                ],
+                dtype=np.float64,
+            )
+        )
+
+        point_camera = (
+            point_camera_h[:3]
+        )
+
+        if point_camera[2] <= 0.0:
+            raise RuntimeError(
+                "Projected base point is behind the camera."
+            )
+
+        u = (
+            K[0, 0]
+            * point_camera[0]
+            / point_camera[2]
+            + K[0, 2]
+        )
+
+        v = (
+            K[1, 1]
+            * point_camera[1]
+            / point_camera[2]
+            + K[1, 2]
+        )
+
+        return (
+            float(u),
+            float(v),
+        )
 
     def post_process(
         self,

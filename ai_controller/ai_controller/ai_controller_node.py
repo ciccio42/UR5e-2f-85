@@ -1996,6 +1996,67 @@ class AIControllerNode(Node):
                         )
 
                     if (
+                        self.controller.pre_insert_refinement_enabled
+                        and is_nut_assembly
+                        and primitive_name == "inserting"
+                    ):
+
+                        self.current_failure_stage = (
+                            "pre_insert_refinement"
+                        )
+
+                        self.get_logger().info(
+                            "Nut-Assembly INSERTING detected: "
+                            "waiting for fresh pre-insert "
+                            "eye-in-hand RGB-D data..."
+                        )
+
+                        wait_for_seedo_grasp_runtime_data(
+                            self
+                        )
+
+                        if base_to_table_transform is None:
+                            raise RuntimeError(
+                                "base_to_table_transform is not available "
+                                "for Nut-Assembly pre-insert refinement."
+                            )
+
+                        pre_insert_input = (
+                            get_seedo_grasp_runtime_input(
+                                self,
+                                base_to_table_transform=(
+                                    base_to_table_transform
+                                ),
+                            )
+                        )
+
+                        robot_state = (
+                            self._capture_robot_state()
+                        )
+
+                        seedo_inference_input[
+                            "robot_state"
+                        ] = robot_state
+
+                        seedo_inference_input[
+                            "pre_insert_input"
+                        ] = pre_insert_input
+
+                        self.get_logger().info(
+                            "Fresh Nut-Assembly pre-insert "
+                            "eye-in-hand input prepared."
+                        )
+
+                        self.pause_executor.set()
+
+                        pause_executor_for_grasp = True
+
+                        self.get_logger().info(
+                            "ROS executor paused during "
+                            "Nut-Assembly pre-insert refinement."
+                        )
+
+                    if (
                         self.controller.grasp_planning_enabled and
                         primitive_step.name.strip().lower()
                         == "approaching"

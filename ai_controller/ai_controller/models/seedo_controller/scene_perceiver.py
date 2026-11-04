@@ -1444,6 +1444,8 @@ class ScenePerceiver:
         mask: np.ndarray,
         depth_image: np.ndarray,
         camera_matrix: np.ndarray,
+        T_base_camera: np.ndarray | None = None,
+        T_base_table: np.ndarray | None = None,
         peg_radius_m: float = 0.015,
         radial_tolerance_m: float = 0.003,
         min_points: int = 70,
@@ -1481,21 +1483,83 @@ class ScenePerceiver:
         # Runtime geometry must already exist.
         # ---------------------------------------------------------
 
-        if self._last_runtime_camera_calibration is None:
-            raise RuntimeError(
-                "Peg-axis refinement requires a preceding "
-                "ScenePerceiver.run() call."
+        use_live_transforms = (
+            T_base_camera is not None
+            or T_base_table is not None
+        )
+
+        if use_live_transforms:
+
+            if (
+                T_base_camera is None
+                or T_base_table is None
+            ):
+                raise ValueError(
+                    "T_base_camera and T_base_table must be "
+                    "provided together."
+                )
+
+            T_base_camera = np.asarray(
+                T_base_camera,
+                dtype=np.float64,
             )
 
-        if self._last_base_to_table_rotation is None:
-            raise RuntimeError(
-                "Missing base-to-table rotation from runtime perception."
+            T_base_table = np.asarray(
+                T_base_table,
+                dtype=np.float64,
             )
 
-        if self._last_base_to_table_translation is None:
-            raise RuntimeError(
-                "Missing base-to-table translation from runtime perception."
+            if T_base_camera.shape != (4, 4):
+                raise ValueError(
+                    "T_base_camera must have shape (4, 4)."
+                )
+
+            if T_base_table.shape != (4, 4):
+                raise ValueError(
+                    "T_base_table must have shape (4, 4)."
+                )
+
+            try:
+                T_table_base = np.linalg.inv(
+                    T_base_table
+                )
+            except np.linalg.LinAlgError as exc:
+                raise RuntimeError(
+                    "T_base_table is not invertible."
+                ) from exc
+
+            T_table_camera = (
+                T_table_base
+                @ T_base_camera
             )
+
+            R_table_camera = np.asarray(
+                T_table_camera[:3, :3],
+                dtype=np.float64,
+            )
+
+            t_table_camera = np.asarray(
+                T_table_camera[:3, 3],
+                dtype=np.float64,
+            )
+
+        else:
+
+            if self._last_runtime_camera_calibration is None:
+                raise RuntimeError(
+                    "Peg-axis refinement requires a preceding "
+                    "ScenePerceiver.run() call."
+                )
+
+            if self._last_base_to_table_rotation is None:
+                raise RuntimeError(
+                    "Missing base-to-table rotation from runtime perception."
+                )
+
+            if self._last_base_to_table_translation is None:
+                raise RuntimeError(
+                    "Missing base-to-table translation from runtime perception."
+                )
 
         # ---------------------------------------------------------
         # Input validation.
@@ -1720,42 +1784,62 @@ class ScenePerceiver:
         # Camera -> raw ArUco frame.
         # ---------------------------------------------------------
 
-        runtime_calibration = (
-            self._last_runtime_camera_calibration
-        )
+        if use_live_transforms:
 
-        camera_to_aruco_rotation = np.asarray(
-            runtime_calibration[
-                "orientation_matrix"
-            ],
-            dtype=np.float64,
-        )
+            # Fresh eye-in-hand camera -> table_0.
+            points_table = (
+                points_camera
+                @ R_table_camera.T
+                + t_table_camera
+            )
 
-        camera_to_aruco_translation = np.asarray(
-            runtime_calibration[
-                "position"
-            ],
-            dtype=np.float64,
-        )
+            # Camera optical origin expressed in table_0.
+            camera_origin_table = (
+                t_table_camera.copy()
+            )
 
-        points_aruco = (
-            points_camera
-            @ camera_to_aruco_rotation.T
-            + camera_to_aruco_translation
-        )
+        else:
 
-        # ---------------------------------------------------------
-        # Raw ArUco frame -> table_0.
-        #
-        # Fit the cylinder in this frame because its physical axis is
-        # assumed to be parallel to table_0 Z.
-        # ---------------------------------------------------------
+            # Original initial-scene path.
+            runtime_calibration = (
+                self._last_runtime_camera_calibration
+            )
 
-        points_table = (
-            points_aruco
-            @ ARUCO_TO_TABLE0_ROTATION.T
-            + ARUCO_TO_TABLE0_TRANSLATION
-        )
+            camera_to_aruco_rotation = np.asarray(
+                runtime_calibration[
+                    "orientation_matrix"
+                ],
+                dtype=np.float64,
+            )
+
+            camera_to_aruco_translation = np.asarray(
+                runtime_calibration[
+                    "position"
+                ],
+                dtype=np.float64,
+            )
+
+            points_aruco = (
+                points_camera
+                @ camera_to_aruco_rotation.T
+                + camera_to_aruco_translation
+            )
+
+            points_table = (
+                points_aruco
+                @ ARUCO_TO_TABLE0_ROTATION.T
+                + ARUCO_TO_TABLE0_TRANSLATION
+            )
+
+            camera_origin_aruco = (
+                camera_to_aruco_translation
+            )
+
+            camera_origin_table = (
+                ARUCO_TO_TABLE0_ROTATION
+                @ camera_origin_aruco
+                + ARUCO_TO_TABLE0_TRANSLATION
+            )
 
         # ---------------------------------------------------------
         # Keep an upper lateral band but remove the top face.
@@ -1909,17 +1993,27 @@ class ScenePerceiver:
             )
         )
 
-        support_points_aruco = (
-            support_points_camera
-            @ camera_to_aruco_rotation.T
-            + camera_to_aruco_translation
-        )
+        if use_live_transforms:
 
-        support_points_table = (
-            support_points_aruco
-            @ ARUCO_TO_TABLE0_ROTATION.T
-            + ARUCO_TO_TABLE0_TRANSLATION
-        )
+            support_points_table = (
+                support_points_camera
+                @ R_table_camera.T
+                + t_table_camera
+            )
+
+        else:
+
+            support_points_aruco = (
+                support_points_camera
+                @ camera_to_aruco_rotation.T
+                + camera_to_aruco_translation
+            )
+
+            support_points_table = (
+                support_points_aruco
+                @ ARUCO_TO_TABLE0_ROTATION.T
+                + ARUCO_TO_TABLE0_TRANSLATION
+            )
 
         support_z_candidates = (
             support_points_table[:, 2]
@@ -2082,24 +2176,6 @@ class ScenePerceiver:
             mean_xy,
             median_xy,
         ]
-
-        # ---------------------------------------------------------
-        # Camera-aware initialization.
-        #
-        # The visible surface of the peg normally lies on the
-        # camera-facing side. Moving approximately one peg radius
-        # away from the camera gives a useful center hypothesis.
-        # ---------------------------------------------------------
-
-        camera_origin_aruco = (
-            camera_to_aruco_translation
-        )
-
-        camera_origin_table = (
-            ARUCO_TO_TABLE0_ROTATION
-            @ camera_origin_aruco
-            + ARUCO_TO_TABLE0_TRANSLATION
-        )
 
         camera_to_surface_xy = (
             mean_xy
@@ -2453,15 +2529,29 @@ class ScenePerceiver:
         # table_0 -> base_link.
         # ---------------------------------------------------------
 
-        table_to_base_rotation = np.asarray(
-            self._last_base_to_table_rotation,
-            dtype=np.float64,
-        )
+        if use_live_transforms:
 
-        table_to_base_translation = np.asarray(
-            self._last_base_to_table_translation,
-            dtype=np.float64,
-        )
+            table_to_base_rotation = np.asarray(
+                T_base_table[:3, :3],
+                dtype=np.float64,
+            )
+
+            table_to_base_translation = np.asarray(
+                T_base_table[:3, 3],
+                dtype=np.float64,
+            )
+
+        else:
+
+            table_to_base_rotation = np.asarray(
+                self._last_base_to_table_rotation,
+                dtype=np.float64,
+            )
+
+            table_to_base_translation = np.asarray(
+                self._last_base_to_table_translation,
+                dtype=np.float64,
+            )
 
         axis_point_base = (
             table_to_base_rotation
@@ -2722,6 +2812,680 @@ class ScenePerceiver:
             ),
         }
     
+    def refine_pre_insert_peg_top(
+        self,
+        *,
+        hole_refinement: dict[str, Any],
+        depth_image: np.ndarray,
+        camera_matrix: np.ndarray,
+        T_base_camera: np.ndarray,
+        expected_peg_pixel: tuple[float, float],
+        expected_axis_direction_base: np.ndarray,
+        expected_radius_m: float,
+        artifacts_dir: str | Path | None = None,
+        aperture_scale: float = 0.90,
+        min_depth_gap_m: float = 0.015,
+        min_component_area_px: int = 150,
+        max_expected_distance_px: float = 100.0,
+        min_cluster_fraction: float = 0.03,
+        max_top_depth_mad_m: float = 0.004,
+        min_radius_ratio: float = 0.50,
+        max_radius_ratio: float = 1.50,
+    ) -> dict[str, Any]:
+        """
+        Refine the Nut-Assembly peg lateral axis position immediately before
+        insertion from the visible top face in the fresh eye-in-hand depth.
+
+        The fresh hole ellipse defines a local aperture ROI. Inside that ROI,
+        the peg top is expected to be the coherent near-depth component, while
+        the table/background lies substantially farther from the camera.
+
+        The previously estimated peg-axis direction is preserved. Only the
+        fresh lateral position is re-estimated from the new RGB-D frame.
+        """
+
+        depth = np.asarray(
+            depth_image,
+            dtype=np.float64,
+        )
+        K = np.asarray(
+            camera_matrix,
+            dtype=np.float64,
+        )
+        T_base_camera = np.asarray(
+            T_base_camera,
+            dtype=np.float64,
+        )
+        axis_direction_base = np.asarray(
+            expected_axis_direction_base,
+            dtype=np.float64,
+        )
+
+        if depth.ndim != 2:
+            raise ValueError(
+                "depth_image must be 2D."
+            )
+
+        if K.shape != (3, 3):
+            raise ValueError(
+                "camera_matrix must have shape (3, 3)."
+            )
+
+        if T_base_camera.shape != (4, 4):
+            raise ValueError(
+                "T_base_camera must have shape (4, 4)."
+            )
+
+        if not (
+            0.50 <= aperture_scale <= 1.00
+        ):
+            raise ValueError(
+                "aperture_scale must be in [0.50, 1.00]."
+            )
+
+        axis_norm = float(
+            np.linalg.norm(
+                axis_direction_base
+            )
+        )
+
+        if axis_norm <= 1e-12:
+            raise ValueError(
+                "expected_axis_direction_base has near-zero norm."
+            )
+
+        axis_direction_base = (
+            axis_direction_base
+            / axis_norm
+        )
+
+        expected_radius_m = float(
+            expected_radius_m
+        )
+
+        if expected_radius_m <= 0.0:
+            raise ValueError(
+                "expected_radius_m must be positive."
+            )
+
+        center = np.asarray(
+            hole_refinement[
+                "hole_center_px"
+            ],
+            dtype=np.float64,
+        )
+        axes = np.asarray(
+            hole_refinement[
+                "hole_ellipse_axes_px"
+            ],
+            dtype=np.float64,
+        )
+        angle_deg = float(
+            hole_refinement[
+                "hole_ellipse_angle_deg"
+            ]
+        )
+
+        if (
+            center.shape != (2,)
+            or axes.shape != (2,)
+            or not np.all(
+                np.isfinite(
+                    np.concatenate(
+                        (
+                            center,
+                            axes,
+                            [angle_deg],
+                        )
+                    )
+                )
+            )
+        ):
+            raise ValueError(
+                "Invalid fresh-hole ellipse geometry."
+            )
+
+        half_width = max(
+            2,
+            int(
+                round(
+                    0.5
+                    * axes[0]
+                    * aperture_scale
+                )
+            ),
+        )
+        half_height = max(
+            2,
+            int(
+                round(
+                    0.5
+                    * axes[1]
+                    * aperture_scale
+                )
+            ),
+        )
+
+        aperture_u8 = np.zeros(
+            depth.shape,
+            dtype=np.uint8,
+        )
+
+        cv2.ellipse(
+            aperture_u8,
+            (
+                int(round(center[0])),
+                int(round(center[1])),
+            ),
+            (
+                half_width,
+                half_height,
+            ),
+            angle_deg,
+            0.0,
+            360.0,
+            255,
+            thickness=cv2.FILLED,
+        )
+
+        aperture = (
+            aperture_u8 > 0
+        )
+
+        valid = (
+            aperture
+            & np.isfinite(depth)
+            & (depth > 0.0)
+        )
+
+        depth_values = depth[
+            valid
+        ]
+
+        if depth_values.size < 300:
+            raise RuntimeError(
+                "Too few valid depth samples inside the fresh hole aperture: "
+                f"{depth_values.size}."
+            )
+
+        lower_clip = float(
+            np.percentile(
+                depth_values,
+                1.0,
+            )
+        )
+        upper_clip = float(
+            np.percentile(
+                depth_values,
+                99.0,
+            )
+        )
+
+        clipped_values = depth_values[
+            (depth_values >= lower_clip)
+            & (depth_values <= upper_clip)
+        ]
+
+        sorted_depth = np.sort(
+            clipped_values
+        )
+
+        min_cluster_size = max(
+            50,
+            int(
+                round(
+                    min_cluster_fraction
+                    * len(sorted_depth)
+                )
+            ),
+        )
+
+        if (
+            len(sorted_depth)
+            < 2 * min_cluster_size + 1
+        ):
+            raise RuntimeError(
+                "Not enough aperture depth samples for two-surface separation."
+            )
+
+        gaps = np.diff(
+            sorted_depth
+        )
+        valid_split_start = (
+            min_cluster_size - 1
+        )
+        valid_split_end = (
+            len(sorted_depth)
+            - min_cluster_size
+        )
+        candidate_gaps = gaps[
+            valid_split_start:
+            valid_split_end
+        ]
+
+        if candidate_gaps.size == 0:
+            raise RuntimeError(
+                "Could not form valid peg/background depth split candidates."
+            )
+
+        relative_index = int(
+            np.argmax(
+                candidate_gaps
+            )
+        )
+        split_index = (
+            valid_split_start
+            + relative_index
+        )
+
+        near_depth_max = float(
+            sorted_depth[
+                split_index
+            ]
+        )
+        far_depth_min = float(
+            sorted_depth[
+                split_index + 1
+            ]
+        )
+        depth_gap_m = (
+            far_depth_min
+            - near_depth_max
+        )
+
+        if depth_gap_m < min_depth_gap_m:
+            raise RuntimeError(
+                "No sufficiently strong depth gap separates a peg top "
+                "from the background inside the ring hole: "
+                f"gap={depth_gap_m * 1000.0:.2f} mm."
+            )
+
+        split_depth_m = 0.5 * (
+            near_depth_max
+            + far_depth_min
+        )
+
+        near_mask_u8 = (
+            valid
+            & (depth <= split_depth_m)
+        ).astype(
+            np.uint8
+        )
+
+        near_mask_u8 = cv2.morphologyEx(
+            near_mask_u8,
+            cv2.MORPH_OPEN,
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (3, 3),
+            ),
+        )
+        near_mask_u8 = cv2.morphologyEx(
+            near_mask_u8,
+            cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (5, 5),
+            ),
+        )
+
+        (
+            component_count,
+            component_labels,
+            component_stats,
+            component_centroids,
+        ) = cv2.connectedComponentsWithStats(
+            near_mask_u8,
+            connectivity=8,
+        )
+
+        expected_u = float(
+            expected_peg_pixel[0]
+        )
+        expected_v = float(
+            expected_peg_pixel[1]
+        )
+
+        candidates: list[
+            dict[str, Any]
+        ] = []
+
+        for label_index in range(
+            1,
+            component_count,
+        ):
+            area_px = int(
+                component_stats[
+                    label_index,
+                    cv2.CC_STAT_AREA,
+                ]
+            )
+
+            if area_px < min_component_area_px:
+                continue
+
+            center_u = float(
+                component_centroids[
+                    label_index,
+                    0,
+                ]
+            )
+            center_v = float(
+                component_centroids[
+                    label_index,
+                    1,
+                ]
+            )
+
+            expected_distance_px = float(
+                np.hypot(
+                    center_u - expected_u,
+                    center_v - expected_v,
+                )
+            )
+
+            if (
+                expected_distance_px
+                > max_expected_distance_px
+            ):
+                continue
+
+            candidates.append(
+                {
+                    "label": int(label_index),
+                    "area_px": area_px,
+                    "center_pixel": (
+                        center_u,
+                        center_v,
+                    ),
+                    "expected_distance_px": (
+                        expected_distance_px
+                    ),
+                }
+            )
+
+        if not candidates:
+            raise RuntimeError(
+                "No coherent near-depth component inside the ring hole "
+                "is compatible with the expected peg location."
+            )
+
+        selected_candidate = min(
+            candidates,
+            key=lambda candidate: (
+                candidate[
+                    "expected_distance_px"
+                ],
+                -candidate[
+                    "area_px"
+                ],
+            ),
+        )
+
+        peg_mask = (
+            component_labels
+            == selected_candidate[
+                "label"
+            ]
+        )
+
+        peg_valid = (
+            peg_mask
+            & np.isfinite(depth)
+            & (depth > 0.0)
+        )
+        peg_v, peg_u = np.nonzero(
+            peg_valid
+        )
+        peg_depth = depth[
+            peg_v,
+            peg_u,
+        ]
+
+        if peg_depth.size < min_component_area_px:
+            raise RuntimeError(
+                "Fresh peg-top component contains too few valid depth samples."
+            )
+
+        peg_depth_median = float(
+            np.median(
+                peg_depth
+            )
+        )
+        peg_depth_mad_m = float(
+            np.median(
+                np.abs(
+                    peg_depth
+                    - peg_depth_median
+                )
+            )
+        )
+
+        fx = float(K[0, 0])
+        fy = float(K[1, 1])
+        cx = float(K[0, 2])
+        cy = float(K[1, 2])
+
+        if (
+            not np.isfinite(fx)
+            or not np.isfinite(fy)
+            or fx <= 0.0
+            or fy <= 0.0
+        ):
+            raise ValueError(
+                "Invalid eye-in-hand focal lengths."
+            )
+
+        point_x_camera = (
+            (peg_u.astype(np.float64) - cx)
+            * peg_depth
+            / fx
+        )
+        point_y_camera = (
+            (peg_v.astype(np.float64) - cy)
+            * peg_depth
+            / fy
+        )
+
+        points_camera = np.column_stack(
+            (
+                point_x_camera,
+                point_y_camera,
+                peg_depth,
+                np.ones(
+                    len(peg_depth),
+                    dtype=np.float64,
+                ),
+            )
+        )
+
+        points_base = (
+            T_base_camera
+            @ points_camera.T
+        ).T[:, :3]
+
+        center_base = np.median(
+            points_base,
+            axis=0,
+        )
+
+        centered = (
+            points_base
+            - center_base.reshape(1, 3)
+        )
+        axial_component = (
+            centered
+            @ axis_direction_base
+        )
+        radial_vectors = (
+            centered
+            - axial_component.reshape(-1, 1)
+            * axis_direction_base.reshape(1, 3)
+        )
+        radial_distance = np.linalg.norm(
+            radial_vectors,
+            axis=1,
+        )
+        observed_radius_m = float(
+            np.percentile(
+                radial_distance,
+                95.0,
+            )
+        )
+        radius_ratio = (
+            observed_radius_m
+            / expected_radius_m
+        )
+
+        rejection_reasons: list[str] = []
+
+        if (
+            peg_depth_mad_m
+            > max_top_depth_mad_m
+        ):
+            rejection_reasons.append(
+                "top_face_depth_too_noisy"
+            )
+
+        if not (
+            min_radius_ratio
+            <= radius_ratio
+            <= max_radius_ratio
+        ):
+            rejection_reasons.append(
+                "implausible_top_face_radius"
+            )
+
+        accepted = (
+            len(rejection_reasons) == 0
+        )
+
+        if artifacts_dir is not None:
+            output_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+            output_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "peg_aperture_mask.png"
+                ),
+                aperture.astype(np.uint8) * 255,
+            )
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "peg_near_depth_mask.png"
+                ),
+                (near_mask_u8 > 0).astype(np.uint8) * 255,
+            )
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "peg_mask.png"
+                ),
+                peg_mask.astype(np.uint8) * 255,
+            )
+
+        print(
+            "[PRE-INSERT] Peg top-face refinement | "
+            f"accepted={accepted} | "
+            f"center_px=({selected_candidate['center_pixel'][0]:.1f}, "
+            f"{selected_candidate['center_pixel'][1]:.1f}) | "
+            f"axis_xy_base=[{center_base[0]:.5f}, {center_base[1]:.5f}] | "
+            f"depth_gap={depth_gap_m * 1000.0:.2f} mm | "
+            f"depth_mad={peg_depth_mad_m * 1000.0:.2f} mm | "
+            f"radius={observed_radius_m * 1000.0:.2f} mm | "
+            f"reasons={rejection_reasons}",
+            flush=True,
+        )
+
+        return {
+            "accepted": accepted,
+            "rejection_reasons": tuple(
+                rejection_reasons
+            ),
+            "axis_xy_base": (
+                float(center_base[0]),
+                float(center_base[1]),
+            ),
+            "axis_point_base": (
+                float(center_base[0]),
+                float(center_base[1]),
+                float(center_base[2]),
+            ),
+            "axis_direction_base": tuple(
+                float(value)
+                for value
+                in axis_direction_base
+            ),
+            "peg_tip_point_base": (
+                float(center_base[0]),
+                float(center_base[1]),
+                float(center_base[2]),
+            ),
+            "center_pixel": (
+                float(
+                    selected_candidate[
+                        "center_pixel"
+                    ][0]
+                ),
+                float(
+                    selected_candidate[
+                        "center_pixel"
+                    ][1]
+                ),
+            ),
+            "expected_distance_px": float(
+                selected_candidate[
+                    "expected_distance_px"
+                ]
+            ),
+            "component_area_px": int(
+                selected_candidate[
+                    "area_px"
+                ]
+            ),
+            "depth_split_m": float(
+                split_depth_m
+            ),
+            "depth_gap_m": float(
+                depth_gap_m
+            ),
+            "near_depth_max_m": float(
+                near_depth_max
+            ),
+            "far_depth_min_m": float(
+                far_depth_min
+            ),
+            "top_depth_median_m": float(
+                peg_depth_median
+            ),
+            "top_depth_mad_m": float(
+                peg_depth_mad_m
+            ),
+            "observed_radius_m": float(
+                observed_radius_m
+            ),
+            "expected_radius_m": float(
+                expected_radius_m
+            ),
+            "radius_ratio": float(
+                radius_ratio
+            ),
+            "aperture_mask": aperture,
+            "near_depth_mask": (
+                near_mask_u8 > 0
+            ),
+            "mask": peg_mask,
+        }
+
     def _ensure_models_loaded(self) -> None:
         """Load GroundingDINO and SAM only when scene perception is needed."""
 
@@ -2811,6 +3575,8 @@ class ScenePerceiver:
         max_thickness_m: float = 0.080,
         max_points: int = 12000,
         max_lateral_correction_m: float = 0.020,
+        allow_deep_hole_background: bool = False,
+        deep_background_margin_m: float = 0.005,
     ) -> dict[str, Any]:
         """
         Re-estimate the grasped ring/nut hole before LIFT_UP.
@@ -3307,13 +4073,27 @@ class ScenePerceiver:
             ),
         )
 
-        support_like = (
-            np.abs(
-                depth_below_top
-                - known_thickness_m
+        if allow_deep_hole_background:
+
+            minimum_background_depth_m = (
+                known_thickness_m
+                + deep_background_margin_m
             )
-            <= effective_hole_tolerance_m
-        )
+
+            support_like = (
+                depth_below_top
+                >= minimum_background_depth_m
+            )
+
+        else:
+
+            support_like = (
+                np.abs(
+                    depth_below_top
+                    - known_thickness_m
+                )
+                <= effective_hole_tolerance_m
+            )
 
         hole_candidate_mask = np.zeros(
             depth.shape,
@@ -4012,6 +4792,8 @@ class ScenePerceiver:
         artifacts_dir: str | Path | None = None,
         box_threshold: float = 0.20,
         text_threshold: float = 0.25,
+        expected_pixel: tuple[float, float] | None = None,
+        max_expected_distance_px: float = 120.0,
     ) -> dict[str, Any]:
         """
         Detect and segment only the already-known grasped Nut-Assembly object.
@@ -4099,6 +4881,24 @@ class ScenePerceiver:
         )
 
         selected_candidate = None
+
+        if expected_pixel is not None:
+
+            expected_u = float(
+                expected_pixel[0]
+            )
+
+            expected_v = float(
+                expected_pixel[1]
+            )
+
+            if not (
+                np.isfinite(expected_u)
+                and np.isfinite(expected_v)
+            ):
+                raise ValueError(
+                    "expected_pixel must contain finite values."
+                )
 
         for query in queries:
 
@@ -4236,6 +5036,35 @@ class ScenePerceiver:
 
                     continue
 
+                mask_v, mask_u = np.nonzero(
+                    object_mask
+                )
+
+                candidate_center_u = float(
+                    np.mean(
+                        mask_u
+                    )
+                )
+
+                candidate_center_v = float(
+                    np.mean(
+                        mask_v
+                    )
+                )
+
+                if expected_pixel is None:
+                    expected_distance_px = None
+
+                else:
+                    expected_distance_px = float(
+                        np.hypot(
+                            candidate_center_u
+                            - expected_u,
+                            candidate_center_v
+                            - expected_v,
+                        )
+                    )
+                
                 candidates.append(
                     {
                         "query": query,
@@ -4249,18 +5078,68 @@ class ScenePerceiver:
                         "mask_fraction": (
                             mask_fraction
                         ),
+                        "center_pixel": (
+                            candidate_center_u,
+                            candidate_center_v,
+                        ),
+                        "expected_distance_px": (
+                            expected_distance_px
+                        ),
                     }
                 )
 
             if candidates:
-                selected_candidate = max(
-                    candidates,
+
+                if expected_pixel is None:
+
+                    selected_candidate = max(
+                        candidates,
+                        key=lambda candidate: (
+                            candidate[
+                                "confidence"
+                            ],
+                            candidate[
+                                "mask_fraction"
+                            ],
+                        ),
+                    )
+
+                    break
+
+                nearby_candidates = [
+                    candidate
+                    for candidate
+                    in candidates
+                    if (
+                        candidate[
+                            "expected_distance_px"
+                        ]
+                        is not None
+                        and candidate[
+                            "expected_distance_px"
+                        ]
+                        <= max_expected_distance_px
+                    )
+                ]
+
+                if not nearby_candidates:
+                    print(
+                        "[TARGET DETECTION] No candidate close "
+                        "to expected target pixel | "
+                        f"query={query!r}",
+                        flush=True,
+                    )
+
+                    continue
+
+                selected_candidate = min(
+                    nearby_candidates,
                     key=lambda candidate: (
                         candidate[
-                            "confidence"
+                            "expected_distance_px"
                         ],
-                        candidate[
-                            "mask_fraction"
+                        -candidate[
+                            "confidence"
                         ],
                     ),
                 )
@@ -4372,6 +5251,30 @@ class ScenePerceiver:
                 selected_candidate[
                     "mask_fraction"
                 ]
+            ),
+            "center_pixel": (
+                float(
+                    selected_candidate[
+                        "center_pixel"
+                    ][0]
+                ),
+                float(
+                    selected_candidate[
+                        "center_pixel"
+                    ][1]
+                ),
+            ),
+
+            "expected_distance_px": (
+                None
+                if selected_candidate[
+                    "expected_distance_px"
+                ] is None
+                else float(
+                    selected_candidate[
+                        "expected_distance_px"
+                    ]
+                )
             ),
         }
 
