@@ -159,6 +159,8 @@ motion_layer:
   # ==================================================
   nut_assembly:
 
+    pre_entry_clearance_m: 0.003
+    
     # Safety distance kept above the peg before insertion.
     peg_clearance_m: 0.02
 

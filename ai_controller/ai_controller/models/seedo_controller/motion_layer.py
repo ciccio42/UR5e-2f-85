@@ -130,6 +130,13 @@ class SeeDoMotionLayer:
                 )
             ),
 
+            "pre_entry_clearance_m": float(
+                raw.get(
+                    "pre_entry_clearance_m",
+                    0.003,
+                )
+            ),
+
             "initial_entry_m": float(
                 raw.get(
                     "initial_entry_m",
@@ -202,6 +209,10 @@ class SeeDoMotionLayer:
             "transport_clearance_margin_m"
         ]
 
+        pre_entry_clearance = out[
+            "pre_entry_clearance_m"
+        ]
+
         entry = out[
             "initial_entry_m"
         ]
@@ -244,6 +255,25 @@ class SeeDoMotionLayer:
             raise ValueError(
                 "transport_clearance_margin_m must be "
                 "between 0 and 100 mm."
+            )
+
+        if not (
+            0.001
+            <= pre_entry_clearance
+            <= 0.02
+        ):
+            raise ValueError(
+                "pre_entry_clearance_m must be "
+                "between 1 and 20 mm."
+            )
+
+        if (
+            pre_entry_clearance
+            >= clearance
+        ):
+            raise ValueError(
+                "pre_entry_clearance_m must be smaller "
+                "than peg_clearance_m."
             )
 
         if not (
@@ -729,6 +759,190 @@ class SeeDoMotionLayer:
             f"{hole_axis_local} | "
             f"sweep_radius="
             f"{object_sweep_radius * 1000.0:.1f} mm",
+            flush=True,
+        )
+
+    def predict_nut_hole_geometry_at_tcp(
+        self,
+        *,
+        tcp_position,
+        tcp_orientation,
+    ):
+        """
+        Predict the already-frozen hole geometry at an arbitrary
+        measured TCP pose without modifying MotionLayer state.
+        """
+
+        if (
+            self._nut_hole_top_local is None
+            or self._nut_hole_bottom_local is None
+            or self._nut_hole_axis_local is None
+        ):
+            raise RuntimeError(
+                "Nut hole geometry is not initialized."
+            )
+
+        tcp_position = np.asarray(
+            tcp_position,
+            dtype=np.float64,
+        )
+
+        tcp_orientation = np.asarray(
+            tcp_orientation,
+            dtype=np.float64,
+        )
+
+        if (
+            tcp_position.shape != (3,)
+            or not np.isfinite(tcp_position).all()
+        ):
+            raise ValueError(
+                "Invalid measured TCP position."
+            )
+
+        if (
+            tcp_orientation.shape != (4,)
+            or not np.isfinite(tcp_orientation).all()
+        ):
+            raise ValueError(
+                "Invalid measured TCP orientation."
+            )
+
+        quaternion_norm = float(
+            np.linalg.norm(
+                tcp_orientation
+            )
+        )
+
+        if quaternion_norm <= 1e-8:
+            raise ValueError(
+                "Measured TCP quaternion has near-zero norm."
+            )
+
+        tcp_orientation = (
+            tcp_orientation
+            / quaternion_norm
+        )
+
+        tcp_rotation = Rotation.from_quat(
+            tcp_orientation
+        )
+
+        hole_top_base = (
+            tcp_position
+            + tcp_rotation.apply(
+                self._nut_hole_top_local
+            )
+        )
+
+        hole_bottom_base = (
+            tcp_position
+            + tcp_rotation.apply(
+                self._nut_hole_bottom_local
+            )
+        )
+
+        hole_axis_base = tcp_rotation.apply(
+            self._nut_hole_axis_local
+        )
+
+        hole_axis_base /= np.linalg.norm(
+            hole_axis_base
+        )
+
+        return (
+            hole_top_base,
+            hole_bottom_base,
+            hole_axis_base,
+        )
+
+    def synchronize_nut_measured_tcp(
+        self,
+        *,
+        tcp_position,
+        tcp_orientation,
+    ) -> None:
+        """
+        Synchronize the Motion Layer with the measured TCP pose without
+        replacing the already-frozen Nut-Assembly hole geometry.
+
+        Used when post-grasp visual refinement is unavailable or rejected.
+        """
+
+        if self.task_type != "nut_assembly":
+            raise RuntimeError(
+                "Nut TCP synchronization is only valid "
+                "for a nut_assembly task."
+            )
+
+        # The fallback is meaningful only if the pre-grasp
+        # hole geometry has already been frozen.
+        if (
+            self._nut_hole_top_local is None
+            or self._nut_hole_bottom_local is None
+            or self._nut_hole_axis_local is None
+        ):
+            raise RuntimeError(
+                "Cannot use Nut-Assembly post-grasp fallback: "
+                "pre-grasp hole geometry is unavailable."
+            )
+
+        tcp_position = np.asarray(
+            tcp_position,
+            dtype=np.float64,
+        )
+
+        tcp_orientation = np.asarray(
+            tcp_orientation,
+            dtype=np.float64,
+        )
+
+        if (
+            tcp_position.shape != (3,)
+            or not np.isfinite(
+                tcp_position
+            ).all()
+        ):
+            raise ValueError(
+                "Invalid measured TCP position."
+            )
+
+        if (
+            tcp_orientation.shape != (4,)
+            or not np.isfinite(
+                tcp_orientation
+            ).all()
+        ):
+            raise ValueError(
+                "Invalid measured TCP orientation."
+            )
+
+        quaternion_norm = float(
+            np.linalg.norm(
+                tcp_orientation
+            )
+        )
+
+        if quaternion_norm <= 1e-8:
+            raise ValueError(
+                "Measured TCP quaternion has near-zero norm."
+            )
+
+        tcp_orientation = (
+            tcp_orientation
+            / quaternion_norm
+        )
+
+        self.current_pose = GripperPose(
+            tcp_position.copy(),
+            tcp_orientation.copy(),
+        )
+
+        print(
+            "[NUT] Motion Layer synchronized with measured TCP "
+            "without replacing pre-grasp hole geometry. | "
+            f"position={tcp_position} | "
+            f"orientation={tcp_orientation}",
             flush=True,
         )
 
@@ -2137,21 +2351,52 @@ class SeeDoMotionLayer:
                 "before insertion."
             )
 
-        # Stage 1:
-        # let the peg enter the lower hole opening slightly.
+        # ---------------------------------------------------------
+        # Stage 0: pre-entry.
+        #
+        # Move the lower hole opening close to the peg tip without
+        # engaging it yet. This reduces the free-space distance over
+        # which a small lateral error could make the outer ring body
+        # collide with the peg.
+        # ---------------------------------------------------------
+
+        pre_entry_hole_bottom = (
+            peg_tip
+            + cfg["pre_entry_clearance_m"]
+            * peg_axis
+        )
+
+        # ---------------------------------------------------------
+        # Stage 1: initial engagement.
+        #
+        # Let the peg enter the lower hole opening slightly.
+        # ---------------------------------------------------------
+
         first_hole_bottom = (
             peg_tip
             - cfg["initial_entry_m"]
             * peg_axis
         )
 
-        # Stage 2:
-        # move the lower face of the ring close to the
-        # locally observed support surface.
+        # ---------------------------------------------------------
+        # Stage 2: insertion slide.
+        #
+        # Move the lower face of the ring close to the locally
+        # observed support surface.
+        # ---------------------------------------------------------
+
         final_hole_bottom = (
             peg_support
             + cfg["release_bottom_height_m"]
             * peg_axis
+        )
+
+        pre_entry_axis_coordinate = float(
+            np.dot(
+                pre_entry_hole_bottom
+                - peg_support,
+                peg_axis,
+            )
         )
 
         first_axis_coordinate = float(
@@ -2170,13 +2415,15 @@ class SeeDoMotionLayer:
             )
         )
 
-        if (
-            final_axis_coordinate
-            >= first_axis_coordinate
+        if not (
+            pre_entry_axis_coordinate
+            > first_axis_coordinate
+            > final_axis_coordinate
         ):
             raise RuntimeError(
-                "Final insertion point must lie below "
-                "the initial-entry point along the peg axis."
+                "Invalid Nut-Assembly insertion ordering: "
+                "expected pre-entry > initial-entry > final "
+                "along the peg axis."
             )
 
         rotation = Rotation.from_quat(
@@ -2187,6 +2434,11 @@ class SeeDoMotionLayer:
             rotation.apply(
                 self._nut_hole_bottom_local
             )
+        )
+
+        pre_entry_tcp_goal = (
+            pre_entry_hole_bottom
+            - hole_bottom_offset
         )
 
         first_tcp_goal = (
@@ -2200,32 +2452,53 @@ class SeeDoMotionLayer:
         )
 
         # ---------------------------------------------------------
-        # Stage 1: precise engagement of the peg tip.
-        #
-        # Keep the Cartesian increments small while the peg is
-        # entering the lower hole opening.
+        # Stage 0: approach the peg tip conservatively.
         # ---------------------------------------------------------
 
-        actions = self._move_linear(
-            target_position=first_tcp_goal,
-            target_orientation=(
+        actions = self._nut_move_linear(
+            goal=pre_entry_tcp_goal,
+            orientation=(
                 self.current_pose.orientation
+            ),
+            max_step_m=(
+                cfg["initial_entry_step_m"]
             ),
         )
 
         # ---------------------------------------------------------
-        # Stage 2: slide along the already-engaged peg.
+        # Stage 1: initial peg engagement.
         #
-        # Once the peg is inside the hole, larger increments reduce
-        # repeated independent GoToPose replanning and therefore
-        # produce a cleaner downward motion.
+        # Keep small Cartesian increments while the peg crosses
+        # the lower hole opening.
         # ---------------------------------------------------------
 
         actions.extend(
-            self._move_linear(
-                target_position=final_tcp_goal,
-                target_orientation=(
+            self._nut_move_linear(
+                goal=first_tcp_goal,
+                orientation=(
                     self.current_pose.orientation
+                ),
+                max_step_m=(
+                    cfg["initial_entry_step_m"]
+                ),
+            )
+        )
+
+        # ---------------------------------------------------------
+        # Stage 2: insertion slide.
+        #
+        # Once the peg is already engaged, larger increments are
+        # acceptable and reduce unnecessary replanning.
+        # ---------------------------------------------------------
+
+        actions.extend(
+            self._nut_move_linear(
+                goal=final_tcp_goal,
+                orientation=(
+                    self.current_pose.orientation
+                ),
+                max_step_m=(
+                    cfg["insertion_slide_step_m"]
                 ),
             )
         )
@@ -2255,16 +2528,18 @@ class SeeDoMotionLayer:
         print(
             "[NUT] INSERTING | "
             f"target={peg_target!r} | "
+            f"pre_entry_clearance="
+            f"{cfg['pre_entry_clearance_m'] * 1000.0:.1f} mm | "
             f"initial_entry="
             f"{cfg['initial_entry_m'] * 1000.0:.1f} mm | "
             f"final_bottom_height="
             f"{cfg['release_bottom_height_m'] * 1000.0:.1f} mm | "
             f"release="
-            f"{'yes' if cfg['auto_release'] else 'no'}",
-            f"entry_step=",
-            f"{cfg['initial_entry_step_m'] * 1000.0:.1f} mm | ",
-            f"slide_step=",
-            f"{cfg['insertion_slide_step_m'] * 1000.0:.1f} mm | ",
+            f"{'yes' if cfg['auto_release'] else 'no'} | "
+            f"entry_step="
+            f"{cfg['initial_entry_step_m'] * 1000.0:.1f} mm | "
+            f"slide_step="
+            f"{cfg['insertion_slide_step_m'] * 1000.0:.1f} mm",
             flush=True,
         )
 

@@ -1474,6 +1474,90 @@ class SeeDoController(AIController):
 
         return pixel_matches[0]
 
+    def _apply_post_grasp_nut_fallback(
+        self,
+        *,
+        target: str,
+        current_position,
+        current_orientation,
+        expected_hole_center_base,
+        expected_hole_bottom_base,
+        expected_hole_axis_base,
+        reason: str,
+        post_grasp_artifacts_dir: Path | None,
+    ) -> dict[str, Any]:
+        """
+        Keep the pre-grasp grasp-relative hole geometry and only
+        synchronize the Motion Layer with the measured post-PICK TCP.
+        """
+
+        self.motion_layer.synchronize_nut_measured_tcp(
+            tcp_position=current_position,
+            tcp_orientation=current_orientation,
+        )
+
+        fallback_result = {
+            "accepted": False,
+            "fallback_used": True,
+            "geometry_source": (
+                "pre_grasp_grasp_relative_geometry"
+            ),
+            "fallback_reason": str(
+                reason
+            ),
+            "target": str(
+                target
+            ),
+            "hole_center_base": tuple(
+                float(value)
+                for value
+                in expected_hole_center_base
+            ),
+            "hole_bottom_center_base": tuple(
+                float(value)
+                for value
+                in expected_hole_bottom_base
+            ),
+            "hole_axis_base": tuple(
+                float(value)
+                for value
+                in expected_hole_axis_base
+            ),
+        }
+
+        if post_grasp_artifacts_dir is not None:
+
+            fallback_path = (
+                post_grasp_artifacts_dir
+                / "post_grasp_fallback.json"
+            )
+
+            with fallback_path.open(
+                "w",
+                encoding="utf-8",
+            ) as stream:
+                json.dump(
+                    fallback_result,
+                    stream,
+                    indent=2,
+                    ensure_ascii=False,
+                )
+
+            print(
+                "[NUT] Post-grasp fallback diagnostic saved:",
+                fallback_path,
+                flush=True,
+            )
+
+        print(
+            "[NUT][WARN] Post-grasp refinement unavailable. "
+            "Keeping pre-grasp grasp-relative hole geometry. | "
+            f"reason={reason}",
+            flush=True,
+        )
+
+        return fallback_result
+
     def _run_post_grasp_nut_refinement(
         self,
         *,
@@ -1725,94 +1809,176 @@ class SeeDoController(AIController):
             flush=True,
         )
 
-        # ---------------------------------------------------------
-        # 1. Target-specific detection + SAM.
-        # ---------------------------------------------------------
-
-        with TIMING.measure(
-            "nut_post_grasp_detection"
-        ):
-            target_detection = (
-                self.scene_perceiver
-                .detect_post_grasp_target_mask(
-                    rgb_image=(
-                        post_grasp_input[
-                            "rgb_image"
-                        ]
-                    ),
-                    target_label=target,
-                    artifacts_dir=(
-                        post_grasp_artifacts_dir
-                    ),
-                )
+        (
+            expected_hole_center_base,
+            expected_hole_bottom_base,
+            expected_hole_axis_base,
+        ) = (
+            self.motion_layer
+            .predict_nut_hole_geometry_at_tcp(
+                tcp_position=current_position,
+                tcp_orientation=current_orientation,
             )
-
-        target_mask = np.asarray(
-            target_detection[
-                "mask"
-            ],
-            dtype=bool,
         )
 
-        # ---------------------------------------------------------
-        # 2. Re-estimate hole center + axis using the LIVE
-        #    eye-in-hand transform.
-        # ---------------------------------------------------------
+        print(
+            "[NUT] Expected post-grasp hole from rigid TCP | "
+            f"top={expected_hole_center_base} | "
+            f"bottom={expected_hole_bottom_base} | "
+            f"axis={expected_hole_axis_base}",
+            flush=True,
+        )
 
-        with TIMING.measure(
-            "nut_post_grasp_geometry"
-        ):
-            refinement = (
-                self.scene_perceiver
-                .refine_post_grasp_nut_hole(
-                    mask=target_mask,
+        try:
 
-                    depth_image=(
-                        post_grasp_input[
-                            "depth_image"
-                        ]
-                    ),
+            # ---------------------------------------------------------
+            # 1. Target-specific detection + SAM.
+            # ---------------------------------------------------------
 
-                    camera_matrix=(
-                        post_grasp_input[
-                            "camera_matrix"
-                        ]
-                    ),
-
-                    T_base_camera=(
-                        post_grasp_input[
-                            "T_base_camera"
-                        ]
-                    ),
-
-                    T_base_table=(
-                        post_grasp_input[
-                            "T_base_table"
-                        ]
-                    ),
-
-                    known_thickness_m=(
-                        known_thickness_m
-                    ),
-                    artifacts_dir=(
-                        post_grasp_artifacts_dir
-                    ),
+            with TIMING.measure(
+                "nut_post_grasp_detection"
+            ):
+                target_detection = (
+                    self.scene_perceiver
+                    .detect_post_grasp_target_mask(
+                        rgb_image=(
+                            post_grasp_input[
+                                "rgb_image"
+                            ]
+                        ),
+                        target_label=target,
+                        artifacts_dir=(
+                            post_grasp_artifacts_dir
+                        ),
+                    )
                 )
+
+            target_mask = np.asarray(
+                target_detection[
+                    "mask"
+                ],
+                dtype=bool,
+            )
+
+            # ---------------------------------------------------------
+            # 2. Re-estimate hole center + axis using the LIVE
+            #    eye-in-hand transform.
+            # ---------------------------------------------------------
+
+            with TIMING.measure(
+                "nut_post_grasp_geometry"
+            ):
+                refinement = (
+                    self.scene_perceiver
+                    .refine_post_grasp_nut_hole(
+                        mask=target_mask,
+
+                        depth_image=(
+                            post_grasp_input[
+                                "depth_image"
+                            ]
+                        ),
+
+                        camera_matrix=(
+                            post_grasp_input[
+                                "camera_matrix"
+                            ]
+                        ),
+
+                        T_base_camera=(
+                            post_grasp_input[
+                                "T_base_camera"
+                            ]
+                        ),
+
+                        T_base_table=(
+                            post_grasp_input[
+                                "T_base_table"
+                            ]
+                        ),
+
+                        expected_hole_center_base=(
+                            expected_hole_center_base
+                        ),
+
+                        expected_hole_axis_base=(
+                            expected_hole_axis_base
+                        ),
+
+                        known_thickness_m=(
+                            known_thickness_m
+                        ),
+
+                        artifacts_dir=(
+                            post_grasp_artifacts_dir
+                        ),
+                    )
+                )
+
+        except RuntimeError as exc:
+
+            return self._apply_post_grasp_nut_fallback(
+                target=target,
+                current_position=current_position,
+                current_orientation=current_orientation,
+
+                expected_hole_center_base=(
+                    expected_hole_center_base
+                ),
+
+                expected_hole_bottom_base=(
+                    expected_hole_bottom_base
+                ),
+
+                expected_hole_axis_base=(
+                    expected_hole_axis_base
+                ),
+
+                reason=(
+                    "post_grasp_perception_or_geometry_failure: "
+                    f"{exc}"
+                ),
+
+                post_grasp_artifacts_dir=(
+                    post_grasp_artifacts_dir
+                ),
             )
 
         if refinement.get(
             "accepted"
         ) is not True:
-            raise RuntimeError(
-                "Post-grasp Nut-Assembly hole "
-                "refinement was rejected."
+
+            return self._apply_post_grasp_nut_fallback(
+                target=target,
+                current_position=current_position,
+                current_orientation=current_orientation,
+
+                expected_hole_center_base=(
+                    expected_hole_center_base
+                ),
+
+                expected_hole_bottom_base=(
+                    expected_hole_bottom_base
+                ),
+
+                expected_hole_axis_base=(
+                    expected_hole_axis_base
+                ),
+
+                reason=(
+                    "post_grasp_rejected: "
+                    f"{refinement.get('rejection_reasons', ())}"
+                ),
+
+                post_grasp_artifacts_dir=(
+                    post_grasp_artifacts_dir
+                ),
             )
 
         # ---------------------------------------------------------
         # 3. Replace the old planned-grasp-relative geometry
         #    with geometry relative to the ACTUAL measured TCP.
         # ---------------------------------------------------------
-
         self.motion_layer\
             .update_nut_grasp_geometry_from_measured_tcp(
                 target_id=target,

@@ -396,6 +396,12 @@ class ScenePerceiver:
             v,
         )
 
+        if depth is None:
+            raise RuntimeError(
+                "No valid depth around pixel "
+                f"({u}, {v})."
+            )
+
         point_camera = deproject_pixel(
             u,
             v,
@@ -2791,6 +2797,8 @@ class ScenePerceiver:
         camera_matrix: np.ndarray,
         T_base_camera: np.ndarray,
         T_base_table: np.ndarray,
+        expected_hole_center_base: np.ndarray,
+        expected_hole_axis_base: np.ndarray,
         known_thickness_m: float,
         artifacts_dir: str | Path | None = None,
         min_hole_area_px: float = 40.0,
@@ -2802,6 +2810,7 @@ class ScenePerceiver:
         min_thickness_m: float = 0.002,
         max_thickness_m: float = 0.080,
         max_points: int = 12000,
+        max_lateral_correction_m: float = 0.020,
     ) -> dict[str, Any]:
         """
         Re-estimate the grasped ring/nut hole before LIFT_UP.
@@ -2843,6 +2852,62 @@ class ScenePerceiver:
         known_thickness_m = float(
             known_thickness_m
         )
+
+        expected_hole_center_base = np.asarray(
+            expected_hole_center_base,
+            dtype=np.float64,
+        )
+
+        expected_hole_axis_base = np.asarray(
+            expected_hole_axis_base,
+            dtype=np.float64,
+        )
+
+        if (
+            expected_hole_center_base.shape != (3,)
+            or not np.isfinite(
+                expected_hole_center_base
+            ).all()
+        ):
+            raise ValueError(
+                "Invalid expected_hole_center_base."
+            )
+
+        if (
+            expected_hole_axis_base.shape != (3,)
+            or not np.isfinite(
+                expected_hole_axis_base
+            ).all()
+        ):
+            raise ValueError(
+                "Invalid expected_hole_axis_base."
+            )
+
+        expected_axis_norm = float(
+            np.linalg.norm(
+                expected_hole_axis_base
+            )
+        )
+
+        if expected_axis_norm <= 1e-8:
+            raise ValueError(
+                "Expected hole axis has near-zero norm."
+            )
+
+        expected_hole_axis_base = (
+            expected_hole_axis_base
+            / expected_axis_norm
+        )
+
+        if (
+            not np.isfinite(
+                max_lateral_correction_m
+            )
+            or max_lateral_correction_m <= 0.0
+        ):
+            raise ValueError(
+                "max_lateral_correction_m must be positive."
+            )
 
         if mask.ndim != 2:
             raise ValueError(
@@ -3315,6 +3380,59 @@ class ScenePerceiver:
 
         component_candidates = []
 
+        try:
+            T_camera_base = np.linalg.inv(
+                T_base_camera
+            )
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "T_base_camera is not invertible."
+            ) from exc
+
+        expected_hole_camera_h = (
+            T_camera_base
+            @ np.array(
+                [
+                    expected_hole_center_base[0],
+                    expected_hole_center_base[1],
+                    expected_hole_center_base[2],
+                    1.0,
+                ],
+                dtype=np.float64,
+            )
+        )
+
+        expected_hole_camera = (
+            expected_hole_camera_h[:3]
+        )
+
+        if expected_hole_camera[2] <= 0.0:
+            raise RuntimeError(
+                "Expected post-grasp hole lies behind "
+                "the eye-in-hand camera."
+            )
+
+        expected_hole_u = (
+            fx
+            * expected_hole_camera[0]
+            / expected_hole_camera[2]
+            + cx
+        )
+
+        expected_hole_v = (
+            fy
+            * expected_hole_camera[1]
+            / expected_hole_camera[2]
+            + cy
+        )
+
+        print(
+            "[POST-GRASP] Expected hole pixel | "
+            f"u={expected_hole_u:.2f} | "
+            f"v={expected_hole_v:.2f}",
+            flush=True,
+        )
+
         for label_index in range(
             1,
             component_count,
@@ -3341,11 +3459,94 @@ class ScenePerceiver:
             ):
                 continue
 
-            component_candidates.append(
-                (
-                    label_index,
-                    area,
+            contours, _ = cv2.findContours(
+                component.astype(
+                    np.uint8
+                ),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_NONE,
+            )
+
+            if not contours:
+                continue
+
+            contour = max(
+                contours,
+                key=cv2.contourArea,
+            )
+
+            if len(contour) < 5:
+                continue
+
+            contour_area_px = float(
+                cv2.contourArea(
+                    contour
                 )
+            )
+
+            ellipse = cv2.fitEllipse(
+                contour
+            )
+
+            (
+                (candidate_u, candidate_v),
+                (
+                    candidate_width_px,
+                    candidate_height_px,
+                ),
+                candidate_angle_deg,
+            ) = ellipse
+
+            ellipse_area_px = float(
+                np.pi
+                * 0.25
+                * candidate_width_px
+                * candidate_height_px
+            )
+
+            fill_ratio = (
+                contour_area_px
+                / ellipse_area_px
+                if ellipse_area_px > 1e-9
+                else 0.0
+            )
+
+            if not (
+                0.40
+                <= fill_ratio
+                <= 1.60
+            ):
+                continue
+
+            expected_distance_px = float(
+                np.hypot(
+                    candidate_u
+                    - expected_hole_u,
+                    candidate_v
+                    - expected_hole_v,
+                )
+            )
+
+            component_candidates.append(
+                {
+                    "label": int(
+                        label_index
+                    ),
+                    "area": int(
+                        area
+                    ),
+                    "contour": contour,
+                    "ellipse": ellipse,
+                    "contour_area_px": (
+                        contour_area_px
+                    ),
+                    "fill_ratio": float(
+                        fill_ratio
+                    ),
+                    "expected_distance_px": (
+                        expected_distance_px
+                    ),
+                }
             )
 
         if not component_candidates:
@@ -3355,10 +3556,22 @@ class ScenePerceiver:
                 "to the ring hole."
             )
 
-        hole_component_label, _ = max(
+        selected_candidate = min(
             component_candidates,
-            key=lambda item:
-            item[1],
+            key=lambda candidate: (
+                candidate[
+                    "expected_distance_px"
+                ],
+                -candidate[
+                    "area"
+                ],
+            ),
+        )
+
+        hole_component_label = (
+            selected_candidate[
+                "label"
+            ]
         )
 
         hole_mask = (
@@ -3366,38 +3579,28 @@ class ScenePerceiver:
             == hole_component_label
         )
 
-        hole_contours, _ = cv2.findContours(
-            hole_mask.astype(
-                np.uint8
-            ),
-            cv2.RETR_EXTERNAL,
-            cv2.CHAIN_APPROX_NONE,
+        hole_contour = (
+            selected_candidate[
+                "contour"
+            ]
         )
 
-        if not hole_contours:
-            raise RuntimeError(
-                "Depth-based hole region has no contour."
-            )
-
-        hole_contour = max(
-            hole_contours,
-            key=cv2.contourArea,
+        hole_area_px = (
+            selected_candidate[
+                "contour_area_px"
+            ]
         )
 
-        hole_area_px = float(
-            cv2.contourArea(
-                hole_contour
-            )
+        ellipse = (
+            selected_candidate[
+                "ellipse"
+            ]
         )
 
-        if len(hole_contour) < 5:
-            raise RuntimeError(
-                "Depth-based hole contour has too "
-                "few points for ellipse fitting."
-            )
-
-        ellipse = cv2.fitEllipse(
-            hole_contour
+        hole_fit_fill_ratio = (
+            selected_candidate[
+                "fill_ratio"
+            ]
         )
 
         (
@@ -3528,6 +3731,44 @@ class ScenePerceiver:
             + t_base_table
         )
 
+        correction_vector = (
+            hole_center_base
+            - expected_hole_center_base
+        )
+
+        axial_correction_m = float(
+            np.dot(
+                correction_vector,
+                expected_hole_axis_base,
+            )
+        )
+
+        lateral_correction_vector = (
+            correction_vector
+            - axial_correction_m
+            * expected_hole_axis_base
+        )
+
+        lateral_correction_m = float(
+            np.linalg.norm(
+                lateral_correction_vector
+            )
+        )
+
+        rejection_reasons = []
+
+        if (
+            lateral_correction_m
+            > max_lateral_correction_m
+        ):
+            rejection_reasons.append(
+                "excessive_lateral_correction"
+            )
+
+        accepted = (
+            len(rejection_reasons) == 0
+        )
+
         hole_bottom_center_base = (
             R_base_table
             @ hole_bottom_center_table
@@ -3640,8 +3881,55 @@ class ScenePerceiver:
             flush=True,
         )
 
+        print(
+            "[POST-GRASP] Consistency | "
+            f"accepted={accepted} | "
+            f"candidates={len(component_candidates)} | "
+            f"candidate_distance="
+            f"{selected_candidate['expected_distance_px']:.1f} px | "
+            f"lateral_correction="
+            f"{lateral_correction_m * 1000.0:.2f} mm | "
+            f"axial_correction="
+            f"{axial_correction_m * 1000.0:.2f} mm | "
+            f"reasons={rejection_reasons}",
+            flush=True,
+        )
+
         return {
-            "accepted": True,
+            "accepted": accepted,
+
+            "rejection_reasons": tuple(
+                rejection_reasons
+            ),
+
+            "expected_hole_center_base": tuple(
+                float(value)
+                for value
+                in expected_hole_center_base
+            ),
+
+            "expected_hole_center_px": (
+                float(expected_hole_u),
+                float(expected_hole_v),
+            ),
+
+            "selected_candidate_distance_px": float(
+                selected_candidate[
+                    "expected_distance_px"
+                ]
+            ),
+
+            "candidate_count": int(
+                len(component_candidates)
+            ),
+
+            "lateral_correction_m": float(
+                lateral_correction_m
+            ),
+
+            "axial_correction_m": float(
+                axial_correction_m
+            ),
 
             "hole_center_px": (
                 float(hole_u),
