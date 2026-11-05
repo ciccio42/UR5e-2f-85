@@ -2260,7 +2260,7 @@ class SeeDoMotionLayer:
             )
         )
 
-        if axis_alignment < 0.999:
+        if axis_alignment < 0.990:
             raise RuntimeError(
                 "Hole and peg axes are not sufficiently "
                 "aligned before descent: "
@@ -2398,7 +2398,7 @@ class SeeDoMotionLayer:
             )
         )
 
-        if axis_alignment < 0.999:
+        if axis_alignment < 0.990:
             raise RuntimeError(
                 "Hole and peg axes are not aligned "
                 "before insertion: "

@@ -161,7 +161,7 @@ motion_layer:
 
     pre_entry_clearance_m: 0.003
 
-    visual_alignment_clearance_m: 0.030
+    visual_alignment_clearance_m: 0.050
     max_pre_insert_lateral_correction_m: 0.040
     
     # Safety distance kept above the peg before insertion.

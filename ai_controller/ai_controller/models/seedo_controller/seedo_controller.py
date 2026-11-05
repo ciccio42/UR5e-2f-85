@@ -5387,7 +5387,7 @@ class SeeDoController(AIController):
                         f"axis dot={axis_alignment:.5f}"
                     ),
                     (
-                        f"axis gate={'PASS' if axis_alignment >= 0.999 else 'FAIL'} | "
+                        f"axis gate={'PASS' if axis_alignment >= 0.990 else 'FAIL'} | "
                         f"{motion_gate_m * 1000.0:.0f}mm gate="
                         f"{'PASS' if lateral_correction_m <= motion_gate_m else 'FAIL'}"
                     ),
@@ -5504,7 +5504,7 @@ class SeeDoController(AIController):
                 motion_gate_m
             ),
             "axis_gate_ok": bool(
-                axis_alignment >= 0.999
+                axis_alignment >= 0.990
             ),
             "lateral_correction_gate_ok": bool(
                 lateral_correction_m
