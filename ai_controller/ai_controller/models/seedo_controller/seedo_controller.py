@@ -4578,6 +4578,16 @@ class SeeDoController(AIController):
             EEF_QUAT_NAME
         ]
 
+        motion_reference_position = np.asarray(
+            self.motion_layer.current_pose.position,
+            dtype=np.float64,
+        ).copy()
+
+        motion_reference_orientation = np.asarray(
+            self.motion_layer.current_pose.orientation,
+            dtype=np.float64,
+        ).copy()
+
         initial_pick_refinement = (
             self._resolve_nut_pick_refinement(
                 pick_target
@@ -4603,8 +4613,12 @@ class SeeDoController(AIController):
         ) = (
             self.motion_layer
             .predict_nut_hole_geometry_at_tcp(
-                tcp_position=current_position,
-                tcp_orientation=current_orientation,
+                tcp_position=(
+                    motion_reference_position
+                ),
+                tcp_orientation=(
+                    motion_reference_orientation
+                ),
             )
         )
 
@@ -4746,11 +4760,11 @@ class SeeDoController(AIController):
                         ),
 
                         current_tcp_position=(
-                            current_position
+                            motion_reference_position
                         ),
 
                         current_tcp_orientation=(
-                            current_orientation
+                            motion_reference_orientation
                         ),
                     )
 
@@ -4766,11 +4780,11 @@ class SeeDoController(AIController):
 
         if not hole_updated:
 
-            self.motion_layer\
-                .synchronize_nut_measured_tcp(
-                    tcp_position=current_position,
-                    tcp_orientation=current_orientation,
-                )
+            print(
+                "[NUT][WARN] Fresh pre-insert hole refinement "
+                "was not accepted.",
+                flush=True,
+            )
 
         # =========================================================
         # Fresh peg top-face refinement.
@@ -4850,6 +4864,11 @@ class SeeDoController(AIController):
                     T_base_camera=(
                         pre_insert_input[
                             "T_base_camera"
+                        ]
+                    ),
+                    T_base_table=(
+                        pre_insert_input[
+                            "T_base_table"
                         ]
                     ),
                     expected_peg_pixel=(
@@ -5517,6 +5536,17 @@ class SeeDoController(AIController):
             f"peg_updated={peg_updated}",
             flush=True,
         )
+
+        if not (
+            hole_updated
+            and peg_updated
+        ):
+            raise RuntimeError(
+                "Pre-insert visual refinement is incomplete: "
+                f"hole_updated={hole_updated}, "
+                f"peg_updated={peg_updated}. "
+                "Insertion motion is blocked."
+            )
 
         return result
 

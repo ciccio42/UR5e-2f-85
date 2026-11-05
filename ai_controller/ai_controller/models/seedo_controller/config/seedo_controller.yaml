@@ -161,7 +161,7 @@ motion_layer:
 
     pre_entry_clearance_m: 0.003
 
-    visual_alignment_clearance_m: 0.050
+    visual_alignment_clearance_m: 0.030
     max_pre_insert_lateral_correction_m: 0.040
     
     # Safety distance kept above the peg before insertion.
@@ -194,7 +194,7 @@ post_grasp_refinement:
   # geometry relative to the measured TCP before LIFT_UP.
   #
   # Currently used only by Nut-Assembly.
-  enabled: true
+  enabled: false
 
 pre_insert_refinement:
   # Fresh eye-in-hand refinement performed after ALIGNING

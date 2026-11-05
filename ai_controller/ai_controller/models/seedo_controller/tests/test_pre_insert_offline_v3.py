@@ -1877,6 +1877,9 @@ def main() -> int:
                 T_base_camera=(
                     T_base_camera
                 ),
+                T_base_table=(
+                    T_base_table
+                ),
                 expected_peg_pixel=(
                     expected_peg_pixel
                 ),

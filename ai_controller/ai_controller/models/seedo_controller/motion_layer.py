@@ -2463,24 +2463,28 @@ class SeeDoMotionLayer:
 
         if lateral_correction_m > 0.0005:
 
-            corrected_tcp_position = (
-                np.asarray(
-                    self.current_pose.position,
-                    dtype=np.float64,
-                )
-                + lateral_correction
+            corrected_tcp_position = np.asarray(
+                self.current_pose.position,
+                dtype=np.float64,
+            ).copy()
+
+            # Pre-insert alignment is purely lateral.
+            # Keep the exact Z reached by ALIGNING.
+            corrected_tcp_position[0] += (
+                lateral_correction[0]
+            )
+
+            corrected_tcp_position[1] += (
+                lateral_correction[1]
             )
 
             actions.extend(
-                self._nut_move_linear(
-                    goal=corrected_tcp_position,
-                    orientation=(
-                        self.current_pose.orientation
+                self._move_linear(
+                    target_position=(
+                        corrected_tcp_position
                     ),
-                    max_step_m=(
-                        cfg[
-                            "initial_entry_step_m"
-                        ]
+                    target_orientation=(
+                        self.current_pose.orientation
                     ),
                 )
             )
@@ -2599,13 +2603,12 @@ class SeeDoMotionLayer:
         # ---------------------------------------------------------
 
         actions.extend(
-            self._nut_move_linear(
-                goal=pre_entry_tcp_goal,
-                orientation=(
-                    self.current_pose.orientation
+            self._move_linear(
+                target_position=(
+                    pre_entry_tcp_goal
                 ),
-                max_step_m=(
-                    cfg["initial_entry_step_m"]
+                target_orientation=(
+                    self.current_pose.orientation
                 ),
             )
         )

@@ -2819,11 +2819,12 @@ class ScenePerceiver:
         depth_image: np.ndarray,
         camera_matrix: np.ndarray,
         T_base_camera: np.ndarray,
+        T_base_table: np.ndarray,
         expected_peg_pixel: tuple[float, float],
         expected_axis_direction_base: np.ndarray,
         expected_radius_m: float,
         artifacts_dir: str | Path | None = None,
-        aperture_scale: float = 0.90,
+        aperture_scale: float = 1.00,
         min_depth_gap_m: float = 0.015,
         min_component_area_px: int = 150,
         max_expected_distance_px: float = 100.0,
@@ -2856,6 +2857,10 @@ class ScenePerceiver:
             T_base_camera,
             dtype=np.float64,
         )
+        T_base_table = np.asarray(
+            T_base_table,
+            dtype=np.float64,
+        )
         axis_direction_base = np.asarray(
             expected_axis_direction_base,
             dtype=np.float64,
@@ -2871,9 +2876,29 @@ class ScenePerceiver:
                 "camera_matrix must have shape (3, 3)."
             )
 
+        fx = float(K[0, 0])
+        fy = float(K[1, 1])
+        cx = float(K[0, 2])
+        cy = float(K[1, 2])
+
+        if (
+            not np.isfinite(fx)
+            or not np.isfinite(fy)
+            or fx <= 0.0
+            or fy <= 0.0
+        ):
+            raise ValueError(
+                "Invalid eye-in-hand focal lengths."
+            )
+
         if T_base_camera.shape != (4, 4):
             raise ValueError(
                 "T_base_camera must have shape (4, 4)."
+            )
+
+        if T_base_table.shape != (4, 4):
+            raise ValueError(
+                "T_base_table must have shape (4, 4)."
             )
 
         if not (
@@ -2988,6 +3013,185 @@ class ScenePerceiver:
             thickness=cv2.FILLED,
         )
 
+        ellipse_aperture = (
+            aperture_u8 > 0
+        )
+
+        valid_ellipse_depth = (
+            ellipse_aperture
+            & np.isfinite(
+                depth
+            )
+            & (
+                depth > 0.0
+            )
+        )
+
+        aperture_v, aperture_u = np.nonzero(
+            valid_ellipse_depth
+        )
+
+        if aperture_u.size == 0:
+            raise RuntimeError(
+                "No valid depth samples inside the "
+                "fresh hole ellipse."
+            )
+
+        aperture_z_camera = depth[
+            aperture_v,
+            aperture_u,
+        ]
+
+        aperture_x_camera = (
+            (
+                aperture_u.astype(
+                    np.float64
+                )
+                - cx
+            )
+            * aperture_z_camera
+            / fx
+        )
+
+        aperture_y_camera = (
+            (
+                aperture_v.astype(
+                    np.float64
+                )
+                - cy
+            )
+            * aperture_z_camera
+            / fy
+        )
+
+        aperture_points_camera = np.column_stack(
+            (
+                aperture_x_camera,
+                aperture_y_camera,
+                aperture_z_camera,
+            )
+        )
+
+        try:
+            T_table_base = np.linalg.inv(
+                T_base_table
+            )
+        except np.linalg.LinAlgError as exc:
+            raise RuntimeError(
+                "T_base_table is not invertible."
+            ) from exc
+
+
+        T_table_camera = (
+            T_table_base
+            @ T_base_camera
+        )
+
+        R_table_camera = np.asarray(
+            T_table_camera[
+                :3,
+                :3,
+            ],
+            dtype=np.float64,
+        )
+
+        t_table_camera = np.asarray(
+            T_table_camera[
+                :3,
+                3,
+            ],
+            dtype=np.float64,
+        )
+
+
+        aperture_points_table = (
+            aperture_points_camera
+            @ R_table_camera.T
+            + t_table_camera
+        )
+
+        top_plane_point = np.asarray(
+            hole_refinement[
+                "top_plane_point_table"
+            ],
+            dtype=np.float64,
+        )
+
+        top_plane_normal = np.asarray(
+            hole_refinement[
+                "top_plane_normal_table"
+            ],
+            dtype=np.float64,
+        )
+
+        top_plane_normal /= np.linalg.norm(
+            top_plane_normal
+        )
+
+        signed_plane_distance = (
+            (
+                aperture_points_table
+                - top_plane_point
+            )
+            @ top_plane_normal
+        )
+
+        depth_below_ring_top = (
+            -signed_plane_distance
+        )
+
+        minimum_aperture_depth_m = (
+            float(
+                hole_refinement[
+                    "nut_thickness_estimate_m"
+                ]
+            )
+            + 0.005
+        )
+
+        deep_enough = (
+            depth_below_ring_top
+            >= minimum_aperture_depth_m
+        )
+
+        aperture = np.zeros(
+            depth.shape,
+            dtype=bool,
+        )
+
+        aperture[
+            aperture_v[
+                deep_enough
+            ],
+            aperture_u[
+                deep_enough
+            ],
+        ] = True
+
+        aperture_u8 = (
+            aperture.astype(
+                np.uint8
+            )
+            * 255
+        )
+
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE,
+            (3, 3),
+        )
+
+        aperture_u8 = cv2.morphologyEx(
+            aperture_u8,
+            cv2.MORPH_OPEN,
+            kernel,
+        )
+
+        aperture_u8 = cv2.morphologyEx(
+            aperture_u8,
+            cv2.MORPH_CLOSE,
+            kernel,
+        )
+
         aperture = (
             aperture_u8 > 0
         )
@@ -2997,6 +3201,36 @@ class ScenePerceiver:
             & np.isfinite(depth)
             & (depth > 0.0)
         )
+
+        if artifacts_dir is not None:
+            output_dir = (
+                Path(artifacts_dir)
+                .expanduser()
+                .resolve()
+            )
+
+            output_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "peg_aperture_mask.png"
+                ),
+                aperture.astype(np.uint8)
+                * 255,
+            )
+
+            cv2.imwrite(
+                str(
+                    output_dir
+                    / "peg_valid_depth_mask.png"
+                ),
+                valid.astype(np.uint8)
+                * 255,
+            )
 
         depth_values = depth[
             valid
@@ -3260,21 +3494,6 @@ class ScenePerceiver:
                 )
             )
         )
-
-        fx = float(K[0, 0])
-        fy = float(K[1, 1])
-        cx = float(K[0, 2])
-        cy = float(K[1, 2])
-
-        if (
-            not np.isfinite(fx)
-            or not np.isfinite(fy)
-            or fx <= 0.0
-            or fy <= 0.0
-        ):
-            raise ValueError(
-                "Invalid eye-in-hand focal lengths."
-            )
 
         point_x_camera = (
             (peg_u.astype(np.float64) - cx)
@@ -4336,17 +4555,39 @@ class ScenePerceiver:
                 "to the ring hole."
             )
 
-        selected_candidate = min(
-            component_candidates,
-            key=lambda candidate: (
-                candidate[
-                    "expected_distance_px"
-                ],
-                -candidate[
-                    "area"
-                ],
-            ),
-        )
+        if allow_deep_hole_background:
+
+            # During pre-insert refinement the rigid hole prediction
+            # may be significantly outdated after grasp + transport.
+            #
+            # Prefer the largest valid enclosed depth region instead
+            # of blindly following the old expected pixel.
+            selected_candidate = max(
+                component_candidates,
+                key=lambda candidate: (
+                    candidate[
+                        "contour_area_px"
+                    ],
+                    -candidate[
+                        "expected_distance_px"
+                    ],
+                ),
+            )
+
+        else:
+
+            # Original post-grasp behaviour.
+            selected_candidate = min(
+                component_candidates,
+                key=lambda candidate: (
+                    candidate[
+                        "expected_distance_px"
+                    ],
+                    -candidate[
+                        "area"
+                    ],
+                ),
+            )
 
         hole_component_label = (
             selected_candidate[
