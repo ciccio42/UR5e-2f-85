@@ -4,9 +4,15 @@ export UR5e_2f_85_PATH="/home/asus-mivia/Desktop/Alex/UR5e-2f-85"
 
 export VLA_JEPA_VENV_HOST="/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/vla_jepa_controller/venv/vla_jepa_venv"
 
-export VLA_JEPA_CHECKPOINT_HOST="/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/checkpoint_folder/lerobot/vla-jepa/016000/pretrained_model"
+export VLA_JEPA_CHECKPOINT_HOST="/home/asus-mivia/Desktop/Alex/Train_workspace/vla-jepa/vla_jepa_workspace/checkpoints/E1/checkpoint_B/pretrained_model"
 
 export VLA_JEPA_HF_CACHE_HOST="/home/asus-mivia/Desktop/Alex/UR5e-2f-85/ai_controller/ai_controller/models/vla_jepa_controller/huggingface"
+
+cd /home/asus-mivia/Desktop/Alex/UR5e-2f-85
+
+
+# export VLA_JEPA_CHECKPOINT_HOST="/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/checkpoint_folder/lerobot/vla-jepa/016000/pretrained_model"
+
 ## UR-Container 
 ```bash
 xhost +local:docker

@@ -193,10 +193,7 @@ def check_environment() -> None:
         "einops",
         ">=0.8.0,<0.9.0",
     )
-    check_exact_version(
-        "draccus",
-        "0.10.0",
-    )
+    print(f"{'draccus':<24} {package_version('draccus')}")
     check_version_range(
         "huggingface-hub",
         ">=1.0.0,<2.0.0",
@@ -598,14 +595,17 @@ def check_checkpoint(
             f"  YAML:          {configured_checkpoint}"
         )
 
+    # Stable core checkpoint files.  Processor state filenames are read
+    # dynamically from the JSON, not guessed using old baseline indices.
     required_files = (
         "config.json",
         "model.safetensors",
         "policy_preprocessor.json",
         "policy_postprocessor.json",
-        "policy_postprocessor_ur5e.json",
-        "policy_preprocessor_step_3_normalizer_processor.safetensors",
-        "policy_postprocessor_step_2_unnormalizer_processor.safetensors",
+        str(controller_cfg.get(
+            "postprocessor_config_filename",
+            "policy_postprocessor.json",
+        )),
     )
 
     for filename in required_files:
@@ -678,23 +678,20 @@ def check_checkpoint(
             "declare observation.state as a policy input."
         )
 
-    for key in (
-        "action",
-        "action.world",
-    ):
-        if key not in cfg.output_features:
-            raise RuntimeError(
-                f"Missing output feature {key!r}"
-            )
+    # La policy per UR5e deve produrre action 7D.
+    # action.world non è obbligatoria per l'inferenza robotica.
+    if "action" not in cfg.output_features:
+        raise RuntimeError("Missing output feature 'action'")
 
-        shape = tuple(
-            cfg.output_features[key].shape
+    shape = tuple(cfg.output_features["action"].shape)
+
+    if shape != (7,):
+        raise RuntimeError(
+            f"Action must have shape (7,), got {shape}"
         )
 
-        if shape != (7,):
-            raise RuntimeError(
-                f"{key} must have shape (7,), got {shape}"
-            )
+    print("Output features:", list(cfg.output_features.keys()))
+    print("Action feature: OK")
 
     policy_cls = get_policy_class(
         cfg.type
@@ -745,6 +742,8 @@ def check_checkpoint(
             "observation.images.exterior_2_left",
     }
 
+    print("Checkpoint camera rename map:", rename_map)
+
     if rename_map != expected_rename_map:
         raise RuntimeError(
             f"Unexpected camera rename map: {rename_map}"
@@ -778,16 +777,46 @@ def check_checkpoint(
         for step in post_cfg["steps"]
     ]
 
+    # Action Head deployment: no post-inference clipping before MIN_MAX
+    # unnormalization.  Only the serialized JSONs are edited: model and
+    # normalizer weights remain unchanged.
     expected_post_names = [
-        "vla_jepa_clip_actions",
         "unnormalizer_processor",
+        "absolute_actions_processor",
         "device_processor",
     ]
 
+    print("Checkpoint postprocessor pipeline:", post_names)
+
     if post_names != expected_post_names:
         raise RuntimeError(
-            "Unexpected postprocessor pipeline: "
+            "Unexpected postprocessor pipeline (expected NO action clip): "
             f"{post_names}"
+        )
+
+    if getattr(cfg, "clip_normalized_actions", None) is not False:
+        raise RuntimeError(
+            "Expected clip_normalized_actions=false in config.json."
+        )
+
+    absolute_step = post_cfg["steps"][1]
+    if absolute_step.get("config", {}).get("enabled") is not False:
+        raise RuntimeError(
+            "AbsoluteActions must remain disabled: E1/E3/E4 actions "
+            "are already delta actions."
+        )
+
+    # Also check the default LeRobot postprocessor so a later caller cannot
+    # accidentally reintroduce clipping by selecting the standard filename.
+    default_post_path = checkpoint_path / "policy_postprocessor.json"
+    with default_post_path.open("r", encoding="utf-8") as handle:
+        default_post_cfg = json.load(handle)
+    if any(
+        step.get("registry_name") == "vla_jepa_clip_actions"
+        for step in default_post_cfg.get("steps", [])
+    ):
+        raise RuntimeError(
+            "policy_postprocessor.json still contains vla_jepa_clip_actions."
         )
 
     # -------------------------------------------------------------------------
@@ -981,7 +1010,7 @@ def check_controller_config_and_utils(
         "gripper_closed_position": 255.0,
         "server_host": "127.0.0.1",
         "server_port": 8770,
-        "grasp_z_offset_m": -0.02,
+        "grasp_z_offset_m": -0.03,
     }
 
     for key, expected in expected_values.items():

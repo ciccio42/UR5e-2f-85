@@ -280,19 +280,53 @@ done
 [[ -d "${VLA_JEPA_CHECKPOINT}" ]] || \
     die "Checkpoint directory not found: ${VLA_JEPA_CHECKPOINT}"
 
-for checkpoint_file in \
-    config.json \
-    model.safetensors \
-    policy_preprocessor.json \
-    policy_postprocessor.json \
-    policy_postprocessor_ur5e.json \
-    policy_preprocessor_step_3_normalizer_processor.safetensors \
-    policy_postprocessor_step_2_unnormalizer_processor.safetensors; do
+# Only the mandatory LeRobot files have stable names.  State safetensor
+# filenames depend on the index of the processor in the serialized pipeline
+# (e.g. step_3 in the baseline, step_5 in the Action Head checkpoints).
+# Resolve the selected UR5e postprocessor from the runtime YAML and follow
+# the state_file references embedded in the serialized JSON, without guessing.
+"${PYTHON}" - "${VLA_JEPA_CHECKPOINT}" "${CONFIG_PATH}" <<'PY_VALIDATE_CHECKPOINT'
+import json
+import sys
+from pathlib import Path
 
-    [[ -f "${VLA_JEPA_CHECKPOINT}/${checkpoint_file}" ]] || \
-        die "Checkpoint file not found: ${VLA_JEPA_CHECKPOINT}/${checkpoint_file}"
+import yaml
 
-done
+root = Path(sys.argv[1]).resolve()
+runtime_yaml = Path(sys.argv[2])
+config = yaml.safe_load(runtime_yaml.read_text(encoding="utf-8")) or {}
+selected_post = str(config.get("postprocessor_config_filename", "policy_postprocessor.json"))
+
+mandatory_files = (
+    "config.json",
+    "model.safetensors",
+    "policy_preprocessor.json",
+    "policy_postprocessor.json",
+    selected_post,
+)
+for name in dict.fromkeys(mandatory_files):
+    path = (root / name).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise FileNotFoundError(f"Required checkpoint file missing: {path}")
+
+for name in ("policy_preprocessor.json", selected_post):
+    data = json.loads((root / name).read_text(encoding="utf-8"))
+    steps = data.get("steps")
+    if not isinstance(steps, list):
+        raise ValueError(f"Invalid processor JSON ({name}): steps must be a list")
+    print(f"[checkpoint] {name}:", flush=True)
+    for index, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise ValueError(f"Invalid processor step {index} in {name}")
+        state_file = step.get("state_file")
+        print(f"  {index}: {step.get('registry_name')} | state_file={state_file}", flush=True)
+        if state_file:
+            path = (root / str(state_file)).resolve()
+            if not path.is_relative_to(root) or not path.is_file():
+                raise FileNotFoundError(f"Missing processor state declared in {name}: {path}")
+
+print("[checkpoint] Mandatory files and referenced processor states: OK", flush=True)
+PY_VALIDATE_CHECKPOINT
 
 
 # =============================================================================

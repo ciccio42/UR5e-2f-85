@@ -9,7 +9,7 @@ from moveit_controller_srvs.srv import GoHome, GoToPose
 from controller_manager_msgs.srv import LoadController, SwitchController, ListControllers
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from sensor_msgs.msg import JointState
-
+from std_srvs.srv import Trigger
 
 class MoveItControllerNode(Node):
     def __init__(self):
@@ -110,6 +110,11 @@ class MoveItControllerNode(Node):
 
         # Create Action Client for MoveGroup action
         self.action_client_callback_group = ReentrantCallbackGroup()
+        self.dashboard_stop_client = self.create_client(
+            Trigger,
+            '/dashboard_client/stop',
+            callback_group=self.client_controller_callback_group,
+        )
         self._action_client = ActionClient(self, 
                                            MoveGroup, 
                                            '/move_action',
@@ -135,6 +140,42 @@ class MoveItControllerNode(Node):
 
 
     # MODIFICA
+    def _request_ur_program_stop(self):
+        """Best-effort stop del programma UR. Non è un E-Stop."""
+
+        if not self.dashboard_stop_client.service_is_ready():
+            self.get_logger().error(
+                "FAULT: Dashboard stop non disponibile."
+            )
+            return False
+
+        try:
+            future = self.dashboard_stop_client.call_async(
+                Trigger.Request()
+            )
+
+            result = self._wait_for_future(
+                future,
+                timeout_sec=2.0,
+            )
+
+            if result is None or not result.success:
+                self.get_logger().error(
+                    "FAULT: arresto programma UR non confermato."
+                )
+                return False
+
+            self.get_logger().warning(
+                "FAULT: Dashboard ha confermato STOP del programma UR."
+            )
+            return True
+
+        except Exception as exc:
+            self.get_logger().error(
+                f"FAULT: impossibile richiedere stop UR: {exc}"
+            )
+            return False
+
     def _execute_guarded_motion(self, motion_fn, response, success_message):
         if not self._motion_lock.acquire(blocking=False):
             response.success = False
@@ -160,6 +201,8 @@ class MoveItControllerNode(Node):
                         "Controller reset skipped. "
                         "Further motion requests blocked."
                     )
+
+                    self._request_ur_program_stop()
 
                     response.success = False
                     response.message = "Motion failed. Manual recovery required."
