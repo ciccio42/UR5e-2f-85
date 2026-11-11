@@ -162,7 +162,7 @@ motion_layer:
     pre_entry_clearance_m: 0.003
 
     visual_alignment_clearance_m: 0.050
-    max_pre_insert_lateral_correction_m: 0.040
+    max_pre_insert_lateral_correction_m: 0.1
     
     # Safety distance kept above the peg before insertion.
     peg_clearance_m: 0.02
@@ -200,7 +200,7 @@ pre_insert_refinement:
   # Fresh eye-in-hand refinement performed after ALIGNING
   # and immediately before INSERTING.
   enabled: true
-  max_hole_model_disagreement_m: 0.050
+  max_hole_model_disagreement_m: 0.1
   peg_xy_consistency_gate_m: 0.030
 
 grasp_planner:

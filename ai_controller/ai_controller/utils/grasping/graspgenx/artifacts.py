@@ -676,14 +676,14 @@ def save_graspgenx_artifacts(
             f"confidence="
             f"{selected_confidence:.4f}"
         ),
-        (
-            f"table clearance="
-            f"{selected_clearance * 1000.0:.2f} mm"
-        ),
-        (
-            f"target distance="
-            f"{target_distance * 1000.0:.2f} mm"
-        ),
+        # (
+        #     f"table clearance="
+        #     f"{selected_clearance * 1000.0:.2f} mm"
+        # ),
+        # (
+        #     f"target distance="
+        #     f"{target_distance * 1000.0:.2f} mm"
+        # ),
     ]
 
     y = 28

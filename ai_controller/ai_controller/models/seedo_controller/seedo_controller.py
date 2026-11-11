@@ -4639,6 +4639,9 @@ class SeeDoController(AIController):
 
         hole_updated = False
         peg_updated = False
+        peg_source = "old"
+        peg_valid = True
+        peg_failure_reason = None
         hole_detection = None
         hole_refinement = None
         peg_refinement = None
@@ -4772,18 +4775,27 @@ class SeeDoController(AIController):
 
         except RuntimeError as exc:
 
-            print(
-                "[NUT][WARN] Pre-insert hole refinement failed | "
-                f"{exc}",
-                flush=True,
-            )
+            raise RuntimeError(
+                "Fresh pre-insert hole refinement failed. "
+                "Insertion motion is blocked. "
+                f"Reason: {exc}"
+            ) from exc
 
         if not hole_updated:
 
-            print(
-                "[NUT][WARN] Fresh pre-insert hole refinement "
-                "was not accepted.",
-                flush=True,
+            rejection_reasons = (
+                ()
+                if hole_refinement is None
+                else hole_refinement.get(
+                    "rejection_reasons",
+                    (),
+                )
+            )
+
+            raise RuntimeError(
+                "Fresh pre-insert hole refinement was not accepted. "
+                "Insertion motion is blocked. "
+                f"Reasons: {rejection_reasons}"
             )
 
         # =========================================================
@@ -4988,8 +5000,30 @@ class SeeDoController(AIController):
                     )
 
                     peg_updated = True
+                    peg_source = "fresh"
+                    peg_valid = True
+                    peg_failure_reason = None
+
+                    print(
+                        "[NUT] Fresh pre-insert peg accepted | "
+                        f"xy_shift="
+                        f"{peg_xy_shift_m * 1000.0:.2f} mm",
+                        flush=True,
+                    )
 
                 else:
+
+                    # A fresh peg has actually been observed, but its position
+                    # contradicts the previously validated peg geometry.
+                    #
+                    # This is NOT treated as an occlusion fallback.
+                    peg_updated = False
+                    peg_source = "invalid"
+                    peg_valid = False
+
+                    peg_failure_reason = (
+                        "fresh_peg_inconsistent_with_previous_geometry"
+                    )
 
                     print(
                         "[NUT][WARN] Fresh pre-insert peg "
@@ -5001,10 +5035,46 @@ class SeeDoController(AIController):
                         flush=True,
                     )
 
+            else:
+
+                # The fresh observation did not provide a reliable peg
+                # refinement. Keep the already validated geometry estimated
+                # from the initial scene.
+                peg_updated = False
+                peg_source = "old"
+                peg_valid = True
+
+                peg_failure_reason = (
+                    "fresh_peg_rejected: "
+                    f"{peg_refinement.get('rejection_reasons', ())}"
+                )
+
+                print(
+                    "[NUT][WARN] Fresh pre-insert peg was not accepted. "
+                    "Using previous valid peg geometry. | "
+                    f"reasons="
+                    f"{peg_refinement.get('rejection_reasons', ())}",
+                    flush=True,
+                )
+
         except RuntimeError as exc:
 
+            # The fresh peg cannot be reliably recovered from the current
+            # eye-in-hand observation, e.g. because the ring occludes it.
+            #
+            # The destination itself is static, therefore retain the
+            # previously refined peg geometry.
+            peg_updated = False
+            peg_source = "old"
+            peg_valid = True
+
+            peg_failure_reason = (
+                f"fresh_peg_unavailable: {exc}"
+            )
+
             print(
-                "[NUT][WARN] Pre-insert peg-top refinement failed | "
+                "[NUT][WARN] Fresh pre-insert peg-top refinement "
+                "unavailable. Using previous valid peg geometry. | "
                 f"{exc}",
                 flush=True,
             )
@@ -5064,32 +5134,36 @@ class SeeDoController(AIController):
             )
         )
 
-        axis_coordinate = float(
-            np.dot(
-                current_hole_bottom
-                - peg_tip,
-                peg_axis,
-            )
+        peg_xy = np.asarray(
+            applied_place_refinement[
+                "axis_xy_base"
+            ],
+            dtype=np.float64,
         )
 
-        closest_peg_axis_point = (
-            peg_tip
-            + axis_coordinate
-            * peg_axis
+        lateral_correction = np.array(
+            [
+                peg_xy[0]
+                - current_hole_bottom[0],
+
+                peg_xy[1]
+                - current_hole_bottom[1],
+
+                0.0,
+            ],
+            dtype=np.float64,
         )
 
-        lateral_correction = (
-            closest_peg_axis_point
-            - current_hole_bottom
+        lateral_target_point = (
+            current_hole_bottom.copy()
         )
 
-        lateral_correction = (
-            lateral_correction
-            - np.dot(
-                lateral_correction,
-                peg_axis,
-            )
-            * peg_axis
+        lateral_target_point[0] = (
+            peg_xy[0]
+        )
+
+        lateral_target_point[1] = (
+            peg_xy[1]
         )
 
         lateral_correction_m = float(
@@ -5230,21 +5304,45 @@ class SeeDoController(AIController):
                     )
                 )
 
-                target_axis_px = (
-                    self._project_base_point_to_pixel(
-                        point_base=closest_peg_axis_point,
-                        camera_matrix=(
-                            pre_insert_input[
-                                "camera_matrix"
-                            ]
+                if (
+                    peg_source == "fresh"
+                    and peg_refinement is not None
+                ):
+                    target_axis_px = (
+                        float(
+                            peg_refinement[
+                                "center_pixel"
+                            ][0]
                         ),
-                        T_base_camera=(
-                            pre_insert_input[
-                                "T_base_camera"
-                            ]
+                        float(
+                            peg_refinement[
+                                "center_pixel"
+                            ][1]
                         ),
                     )
-                )
+
+                elif expected_peg_pixel is not None:
+                    target_axis_px = (
+                        float(expected_peg_pixel[0]),
+                        float(expected_peg_pixel[1]),
+                    )
+
+                else:
+                    target_axis_px = (
+                        self._project_base_point_to_pixel(
+                            point_base=lateral_target_point,
+                            camera_matrix=(
+                                pre_insert_input[
+                                    "camera_matrix"
+                                ]
+                            ),
+                            T_base_camera=(
+                                pre_insert_input[
+                                    "T_base_camera"
+                                ]
+                            ),
+                        )
+                    )
 
                 if expected_peg_pixel is not None:
                     old_u = int(round(expected_peg_pixel[0]))
@@ -5374,7 +5472,7 @@ class SeeDoController(AIController):
                 text_lines = [
                     (
                         f"hole fresh={hole_updated} | "
-                        f"peg fresh={peg_updated}"
+                        f"peg source={peg_source}"
                     ),
                     (
                         "dXYZ = "
@@ -5465,6 +5563,13 @@ class SeeDoController(AIController):
             "peg_updated": bool(
                 peg_updated
             ),
+            "peg_source": peg_source,
+            "peg_valid": bool(
+                peg_valid
+            ),
+            "peg_failure_reason": (
+                peg_failure_reason
+            ),
             "pick_target": pick_target,
             "place_target": place_target,
             "expected_hole_center_base": (
@@ -5533,19 +5638,23 @@ class SeeDoController(AIController):
         print(
             "[NUT] PRE-INSERT refinement COMPLETE | "
             f"hole_updated={hole_updated} | "
-            f"peg_updated={peg_updated}",
+            f"peg_updated={peg_updated} | "
+            f"peg_source={peg_source} | "
+            f"peg_valid={peg_valid}",
             flush=True,
         )
 
-        if not (
-            hole_updated
-            and peg_updated
-        ):
+        if not hole_updated:
             raise RuntimeError(
-                "Pre-insert visual refinement is incomplete: "
-                f"hole_updated={hole_updated}, "
-                f"peg_updated={peg_updated}. "
+                "Fresh pre-insert hole geometry is unavailable. "
                 "Insertion motion is blocked."
+            )
+
+        if not peg_valid:
+            raise RuntimeError(
+                "Pre-insert peg geometry is inconsistent. "
+                "Insertion motion is blocked. "
+                f"Reason: {peg_failure_reason}"
             )
 
         return result

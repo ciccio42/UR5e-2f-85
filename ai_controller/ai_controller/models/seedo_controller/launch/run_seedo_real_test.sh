@@ -412,13 +412,13 @@ if [[ -z "${DEMO_PATH}" ]]; then
 
     if [[ "${ENV_TYPE}" == "${ENV_PICK_PLACE}" ]]; then
 
-        STANDARD_DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264-30fps.mp4"
-        MODIFIED_DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264-30fps_modified.mp4"
+        STANDARD_DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264.mp4"
+        MODIFIED_DEMO_PATH="/test_dataset/pick_place/human_rgb_pick_place/task_${DEMO_TASK_ID}/traj000/converted/traj000-h264_modified.mp4"
 
     else
 
-        STANDARD_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj000-h264-30fps.mp4"
-        MODIFIED_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj000-h264-30fps_modified.mp4"
+        STANDARD_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj000-h264.mp4"
+        MODIFIED_DEMO_PATH="/dataset_nut/task_${DEMO_TASK_ID}/traj000-h264_modified.mp4"
 
     fi
 

@@ -415,6 +415,11 @@ function updateExecutionTypeVisibility() {
         elements.executionTypeSelect.value
         === "precomputed";
 
+    if (!precomputed) {
+        elements.precomputedPlan.value = "";
+        elements.precomputedDemoScene.value = "";
+    }
+
     setPanelVisible(
         elements.precomputedPanel,
         precomputed,

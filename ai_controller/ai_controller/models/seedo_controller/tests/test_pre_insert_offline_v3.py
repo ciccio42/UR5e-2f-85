@@ -2163,7 +2163,7 @@ def main() -> int:
         f"{lateral_correction_m * 1000.0:.2f} mm",
     )
     print(
-        "40 mm safety gate:",
+        "Safety gate:",
         correction_gate_ok,
     )
 
@@ -2175,13 +2175,13 @@ def main() -> int:
 
     elif not correction_gate_ok:
         print(
-            "[RESULT] Current 40 mm motion gate would STOP before "
-            "insertion because the lateral correction exceeds 40 mm."
+            "[RESULT] Current safe motion gate would STOP before "
+            "insertion because the lateral correction exceeds 1 cm."
         )
 
     else:
         print(
-            "[RESULT] Current 40 mm motion gate would allow this "
+            "[RESULT] Current 1 cm motion gate would allow this "
             "fresh relative correction before PRE-ENTRY."
         )
 

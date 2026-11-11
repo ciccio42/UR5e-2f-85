@@ -1464,7 +1464,7 @@ No additional `PYTHONPATH` is required.
 Demonstration video:
 
 ```text
-/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4
+/test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4
 ```
 
 Runtime scene:
@@ -1634,7 +1634,7 @@ Run:
 ```bash
 PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
   --stage keyframe \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 \
   --expected-keyframes 20 35 \
   --artifacts-dir /seedo_tests/keyframe
 
@@ -1674,7 +1674,7 @@ Run:
 ```bash
 PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
   --stage visual_prompting \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 \
   --expected-keyframes 20 35 \
   --artifacts-dir /seedo_tests/visual_prompting
 
@@ -2200,7 +2200,7 @@ Run:
 ```bash
 PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests \
   --stage seedo_controller \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 \
   --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
   --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
@@ -2250,7 +2250,7 @@ integration/test_seedo_controller_prior_guided.py
 Run:
 
 ```bash
-PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests --stage seedo_controller_prior_guided --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 --scene-dir /scene_capture/without_distractors/scene_1_no_distractors --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml --artifacts-dir /seedo_tests/seedo_controller_prior_guided
+PYTHONWARNINGS=ignore python3 -m ai_controller.models.seedo_controller.tests --stage seedo_controller_prior_guided --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 --scene-dir /scene_capture/without_distractors/scene_1_no_distractors --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml --artifacts-dir /seedo_tests/seedo_controller_prior_guided
 ```
 
 Required upstream integration artifacts:
@@ -2356,7 +2356,7 @@ Run:
 ```bash
 PYTHONWARNINGS=ignore python3 -m \
   ai_controller.models.seedo_controller.tests.integration.test_seedo_node_offline \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 \
   --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
   --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
@@ -2399,7 +2399,7 @@ Run:
 ```bash
 PYTHONWARNINGS=ignore python3 -m \
   ai_controller.models.seedo_controller.tests.integration.test_seedo_node_ros \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 \
   --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
   --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
@@ -2441,7 +2441,7 @@ Run:
 ```bash
 PYTHONWARNINGS=ignore python3 -m \
   ai_controller.models.seedo_controller.tests.integration.test_seedo_node_interactive \
-  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps.mp4 \
+  --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264.mp4 \
   --scene-dir /scene_capture/without_distractors/scene_1_no_distractors \
   --base-to-table-transform /scene_capture/without_distractors/scene_1_no_distractors/base_to_table_transform.yaml \
   --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \

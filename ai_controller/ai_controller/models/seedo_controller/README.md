@@ -1273,7 +1273,7 @@ A typical test invocation uses:
 ```bash
 python -m ai_controller.models.seedo_controller.tests \
     --stage seedo_controller \
-    --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264-30fps_modified.mp4 \
+    --video /test_dataset/pick_place/human_rgb_pick_place/task_00/traj000/converted/traj000-h264_modified.mp4 \
     --scene-dir /scene_capture \
     --base-to-table-transform /scene_capture/base_to_table_transform.yaml \
     --model-config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \

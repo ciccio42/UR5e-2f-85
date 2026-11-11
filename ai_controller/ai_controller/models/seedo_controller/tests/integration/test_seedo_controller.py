@@ -18,7 +18,7 @@ from ai_controller.models.seedo_controller.seedo_controller import (
 
 EXPECTED_VIDEO = Path(
     "/test_dataset/pick_place/human_rgb_pick_place/"
-    "task_00/traj000/converted/traj000-h264-30fps.mp4"
+    "task_00/traj000/converted/traj000-h264.mp4"
 )
 
 EXPECTED_SCENE_DIR = Path(

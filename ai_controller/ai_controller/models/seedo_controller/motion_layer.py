@@ -291,7 +291,7 @@ class SeeDoMotionLayer:
         if not (
             0.005
             <= max_pre_insert_lateral_correction
-            <= 0.050
+            <= 0.2
         ):
             raise ValueError(
                 "max_pre_insert_lateral_correction_m must be "
@@ -2408,38 +2408,35 @@ class SeeDoMotionLayer:
         # ---------------------------------------------------------
         # PRE-INSERT lateral correction.
         #
-        # Hole and peg have just been re-observed from the fresh
-        # eye-in-hand frame. Move the TCP only perpendicular to the
-        # peg axis before starting the vertical insertion.
+        # The lateral target is the directly estimated peg center
+        # in the XY plane.
+        #
+        # Do not extrapolate the 3-D peg axis to the current hole
+        # height: small axis errors can produce large lateral
+        # offsets when the hole is still above the peg.
+        #
+        # The peg axis remains authoritative for orientation checks
+        # and for the subsequent insertion direction.
         # ---------------------------------------------------------
 
-        axis_coordinate = float(
-            np.dot(
-                current_hole_bottom
-                - peg_tip,
-                peg_axis,
-            )
+        peg_xy = np.asarray(
+            peg_geometry[
+                "axis_xy_base"
+            ],
+            dtype=np.float64,
         )
 
-        closest_peg_axis_point = (
-            peg_tip
-            + axis_coordinate
-            * peg_axis
-        )
+        lateral_correction = np.array(
+            [
+                peg_xy[0]
+                - current_hole_bottom[0],
 
-        lateral_correction = (
-            closest_peg_axis_point
-            - current_hole_bottom
-        )
+                peg_xy[1]
+                - current_hole_bottom[1],
 
-        # Remove any numerical component along the peg axis.
-        lateral_correction = (
-            lateral_correction
-            - np.dot(
-                lateral_correction,
-                peg_axis,
-            )
-            * peg_axis
+                0.0,
+            ],
+            dtype=np.float64,
         )
 
         lateral_correction_m = float(

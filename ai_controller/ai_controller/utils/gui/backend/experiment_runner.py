@@ -221,11 +221,11 @@ def _resolve_demo_path(
 
     if request.demo_variant == "modified":
         demo_filename = (
-            "traj000-h264-30fps_modified.mp4"
+            "traj000-h264_modified.mp4"
         )
     else:
         demo_filename = (
-            "traj000-h264-30fps.mp4"
+            "traj000-h264.mp4"
         )
 
     if request.task == "pick_place":
