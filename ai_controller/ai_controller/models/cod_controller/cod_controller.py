@@ -40,7 +40,8 @@ class CODController(AIController):
         
         self.move_model_to_device(self.device) 
         # set random seed for reproducibility
-        seed_everything(0)
+        #seed_everything(0)
+        seed_everything(42)
         
         self.gripper_closed = False
         # whether the gripper has closed (grasped) at least once this episode.
@@ -400,10 +401,9 @@ class CODController(AIController):
                     # z target reached: close now, nudging the gripper a little
                     # forward to avoid collision when closing
                     desired_position = desired_position.copy()
-                    # desired_position[1] += 0.01
-                    desired_position[2] -= 0.02
-                    desired_position[0] += 0.01
-                    desired_position[1] += 0.01
+                    desired_position[2] -= 0.01
+                    #desired_position[0] += 0.01
+                    #desired_position[1] += 0.01
                     gripper_finger_pos = 255
                     self.gripper_closed = True
                     self.has_grasped = True

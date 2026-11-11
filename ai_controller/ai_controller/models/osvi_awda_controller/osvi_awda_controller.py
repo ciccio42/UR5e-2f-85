@@ -661,9 +661,13 @@ class OSVIAWDAController(AIController):
         """
         coarse_action = self._validated_robot_action(coarse_action)
 
-        target = self._apply_workspace_safety(
-            coarse_action[:3].copy()
-        )
+        target = coarse_action[:3].copy()
+
+        target[2]-=0.04
+        target[1]-=0.005
+        target[0]-=0.005
+
+        target = self._apply_workspace_safety(target)
 
         quaternion = coarse_action[3:7]
 
