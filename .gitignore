@@ -16,3 +16,7 @@ zed_camera/zed_docker_cache/
 *json
 external/
 ai_controller/ai_controller/models/vla_jepa_controller/venv/
+ai_controller/ai_controller/models/osvi_awda_controller/debug/depth_test
+ai_controller/ai_controller/models/osvi_awda_controller/debug/results_analysis_4traj
+ai_controller/ai_controller/models/osvi_awda_controller/debug/results_analysis_30_33
+ai_controller/ai_controller/models/osvi_awda_controller/debug/test_controller
