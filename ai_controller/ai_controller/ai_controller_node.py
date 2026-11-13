@@ -185,7 +185,10 @@ class AIControllerNode(Node):
             'seedo_precomputed_demo_structured_scene_path',
             '',
         )
-
+        self.declare_parameter(
+            'seedo_demo_only',
+            False,
+        )
         # get parameters
         self.ai_controller_target = self.get_parameter('ai_controller_target').get_parameter_value().string_value
         self.model_config_path = self.get_parameter('model_config_path').get_parameter_value().string_value
@@ -284,6 +287,26 @@ class AIControllerNode(Node):
             'seedo_precomputed_demo_structured_scene_path'
         ).get_parameter_value().string_value
 
+        self.seedo_demo_only = self.get_parameter(
+            'seedo_demo_only'
+        ).get_parameter_value().bool_value
+
+        if self.seedo_demo_only:
+
+            if self.ai_controller_target != 'seedo_controller':
+                raise ValueError(
+                    'seedo_demo_only requires seedo_controller.'
+                )
+
+            if self.seedo_precomputed_action_plan_path:
+                raise ValueError(
+                    'seedo_demo_only cannot be combined with Precomputed.'
+                )
+
+            if not self.seedo_artifacts_dir.strip():
+                raise ValueError(
+                    'seedo_demo_only requires seedo_artifacts_dir.'
+                )
         self.seedo_record_camera_names = (
             'camera_front',
             'camera_lateral_left',
@@ -370,7 +393,7 @@ class AIControllerNode(Node):
             )
             self.get_logger().info(f"Publisher for gripper action created on topic {self.gripper_action_topic}.")
 
-        elif self.move_robot:
+        elif self.move_robot and not self.seedo_demo_only:
 
             self.get_logger().info(
                 f'Waiting for service {self.set_home_service}...'
@@ -1610,10 +1633,20 @@ class AIControllerNode(Node):
         save_path = f'/home/ros2_ws/src/ai_controller/saved_images/task_{self.task_name}'
         os.makedirs(save_path, exist_ok=True)
 
-        Trajectory = _get_trajectory_cls(self)
-        
-        traj_cnt = int(request_user_input("Write the current trajectory count to the console: "))
-        self.traj_cnt = traj_cnt
+        demo_only = (
+            self.ai_controller_target == 'seedo_controller'
+            and self.seedo_demo_only
+        )
+
+        if not demo_only:
+
+            Trajectory = _get_trajectory_cls(self)
+
+            traj_cnt = int(request_user_input(
+                "Write the current trajectory count to the console: "
+            ))
+
+            self.traj_cnt = traj_cnt
         
         while rclpy.ok():
         
@@ -1655,8 +1688,8 @@ class AIControllerNode(Node):
             self.current_failure_step = None
             self.current_failure_action_index = None
             
-            # create a new trajectory
-            traj = Trajectory()
+            # Create a rollout only when runtime execution is enabled.
+            traj = None if demo_only else Trajectory()
             self.current_traj = traj
 
             # SeeDo runtime state
@@ -1681,7 +1714,7 @@ class AIControllerNode(Node):
 
                     if self.ai_controller_target == 'seedo_controller':
 
-                        if self.move_robot:
+                        if self.move_robot and not self.seedo_demo_only:
                             self.get_logger().info(
                                 f'Setting robot to home position for task ID: '
                                 f'{enter_task_id}'
@@ -1790,6 +1823,78 @@ class AIControllerNode(Node):
                             )
                         finally:
                             self.pause_executor.clear()
+
+                        # --------------------------------------------------
+                        # DEMO ONLY
+                        # --------------------------------------------------
+
+                        if self.seedo_demo_only:
+
+                            if self.controller.execution_status != "plan_ready":
+                                raise RuntimeError(
+                                    "Demo Only: action plan is not ready."
+                                )
+
+                            artifacts_dir = self.controller.artifacts_dir
+
+                            # Check the files needed for a future Precomputed run.
+                            required_files = [
+                                artifacts_dir
+                                / "action_planning"
+                                / "action_plan.json"
+                            ]
+
+                            if self.controller.perception_mode == "generalized":
+                                required_files.append(
+                                    artifacts_dir
+                                    / "demo_structured_scene"
+                                    / "demo_structured_scene.json"
+                                )
+
+                            missing_files = [
+                                str(path)
+                                for path in required_files
+                                if not path.is_file()
+                            ]
+
+                            if missing_files:
+                                raise RuntimeError(
+                                    "Demo Only: missing Precomputed artifacts: "
+                                    + ", ".join(missing_files)
+                                )
+
+                            # End-to-end time now measures only the demo phase.
+                            TIMING.stop(
+                                "end_to_end_wall",
+                                end_to_end_start,
+                            )
+
+                            # Save timing and token usage.
+                            TIMING.save(
+                                artifacts_dir / "timings.json"
+                            )
+
+                            self.controller.token_usage.save(
+                                artifacts_dir / "token_usage.json"
+                            )
+
+                            self.get_logger().info(
+                                "[DEMO ONLY] Demonstration completed successfully."
+                            )
+
+                            self.get_logger().info(
+                                "[DEMO ONLY] Artifacts saved to: "
+                                f"{artifacts_dir}"
+                            )
+
+                            # Clear execution state before terminating normally.
+                            self.current_traj = None
+                            self.current_task_id = None
+                            self.current_failure_stage = None
+                            self.current_failure_step = None
+                            self.current_failure_action_index = None
+
+                            return
 
                         self.get_logger().info(
                             'Waiting for SeeDo runtime RGB-D data...'
@@ -2850,19 +2955,32 @@ class AIControllerNode(Node):
                     )
                     
         
-def spin_executor(node=None, executor=None):
-    while rclpy.ok():
+def spin_executor(node, executor, stop_event):
+    try:
+        while not stop_event.is_set() and rclpy.ok():
 
-        if node.pause_executor.is_set():
+            if node.pause_executor.is_set():
+                node.executor_paused_event.set()
+                stop_event.wait(timeout=0.01)
+                continue
 
-            node.executor_paused_event.set()
+            node.executor_paused_event.clear()
 
-            time.sleep(0.01)
-            continue
+            if stop_event.is_set() or not rclpy.ok():
+                break
 
+            try:
+                executor.spin_once(timeout_sec=0.01)
+
+            except Exception:
+                # Ignore exceptions only during shutdown.
+                if stop_event.is_set() or not rclpy.ok():
+                    break
+
+                raise
+
+    finally:
         node.executor_paused_event.clear()
-
-        executor.spin_once(timeout_sec=0.01)
 
 def main(args=None):
     rclpy.init()
@@ -2879,9 +2997,12 @@ def main(args=None):
         #     daemon=True,
         # )
 
+        executor_stop_event = threading.Event()
+
         executor_thread = threading.Thread(
-            target=spin_executor, args=(node, executor),
-            daemon=True,
+            target=spin_executor,
+            args=(node, executor, executor_stop_event),
+            daemon=False,
         )
 
         executor_thread.start()
@@ -2972,20 +3093,29 @@ def main(args=None):
             raise
 
         finally:
-            if preload_pool is not None:
-                preload_pool.shutdown(wait=True)
+            try:
+                if preload_pool is not None:
+                    preload_pool.shutdown(wait=True)
+
+            finally:
+                # Restore standard output streams.
                 sys.stdout = original_stdout
                 sys.stderr = original_stderr
 
-            executor.shutdown()
+                # Stop the ROS executor thread first.
+                executor_stop_event.set()
+                node.pause_executor.clear()
 
-            if executor_thread.is_alive():
-                executor_thread.join(timeout=2.0)
+                # Wait until spin_executor has actually stopped.
+                if executor_thread.is_alive():
+                    executor_thread.join()
 
-            node.destroy_node()
+                # Only now shut down ROS resources.
+                executor.shutdown()
+                node.destroy_node()
 
-            if rclpy.ok():
-                rclpy.shutdown()
+                if rclpy.ok():
+                    rclpy.shutdown()
 
     else:
         try:

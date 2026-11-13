@@ -84,7 +84,7 @@ CONFIG_PATH=""
 PRECOMPUTED_PLAN=""
 PRECOMPUTED_DEMO_SCENE=""
 PRECOMPUTED_MODE=false
-
+DEMO_ONLY=false
 
 # =============================================================================
 # HELP
@@ -103,6 +103,7 @@ Environment:
 
 Demonstration:
 
+  --demo-only
   --demo-task N
   --demo-path PATH
 
@@ -125,6 +126,7 @@ Notes:
   - Supplying --precomputed-plan enables precomputed mode.
   - --precomputed-demo-scene is required only when the selected config uses
     perception_mode: generalized.
+  - --demo-only executes only the demonstration phase and disables robot motion.
 
 Examples:
 
@@ -199,6 +201,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
 
+        --demo-only)
+            DEMO_ONLY=true
+            shift
+            ;;
+
         --precomputed-plan)
             if [[ $# -lt 2 ]]; then
                 fail "--precomputed-plan requires a value."
@@ -230,6 +237,13 @@ while [[ $# -gt 0 ]]; do
 
 done
 
+if [[ "${DEMO_ONLY}" == true ]]; then
+
+    if [[ -n "${PRECOMPUTED_PLAN}" || -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+        fail "--demo-only cannot be combined with precomputed artifacts."
+    fi
+
+fi
 
 # =============================================================================
 # GENERIC INPUT UTILITIES
@@ -582,6 +596,7 @@ echo "Run directory:     ${RUN_DIR}"
 echo "Demo video:        ${DEMO_PATH}"
 echo "Configuration:     ${CONFIG_PATH}"
 echo "Perception mode:   ${PERCEPTION_MODE}"
+echo "Demo Only:         ${DEMO_ONLY}"
 
 if [[ "${PRECOMPUTED_MODE}" == true ]]; then
     echo "Precomputed mode:  enabled"
@@ -643,6 +658,14 @@ fi
 # BUILD ROS PARAMETERS
 # =============================================================================
 
+MOVE_ROBOT=true
+EXECUTE_GRIPPER=true
+
+if [[ "${DEMO_ONLY}" == true ]]; then
+    MOVE_ROBOT=false
+    EXECUTE_GRIPPER=false
+fi
+
 ROS_ARGS=(
     --ros-args
 
@@ -665,10 +688,13 @@ ROS_ARGS=(
     "save_rollout_path:=${RUN_DIR}/rollouts"
 
     -p
-    "move_robot:=true"
+    "move_robot:=${MOVE_ROBOT}"
 
     -p
-    "seedo_execute_gripper:=true"
+    "seedo_execute_gripper:=${EXECUTE_GRIPPER}"
+
+    -p
+    "seedo_demo_only:=${DEMO_ONLY}"
 )
 
 
@@ -731,6 +757,7 @@ cat > "${RUN_DIR}/run_status.json" <<EOF_STATUS
     "config_path": "${CONFIG_PATH}",
     "perception_mode": "${PERCEPTION_MODE}",
     "precomputed_mode": ${PRECOMPUTED_MODE},
+    "demo_only": ${DEMO_ONLY},
     "precomputed_action_plan": "${PRECOMPUTED_PLAN}",
     "precomputed_demo_structured_scene": "${PRECOMPUTED_DEMO_SCENE}",
     "exit_code": ${EXIT_CODE},

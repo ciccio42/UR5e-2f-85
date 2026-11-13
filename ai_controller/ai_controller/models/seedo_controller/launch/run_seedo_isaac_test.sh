@@ -101,7 +101,7 @@ CONFIG_PATH=""
 PRECOMPUTED_PLAN=""
 PRECOMPUTED_DEMO_SCENE=""
 PRECOMPUTED_MODE=false
-
+DEMO_ONLY=false
 
 # =============================================================================
 # CAMERA TOPICS
@@ -142,6 +142,7 @@ Backward-compatible aliases:
 
 Demonstration:
 
+  --demo-only
   --demo-task N
   --demo-path PATH
 
@@ -229,6 +230,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
 
+        --demo-only)
+
+            DEMO_ONLY=true
+
+            shift
+            ;;
 
         --scene-task|--task)
 
@@ -333,6 +340,13 @@ while [[ $# -gt 0 ]]; do
 
 done
 
+if [[ "${DEMO_ONLY}" == true && -n "${PRECOMPUTED_PLAN}" ]]; then
+    fail "--demo-only cannot be combined with --precomputed-plan."
+fi
+
+if [[ "${DEMO_ONLY}" == true && -n "${PRECOMPUTED_DEMO_SCENE}" ]]; then
+    fail "--demo-only cannot be combined with --precomputed-demo-scene."
+fi
 
 # =============================================================================
 # GENERIC INPUT UTILITIES
@@ -1013,6 +1027,14 @@ fi
 # BUILD ROS PARAMETERS
 # =============================================================================
 
+MOVE_ROBOT=true
+EXECUTE_GRIPPER=true
+
+if [[ "${DEMO_ONLY}" == true ]]; then
+    MOVE_ROBOT=false
+    EXECUTE_GRIPPER=false
+fi
+
 ROS_ARGS=(
 
     --ros-args
@@ -1036,10 +1058,13 @@ ROS_ARGS=(
     "save_rollout_path:=${RUN_DIR}/rollouts"
 
     -p
-    "move_robot:=true"
+    "move_robot:=${MOVE_ROBOT}"
 
     -p
-    "seedo_execute_gripper:=true"
+    "seedo_execute_gripper:=${EXECUTE_GRIPPER}"
+
+    -p
+    "seedo_demo_only:=${DEMO_ONLY}"
 
     -p
     "camera_topic:=${CAMERA_TOPICS}"
@@ -1134,6 +1159,7 @@ cat > "${RUN_DIR}/run_status.json" <<EOF
     "isaac_scene_task": "${SCENE_TASK}",
     "isaac_scene_trajectory": "${SCENE_TRAJECTORY}",
     "precomputed_mode": ${PRECOMPUTED_MODE},
+    "demo_only": ${DEMO_ONLY},
     "precomputed_action_plan": "${PRECOMPUTED_PLAN}",
     "precomputed_demo_structured_scene": "${PRECOMPUTED_DEMO_SCENE}",
     "exit_code": ${EXIT_CODE},

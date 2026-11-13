@@ -229,8 +229,16 @@ export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
 export QT_QPA_PLATFORM=offscreen
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
-  --precomputed-plan /test_real/test_task00_1/action_planning/action_plan.json \
-  --precomputed-demo-scene /test_real/test_task00_1/demo_structured_scene/demo_structured_scene.json
+  --precomputed-plan /test_isaac/test_pick_place_task00_2/action_planning/action_plan.json \
+  --precomputed-demo-scene /test_isaac/test_pick_place_task00_2/demo_structured_scene/demo_structured_scene.json
+
+# DEMO ONLY SOLUTION
+export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
+export QT_QPA_PLATFORM=offscreen
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --demo-only \
+  --skip-scene-config
 
 # PRECOMPUTED INFERENCE EXPERIMENTS
 export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020

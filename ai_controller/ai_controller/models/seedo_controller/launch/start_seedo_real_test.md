@@ -246,6 +246,14 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
   --precomputed-plan /test_real/test_task08_1/action_planning/action_plan.json \
   --precomputed-demo-scene /test_real/test_task08_1/demo_structured_scene/demo_structured_scene.json
 
+# DEMO ONLY SOLUTION
+unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
+export QT_QPA_PLATFORM=offscreen
+
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
+  --demo-only
+
 # FULL INFERENCE EXPERIMENTS
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
@@ -259,7 +267,13 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml \
   --precomputed-plan /test_real/test_task08_1/action_planning/action_plan.json
 
+# DEMO ONLY EXPERIMENTS
+unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
+export QT_QPA_PLATFORM=offscreen
 
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml \
+  --demo-only
 
 # GUI LAUNCH
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
