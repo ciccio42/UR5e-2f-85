@@ -8,8 +8,102 @@ import cv2
 import math
 
 from ai_controller.utils.utils import _quat2mat
+import logging
 
+from ai_controller.models.seedo_controller.timing_utils import TIMING
 
+class PreloadOutputFilter:
+    """Suppress Python output only from the SeeDo preload thread."""
+
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+
+    def _is_preload_thread(self):
+        return threading.current_thread().name.startswith(
+            "seedo_preload_"
+        )
+
+    def write(self, text):
+        if self._is_preload_thread():
+            return len(text)
+
+        return self.original_stream.write(text)
+
+    def flush(self):
+        if not self._is_preload_thread():
+            self.original_stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self.original_stream, name)
+
+class PreloadTransformersWarningFilter(logging.Filter):
+    """Suppress legacy BERT parameter warnings in the preload thread."""
+
+    def filter(self, record):
+
+        if not threading.current_thread().name.startswith(
+            "seedo_preload"
+        ):
+            return True
+
+        message = record.getMessage()
+
+        if (
+            "A parameter name that contains `beta` "
+            "will be renamed internally to `bias`"
+        ) in message:
+            return False
+
+        if (
+            "A parameter name that contains `gamma` "
+            "will be renamed internally to `weight`"
+        ) in message:
+            return False
+
+        return True
+
+def preload_seedo_scene_models(scene_perceiver):
+    """Preload ScenePerceiver models and collect startup timings."""
+
+    start = time.perf_counter()
+
+    transformers_logger = logging.getLogger(
+        "transformers.modeling_utils"
+    )
+
+    warning_filter = PreloadTransformersWarningFilter()
+
+    transformers_logger.addFilter(warning_filter)
+
+    try:
+        scene_perceiver._ensure_models_loaded()
+
+    finally:
+        transformers_logger.removeFilter(warning_filter)
+
+    wall_s = time.perf_counter() - start
+
+    model_timer_names = (
+        "scene.model_load.grounding_dino",
+        "scene.model_load.sam",
+        "scene.model_load.total",
+    )
+
+    metrics = {
+        "wall_s": wall_s,
+    }
+
+    for name in model_timer_names:
+        value = TIMING.latest(name)
+
+        if value is None:
+            raise RuntimeError(
+                f"Missing model preload timing: {name}"
+            )
+
+        metrics[name] = value
+
+    return metrics
 
 def wait_for_future(future, timeout_sec=None):
         done_event = threading.Event()

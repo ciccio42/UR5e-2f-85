@@ -25,6 +25,16 @@ class TimingRecorder:
             f"[TIMING] {name}: {elapsed:.6f} s"
         )
 
+    def record(self, name, elapsed):
+        """Record an externally measured duration."""
+        self._record(name, float(elapsed))
+
+    def latest(self, name):
+        """Return the most recent sample for a timer."""
+        with self._lock:
+            samples = self.timings.get(name, [])
+            return float(samples[-1]) if samples else None
+
     def start(self):
         return time.perf_counter()
 

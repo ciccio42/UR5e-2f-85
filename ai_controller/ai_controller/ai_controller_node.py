@@ -7,6 +7,8 @@ import threading
 import time
 import traceback
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import logging
 
 import random
 import torch
@@ -58,7 +60,6 @@ def _get_trajectory_cls(node):
         from savers import Trajectory as TrajectoryClass
         _trajectory_cls = TrajectoryClass
     return _trajectory_cls
-
 
 class DebugTrajectoryUnpickler(pickle.Unpickler):
     """Resolves the 'Trajectory' class saved by dataset_collector_pkg's savers.py."""
@@ -296,6 +297,10 @@ class AIControllerNode(Node):
         self.joint_state_event = threading.Event()
 
         self.pause_executor = threading.Event()
+
+        self.seedo_preload_future = None
+        self.seedo_preload_metrics = None
+        self.seedo_preload_reported = False
 
         # Runtime context used to persist failure information
         # even when the rollout terminates with an exception.
@@ -1621,6 +1626,28 @@ class AIControllerNode(Node):
             # make task_id like XX
             enter_task_id = enter_task_id.zfill(2)
 
+            if self.seedo_preload_future is not None:
+
+                self.get_logger().info(
+                    "[PRELOAD] Checking ScenePerceiver model readiness..."
+                )
+
+                wait_start = time.perf_counter()
+
+                metrics = self.seedo_preload_future.result()
+
+                metrics["wait_s"] = (
+                    time.perf_counter() - wait_start
+                )
+
+                self.seedo_preload_metrics = metrics
+                self.seedo_preload_future = None
+
+                self.get_logger().info(
+                    "[PRELOAD] Models ready | "
+                    f"startup_wait={metrics['wait_s']:.3f}s"
+                )
+
             self.current_task_id = enter_task_id
 
             self.current_failure_stage = "initialization"
@@ -1691,6 +1718,40 @@ class AIControllerNode(Node):
                         # --------------------------------------------------
 
                         TIMING.reset()
+
+                        if (
+                            self.seedo_preload_metrics is not None
+                            and not self.seedo_preload_reported
+                        ):
+
+                            metrics = self.seedo_preload_metrics
+
+                            TIMING.record(
+                                "startup.preload.wall",
+                                metrics["wall_s"],
+                            )
+
+                            TIMING.record(
+                                "startup.preload.wait",
+                                metrics["wait_s"],
+                            )
+
+                            TIMING.record(
+                                "startup.preload.grounding_dino",
+                                metrics["scene.model_load.grounding_dino"],
+                            )
+
+                            TIMING.record(
+                                "startup.preload.sam",
+                                metrics["scene.model_load.sam"],
+                            )
+
+                            TIMING.record(
+                                "startup.preload.model_total",
+                                metrics["scene.model_load.total"],
+                            )
+
+                            self.seedo_preload_reported = True
 
                         end_to_end_start = TIMING.start()
 
@@ -2776,7 +2837,28 @@ def main(args=None):
 
         executor_thread.start()
 
+        original_stdout = sys.stdout
+        original_stderr = sys.stderr
+
+        sys.stdout = PreloadOutputFilter(original_stdout)
+        sys.stderr = PreloadOutputFilter(original_stderr)
+
+        preload_pool = None
+
         try:
+
+            if node.seedo_precomputed_action_plan_path:
+
+                preload_pool = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="seedo_preload",
+                )
+
+                node.seedo_preload_future = preload_pool.submit(
+                    preload_seedo_scene_models,
+                    node.controller.scene_perceiver,
+                )
+
             node.get_logger().info(
                 'Beginning SeeDo client, shut down with CTRL-C'
             )
@@ -2829,6 +2911,11 @@ def main(args=None):
             raise
 
         finally:
+            if preload_pool is not None:
+                preload_pool.shutdown(wait=True)
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
+
             executor.shutdown()
 
             if executor_thread.is_alive():

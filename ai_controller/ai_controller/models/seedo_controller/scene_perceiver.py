@@ -3720,24 +3720,43 @@ class ScenePerceiver:
             flush=True,
         )
 
-        self.grounding_model = load_groundingdino_model(
-            str(self.grounding_config),
-            str(self.grounding_checkpoint),
-            device=str(self.device),
-            text_encoder_path=str(self.bert_model),
-        )
+        with TIMING.measure(
+            "scene.model_load.total",
+            cuda=True,
+        ):
 
-        self.sam = build_sam(
-            checkpoint=str(self.sam_checkpoint)
-        )
+            # ---------------------------------------------
+            # GroundingDINO loading
+            # ---------------------------------------------
+            with TIMING.measure(
+                "scene.model_load.grounding_dino",
+                cuda=True,
+            ):
+                self.grounding_model = load_groundingdino_model(
+                    str(self.grounding_config),
+                    str(self.grounding_checkpoint),
+                    device=str(self.device),
+                    text_encoder_path=str(self.bert_model),
+                )
 
-        self.sam.to(
-            device=self.device
-        )
+            # ---------------------------------------------
+            # SAM loading
+            # ---------------------------------------------
+            with TIMING.measure(
+                "scene.model_load.sam",
+                cuda=True,
+            ):
+                self.sam = build_sam(
+                    checkpoint=str(self.sam_checkpoint)
+                )
 
-        self.sam_predictor = SamPredictor(
-            self.sam
-        )
+                self.sam.to(
+                    device=self.device
+                )
+
+                self.sam_predictor = SamPredictor(
+                    self.sam
+                )
 
         print(
             "[ScenePerceiver] GroundingDINO and SAM loaded.",
@@ -5967,12 +5986,15 @@ class ScenePerceiver:
             f"{dino_crop_info['crop_height']}"
         )
 
-        (
-            detector_labels,
-            metadata_by_label,
-        ) = self._discover_detector_labels(
-            rgb_image
-        )
+        with TIMING.measure(
+            "scene.object_discovery"
+        ):
+            (
+                detector_labels,
+                metadata_by_label,
+            ) = self._discover_detector_labels(
+                rgb_image
+            )
 
         object_counts = Counter(
             detector_labels
@@ -6941,10 +6963,14 @@ class ScenePerceiver:
             flush=True,
         )
 
-        detections = self._detect_objects(
-            rgb_image,
-            artifacts_dir=artifacts_dir,
-        )
+        with TIMING.measure(
+            "scene.detect_objects",
+            cuda=True,
+        ):
+            detections = self._detect_objects(
+                rgb_image,
+                artifacts_dir=artifacts_dir,
+            )
 
         if not detections:
             raise RuntimeError(
