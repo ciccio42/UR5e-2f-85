@@ -26,7 +26,8 @@ import base64
 import io
 import sys
 from pathlib import Path
-
+import os
+import time
 import numpy as np
 import yaml
 from flask import Flask, jsonify, request
@@ -106,6 +107,70 @@ def create_app() -> Flask:
 
     runtime = GraspMolmoRuntime()
     runtime.load()
+
+    # ---------------------------------------------------------
+    # GRASPMOLMO - Automatic startup warm-up
+    # ---------------------------------------------------------
+
+    # Default warm-up image stored inside GraspMolmo.
+    default_warmup_image = (
+        Path(__file__).resolve().parent
+        / "assets"
+        / "warmup_rgb.png"
+    )
+
+    warmup_image = os.environ.get(
+        "SEEDO_GRASPMOLMO_WARMUP_IMAGE",
+        str(default_warmup_image),
+    ).strip()
+
+    if warmup_image:
+
+        warmup_path = Path(warmup_image)
+
+        if not warmup_path.is_file():
+            raise FileNotFoundError(
+                f"GraspMolmo warm-up image not found: {warmup_path}"
+            )
+
+        warmup_task = os.environ.get(
+            "SEEDO_GRASPMOLMO_WARMUP_TASK",
+            "Pick up the green block.",
+        )
+
+        print(
+            "[graspmolmo_server] Starting automatic warm-up...",
+            flush=True,
+        )
+
+        with Image.open(warmup_path) as pil_image:
+            warmup_rgb = np.asarray(
+                pil_image.convert("RGB"),
+                dtype=np.uint8,
+            )
+
+        warmup_start = time.perf_counter()
+
+        warmup_point = runtime.predict_point(
+            rgb=warmup_rgb,
+            task=warmup_task,
+            verbosity=0,
+            seed=42,
+        )
+
+        if warmup_point is None:
+            raise RuntimeError(
+                "GraspMolmo startup warm-up failed: no point predicted."
+            )
+
+        print(
+            "[graspmolmo_server] Warm-up completed | "
+            f"time={time.perf_counter() - warmup_start:.3f}s | "
+            f"point={warmup_point.tolist()}",
+            flush=True,
+        )
+
+    # ---------------------------------------------------------
 
     print(
         "[graspmolmo_server] GraspMolmo runtime ready."
