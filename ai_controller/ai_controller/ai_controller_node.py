@@ -187,9 +187,9 @@ class AIControllerNode(Node):
         elif self.ai_controller_target == 'osvi_awda_nut_controller':
             from ai_controller.models.osvi_awda_controller.osvi_awda_nut_controller import OSVIAWDAController as OSVIAWDANutController
 
-            self.model_config_path = '/home/ros2_ws/src/ai_controller/models/osvi_awda_controller/configs/osvi_awda_config_nut.yaml'
             self.task_name = 'nut_assembly'
             self.demo_path = '/dataset/nut_assembly/nut_assembly_demo'
+
             self.controller = OSVIAWDANutController(
                 self.model_config_path,
                 self.task_name
@@ -301,7 +301,7 @@ class AIControllerNode(Node):
             )
             self.camera_sync.registerCallback(self.synced_images_callback)
 
-            if self.ai_controller_target == 'osvi_awda_controller':
+            if self.ai_controller_target in ('osvi_awda_controller', 'osvi_awda_nut_controller'):
                 self._fetch_gripper_camera_info()
 
         self.traj_cnt = 0
@@ -1033,16 +1033,46 @@ class AIControllerNode(Node):
                         self.controller.current_eef_quat = robot_state.get(EEF_QUAT_NAME)
 
                     depth_data = None
-                    if self.ai_controller_target == 'osvi_awda_controller':
-                        # everything osvi_awda_controller's grasp refinement needs,
-                        # gathered here so that controller has no ROS of its own -
-                        # mirrors current_eef_pos/quat above for CODController
+                    front_depth_m = None
+
+                    if self.ai_controller_target in (
+                        'osvi_awda_controller',
+                        'osvi_awda_nut_controller'
+                    ):
+                        # GRASP REFINEMENT - invariato
                         depth_data = {
                             'image': self.latest_synced_depths.get('camera_gripper_depth'),
                             'camera_matrix': self.gripper_camera_matrix,
                             'camera_info_size': self.gripper_camera_info_size,
                             'transform': self._lookup_gripper_depth_transform(),
                         }
+
+                    if self.ai_controller_target == 'osvi_awda_nut_controller':
+
+                        # INSERT REFINEMENT - depth frontale completa
+                        front_depth = self.latest_synced_depths.get(
+                            'camera_front_depth'
+                        )
+
+                        if front_depth is not None:
+                            front_depth = np.asarray(front_depth)
+
+                            if front_depth.dtype == np.uint16:
+                                front_depth_m = front_depth.astype(np.float32) / 1000.0
+
+                            elif np.issubdtype(front_depth.dtype, np.floating):
+                                front_depth_m = front_depth.astype(np.float32)
+
+                            else:
+                                self.get_logger().warning(
+                                    f'[INSERT REFINEMENT] Unsupported front depth dtype: '
+                                    f'{front_depth.dtype}'
+                                )
+
+                        if front_depth_m is None:
+                            self.get_logger().warning(
+                                '[INSERT REFINEMENT] Front depth unavailable'
+                            )
 
                     # 3. Perform inference using the AI controller
                     if self.ai_controller_target == 'vla_jepa_controller':
@@ -1053,6 +1083,17 @@ class AIControllerNode(Node):
                                                         input_data=[images, states],
                                                         t=step,
                                                         save_path=step_save_path)
+                    elif self.ai_controller_target == 'osvi_awda_nut_controller':
+                        out = self.controller.inference(
+                            input_data=[
+                                images,
+                                states,
+                                depth_data,
+                                front_depth_m
+                            ],
+                            t=step,
+                            save_path=step_save_path
+                        )
                     else:
                         out = self.controller.inference(
                                                         input_data=[images, states, depth_data],

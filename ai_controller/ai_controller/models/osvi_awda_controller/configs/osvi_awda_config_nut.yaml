@@ -102,6 +102,32 @@ grasp_refinement:
   depth_crop_right_px: 500
   depth_crop_top_px: 150
 
+insert_refinement:
+  enabled: true
+  apply_to_actions: true
+
+  # Depth frontale completa, senza crop
+  min_depth_m: 0.01
+  max_depth_m: 0.50
+  display_max_depth_m: 1.00
+
+  # Edge detection
+  canny_low: 5
+  canny_high: 15
+  blur_kernel_px: 3
+
+  # Morphological closing
+  close_kernel_px: 11
+  close_iterations: 1
+
+  # Contour detection
+  min_contour_area_px: 100
+  depth_window_px: 7
+
+  # Validazione
+  max_projection_error_m: 0.005
+  max_wp5_correction_m: 0.10
+
 safety:
   clamp_workspace: true
   workspace_min: [-0.50, 0.20, -0.08]
