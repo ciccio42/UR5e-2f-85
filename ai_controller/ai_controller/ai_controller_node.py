@@ -2908,6 +2908,18 @@ def main(args=None):
                     node.controller.scene_perceiver,
                 )
 
+            else:
+
+                preload_pool = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="seedo_preload_demo",
+                )
+
+                node.seedo_preload_future = preload_pool.submit(
+                    preload_seedo_demo_models,
+                    node.controller.scene_perceiver,
+                )
+
             node.get_logger().info(
                 'Beginning SeeDo client, shut down with CTRL-C'
             )

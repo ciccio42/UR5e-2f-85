@@ -5969,6 +5969,15 @@ class SeeDoController(AIController):
                                 artifacts_dir
                                 / "visual_prompting"
                             ),
+                            preloaded_grounding_model=(
+                                self.scene_perceiver.grounding_model
+                            ),
+                            preloaded_sam_model=(
+                                self.scene_perceiver.sam
+                            ),
+                            models_ready_callback=(
+                                self.scene_perceiver.adopt_visual_prompting_models
+                            ),
                         )
                     )
 

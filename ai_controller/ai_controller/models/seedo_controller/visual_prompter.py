@@ -68,6 +68,9 @@ class VisualPrompter:
         video_path: str | Path,
         keyframes: tuple[int, ...],
         artifacts_dir: str | Path | None = None,
+        preloaded_grounding_model=None,
+        preloaded_sam_model=None,
+        models_ready_callback=None,
     ) -> VisualPromptingResult:
         """Run visual prompting on one video using selected keyframes."""
 
@@ -114,6 +117,9 @@ class VisualPrompter:
             perception_mode=self.perception_mode,
             prior_guided_task=self.prior_guided_task,
             grounding_dino_crop=self.grounding_dino_crop,
+            preloaded_grounding_model=preloaded_grounding_model,
+            preloaded_sam_model=preloaded_sam_model,
+            models_ready_callback=models_ready_callback,
         )
 
         if core_result is None:

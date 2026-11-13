@@ -150,6 +150,19 @@ def preload_seedo_scene_models(scene_perceiver):
 
     return metrics
 
+def preload_seedo_demo_models(scene_perceiver):
+    """
+    Preload GroundingDINO and SAM for the Full Pipeline.
+
+    Reuse the existing ScenePerceiver preload and warm-up
+    implementation so both execution modes initialize
+    the models in the same way.
+    """
+
+    return preload_seedo_scene_models(
+        scene_perceiver
+    )
+    
 def wait_for_future(future, timeout_sec=None):
         done_event = threading.Event()
 

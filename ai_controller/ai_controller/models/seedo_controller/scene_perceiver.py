@@ -3705,6 +3705,41 @@ class ScenePerceiver:
             "mask": peg_mask,
         }
 
+    def adopt_visual_prompting_models(
+        self,
+        grounding_model,
+        sam_model,
+    ) -> None:
+        """Reuse GroundingDINO and SAM from demonstration."""
+
+        if grounding_model is None or sam_model is None:
+            raise ValueError(
+                "Cannot reuse missing demonstration models."
+            )
+
+        # The same objects may already be cached from
+        # a previous Full Pipeline execution.
+        if (
+            self.grounding_model is grounding_model
+            and self.sam is sam_model
+            and self.sam_predictor is not None
+        ):
+            return
+
+        # Create a fresh SAM predictor.
+        # Never reuse image embeddings from the demo.
+        predictor = SamPredictor(sam_model)
+
+        self.grounding_model = grounding_model
+        self.sam = sam_model
+        self.sam_predictor = predictor
+
+        print(
+            "[ScenePerceiver] Reusing GroundingDINO "
+            "and SAM from demonstration.",
+            flush=True,
+        )
+
     def _ensure_models_loaded(self) -> None:
         """Load GroundingDINO and SAM only when scene perception is needed."""
 
