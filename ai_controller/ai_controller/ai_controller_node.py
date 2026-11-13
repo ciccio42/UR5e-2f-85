@@ -297,6 +297,7 @@ class AIControllerNode(Node):
         self.joint_state_event = threading.Event()
 
         self.pause_executor = threading.Event()
+        self.executor_paused_event = threading.Event()
 
         self.seedo_preload_future = None
         self.seedo_preload_metrics = None
@@ -1751,6 +1752,10 @@ class AIControllerNode(Node):
                                 metrics["scene.model_load.total"],
                             )
 
+                            TIMING.record(
+                                "startup.warmup.grounding_dino",
+                                metrics["warmup_s"],
+                            )
                             self.seedo_preload_reported = True
 
                         end_to_end_start = TIMING.start()
@@ -1807,10 +1812,48 @@ class AIControllerNode(Node):
 
                         self.current_failure_stage = "scene_perception_and_planning"
 
-                        result = self.controller.inference(
-                            input_data=seedo_runtime_input,
-                            t=0,
-                        )
+                        # --------------------------------------------------
+                        # Pause ROS executor during runtime inference (t=0)
+                        # All required RGB-D and TF data have been captured.
+                        # --------------------------------------------------
+
+                        with TIMING.measure("runtime.t0_pause_window"):
+
+                            self.executor_paused_event.clear()
+                            self.pause_executor.set()
+
+                            try:
+
+                                # Wait until the ROS spinning loop acknowledges
+                                # the pause request.
+                                with TIMING.measure("runtime.t0_pause_wait"):
+
+                                    if not self.executor_paused_event.wait(
+                                        timeout=5.0
+                                    ):
+                                        raise TimeoutError(
+                                            "ROS executor did not acknowledge "
+                                            "the pause request before inference(t=0)."
+                                        )
+
+                                self.get_logger().info(
+                                    "ROS executor paused during runtime inference(t=0)."
+                                )
+
+                                with TIMING.measure("runtime.t0_inference_total"):
+
+                                    result = self.controller.inference(
+                                        input_data=seedo_runtime_input,
+                                        t=0,
+                                    )
+
+                            finally:
+
+                                self.pause_executor.clear()
+
+                                self.get_logger().info(
+                                    "ROS executor resumed after runtime inference(t=0)."
+                                )
 
                         if result is not None:
                             raise RuntimeError(
@@ -2809,9 +2852,15 @@ class AIControllerNode(Node):
         
 def spin_executor(node=None, executor=None):
     while rclpy.ok():
+
         if node.pause_executor.is_set():
+
+            node.executor_paused_event.set()
+
             time.sleep(0.01)
             continue
+
+        node.executor_paused_event.clear()
 
         executor.spin_once(timeout_sec=0.01)
 

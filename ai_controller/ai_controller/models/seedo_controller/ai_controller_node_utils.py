@@ -12,6 +12,11 @@ import logging
 
 from ai_controller.models.seedo_controller.timing_utils import TIMING
 
+from GroundingDINO.groundingdino.util.inference import (
+    load_image_from_array,
+    predict,
+)
+
 class PreloadOutputFilter:
     """Suppress Python output only from the SeeDo preload thread."""
 
@@ -78,6 +83,35 @@ def preload_seedo_scene_models(scene_perceiver):
     try:
         scene_perceiver._ensure_models_loaded()
 
+        # ---------------------------------------------
+        # GroundingDINO warm-up
+        # ---------------------------------------------
+        # Synthetic RGB image with the same dimensions
+        # as the current Isaac GroundingDINO cropped ROI.
+        warmup_rgb = np.zeros(
+            (296, 672, 3),
+            dtype=np.uint8,
+        )
+
+        # Use exactly the same preprocessing function
+        # employed during runtime scene perception.
+        _, warmup_image = load_image_from_array(
+            warmup_rgb
+        )
+
+        with TIMING.measure(
+            "startup.warmup.grounding_dino",
+            cuda=True,
+        ):
+            predict(
+                model=scene_perceiver.grounding_model,
+                image=warmup_image,
+                caption="object",
+                box_threshold=0.25,
+                text_threshold=0.25,
+                device=scene_perceiver.device,
+            )
+
     finally:
         transformers_logger.removeFilter(warning_filter)
 
@@ -92,6 +126,17 @@ def preload_seedo_scene_models(scene_perceiver):
     metrics = {
         "wall_s": wall_s,
     }
+
+    warmup_s = TIMING.latest(
+        "startup.warmup.grounding_dino"
+    )
+
+    if warmup_s is None:
+        raise RuntimeError(
+            "Missing GroundingDINO warm-up timing."
+        )
+
+    metrics["warmup_s"] = warmup_s
 
     for name in model_timer_names:
         value = TIMING.latest(name)
