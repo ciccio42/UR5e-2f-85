@@ -136,6 +136,16 @@ echo "[GraspMolmo] Installing HTTP server dependencies..."
 
 "${VENV_PIP}" install flask
 
+# -----------------------------------------------------------------------------
+# TorchAO - FP8 weight-only quantization
+# -----------------------------------------------------------------------------
+
+echo "[GraspMolmo] Installing TorchAO for FP8 quantization..."
+
+"${VENV_PIP}" install \
+    --no-deps \
+    --only-binary=:all: \
+    "torchao==0.17.0"
 
 # -----------------------------------------------------------------------------
 # Sanity check
@@ -144,19 +154,23 @@ echo "[GraspMolmo] Installing HTTP server dependencies..."
 echo "[GraspMolmo] Running import test..."
 
 "${VENV_PYTHON}" - <<'PY'
+import torch
+import torchao
+
+from torchao.quantization import (
+    Float8WeightOnlyConfig,
+    quantize_,
+)
+
 from graspmolmo.inference.grasp_predictor import GraspMolmo
 
 print("GraspMolmo import: OK")
+print("TorchAO import: OK")
+print("FP8 weight-only support: OK")
+print("PyTorch version:", torch.__version__)
+print("CUDA version:", torch.version.cuda)
+print("CUDA available:", torch.cuda.is_available())
+
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
 PY
-
-
-echo
-echo "============================================================"
-echo " GraspMolmo environment ready"
-echo "============================================================"
-echo
-echo "Python:"
-echo "  ${VENV_PYTHON}"
-echo
-echo "Source:"
-echo "  ${SOURCE_DIR}"

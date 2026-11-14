@@ -48,6 +48,35 @@ import torch.nn.functional as F
 
 import copy
 
+class _DecodeOnlyCompiledLinear(torch.nn.Module):
+    """
+    Compile a BF16 linear projection only during single-token decoding.
+
+    Prefill remains on the original eager implementation.
+    No weight quantization or copying is performed.
+    """
+
+    def __init__(self, original_linear):
+        super().__init__()
+
+        self.eager_linear = original_linear
+        self.compiled_linear = torch.compile(
+            original_linear,
+            mode="default",
+            fullgraph=True,
+        )
+
+        self.decode_calls = 0
+        self.prefill_calls = 0
+
+    def forward(self, x):
+
+        if x.ndim == 3 and x.shape[1] == 1:
+            self.decode_calls += 1
+            return self.compiled_linear(x)
+
+        self.prefill_calls += 1
+        return self.eager_linear(x)
 
 class _Fp8DecodeOnlyMLP(torch.nn.Module):
     """
@@ -71,9 +100,21 @@ class _Fp8DecodeOnlyMLP(torch.nn.Module):
             Float8WeightOnlyConfig(),
         )
 
+        compile_mode = os.environ.get(
+            "SEEDO_GRASPMOLMO_FP8_COMPILE_MODE",
+            "default",
+        ).strip() or "default"
+
+        if compile_mode not in ("default", "reduce-overhead"):
+            raise ValueError(
+                f"Unsupported FP8 compile mode: {compile_mode}"
+            )
+
+        self.fp8_compile_mode = compile_mode
+
         self.fp8_compiled = torch.compile(
             fp8_mlp,
-            mode="default",
+            mode=compile_mode,
             fullgraph=True,
         )
 
@@ -218,6 +259,15 @@ class GraspMolmoRuntime:
                 generator=generator,
             )
 
+            print(
+                "[GraspMolmo][FP8] compile_mode:",
+                os.environ.get(
+                    "SEEDO_GRASPMOLMO_FP8_COMPILE_MODE",
+                    "default",
+                ),
+                flush=True,
+            )
+
             for idx in fp8_layer_indices:
 
                 print(
@@ -275,6 +325,125 @@ class GraspMolmoRuntime:
             print(
                 "[GraspMolmo][FP8] cuda_allocated_gib:",
                 round(torch.cuda.memory_allocated() / (1024 ** 3), 3),
+            )
+
+        # ---------------------------------------------------------
+        # Experimental BF16 attention projection compilation
+        # ---------------------------------------------------------
+
+        self._attn_compiled_projections = {}
+
+        attn_layer_spec = os.environ.get(
+            "SEEDO_GRASPMOLMO_ATTN_COMPILE_LAYERS",
+            "",
+        ).strip()
+
+        if attn_layer_spec:
+
+            blocks = self.model.model.transformer.blocks
+
+            if attn_layer_spec.lower() == "all":
+                attn_layer_indices = list(range(len(blocks)))
+            else:
+                attn_layer_indices = sorted({
+                    int(value.strip())
+                    for value in attn_layer_spec.split(",")
+                    if value.strip()
+                })
+
+            if not attn_layer_indices or any(
+                idx < 0 or idx >= len(blocks)
+                for idx in attn_layer_indices
+            ):
+                raise ValueError(
+                    f"Invalid attention layer selection: {attn_layer_spec}"
+                )
+
+            attn_parts = os.environ.get(
+                "SEEDO_GRASPMOLMO_ATTN_COMPILE_PARTS",
+                "both",
+            ).strip().lower()
+
+            if attn_parts not in ("qkv", "out", "both"):
+                raise ValueError(
+                    f"Invalid attention compile parts: {attn_parts}"
+                )
+
+            projection_names = (
+                ["att_proj", "attn_out"]
+                if attn_parts == "both"
+                else ["att_proj"] if attn_parts == "qkv"
+                else ["attn_out"]
+            )
+
+            generator = torch.Generator(
+                device=self.model.device
+            ).manual_seed(1234)
+
+            for idx in attn_layer_indices:
+
+                attention = blocks[idx].attn
+
+                for name in projection_names:
+
+                    original = getattr(attention, name)
+
+                    wrapper = _DecodeOnlyCompiledLinear(original)
+
+                    test_input = torch.randn(
+                        1,
+                        1,
+                        original.in_features,
+                        device=original.weight.device,
+                        dtype=original.weight.dtype,
+                        generator=generator,
+                    )
+
+                    # Validate the compiled projection against BF16 eager.
+                    with torch.inference_mode():
+
+                        reference = wrapper.eager_linear(test_input)
+                        candidate = wrapper.compiled_linear(test_input)
+
+                        torch.cuda.synchronize()
+
+                        max_diff = (
+                            reference.float() - candidate.float()
+                        ).abs().max().item()
+
+                        if not torch.isfinite(candidate).all().item():
+                            raise RuntimeError(
+                                f"Non-finite attention output: layer {idx}, {name}"
+                            )
+
+                        torch.testing.assert_close(
+                            candidate,
+                            reference,
+                            rtol=1e-2,
+                            atol=1e-2,
+                        )
+
+                    setattr(attention, name, wrapper)
+
+                    self._attn_compiled_projections[
+                        (idx, name)
+                    ] = wrapper
+
+                    print(
+                        f"[GraspMolmo][ATTN-COMPILE] "
+                        f"layer={idx} projection={name} "
+                        f"warmup_max_abs_diff={max_diff:.6f}",
+                        flush=True,
+                    )
+
+            print(
+                "[GraspMolmo][ATTN-COMPILE] active_layers:",
+                attn_layer_indices,
+            )
+
+            print(
+                "[GraspMolmo][ATTN-COMPILE] projections:",
+                projection_names,
             )
 
         self.gen_cfg = GenerationConfig(
