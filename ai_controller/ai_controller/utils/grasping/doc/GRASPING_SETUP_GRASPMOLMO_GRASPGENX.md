@@ -1,14 +1,17 @@
 # GraspMolmo + GraspGen-X — Quick Setup
 
-This guide describes the current project setup used to run **GraspMolmo** and **GraspGen-X** as separate services and use them together from the SeeDo grasp-planning pipeline.
+This guide documents the **current optimized GraspMolmo + GraspGen-X setup** used by the SeeDo grasp-planning pipeline, in both Isaac Sim and real-robot operation. It complements the project launch guides `start_seedo_isaac_sim.md` and `start_seedo_real_test.md`.
 
-The GraspGen-X integration is intentionally isolated from the SeeDo Python environment:
+The services are deliberately isolated from the SeeDo Python environment:
 
-- GraspMolmo runs as an HTTP service on port `8780`;
-- GraspGen-X runs as a ZMQ service on port `8782`;
-- SeeDo calls GraspGen-X through the project `GraspGenXRemoteClient`;
-- the bridge worker is executed with the dedicated GraspGen-X Python environment;
-- the active project backend is named `graspgenx` — there is no separate `graspgenx_v2` backend.
+- **GraspMolmo** runs as an HTTP service at `127.0.0.1:8780`, using the optimized launch options documented below;
+- **GraspGen-X** runs as a GPU-backed ZMQ service at `127.0.0.1:8782`;
+- a **persistent GraspGen-X worker** listens on an AF_UNIX socket (`/tmp/seedo_graspgenx_worker.sock`), holds the heavy Python imports in memory, and forwards individual inference requests to the GPU server;
+- SeeDo uses `GraspGenXRemoteClient` to communicate with that worker when `SEEDO_GRASPGENX_PERSISTENT=1`;
+- the combined GraspGen-X launcher runs **one inference warm-up before `[READY]`** when `SEEDO_GRASPGENX_WARMUP=1`;
+- the active project backend remains `graspgenx` (there is no separate `graspgenx_v2` backend).
+
+**Environment scope:** setting variables before `./start_graspgenx_services.sh` configures that launcher and its children only. A separate SeeDo / AI Controller / GUI process must export the persistent-worker variables in its **own** environment.
 
 ---
 
@@ -59,8 +62,11 @@ ai_controller/ai_controller/utils/grasping/
 │   ├── geometry_utils.py
 │   ├── inference_core.py
 │   ├── planner.py
+│   ├── persistent_worker.py
 │   ├── runtime_worker.py
-│   └── worker.py
+│   ├── worker.py
+│   └── scripts/
+│       └── start_graspgenx_services.sh
 │
 ├── grasp_planner_factory.py
 └── replay_graspgenx_runtime_case.py
@@ -110,12 +116,21 @@ TCP grasp pose
 Motion Layer / MoveIt
 ```
 
-The two external services are:
+Service communication during grasp candidate generation:
 
 ```text
-GraspMolmo  -> 127.0.0.1:8780
-GraspGen-X  -> 127.0.0.1:8782
+SeeDo / GraspGenXRemoteClient
+         |
+         | AF_UNIX: /tmp/seedo_graspgenx_worker.sock
+         v
+GraspGen-X persistent worker (dedicated Python environment)
+         |
+         | ZMQ: tcp://127.0.0.1:8782
+         v
+GraspGen-X GPU server (loaded model)
 ```
+
+GraspMolmo is an independent HTTP service at `127.0.0.1:8780`. The persistent worker and the ZMQ server are started and stopped together by the combined launcher. Grasp candidate generation remains separate from the SeeDo-side geometric selection.
 
 ---
 
@@ -169,17 +184,28 @@ Before starting the service:
 export HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface
 ```
 
-## Start the GraspMolmo server
+## Start the optimized GraspMolmo server
+
+Open a dedicated terminal inside `seedo_ros2_container` (from the host, use `docker exec -it seedo_ros2_container bash`) and run the **current project launch command**:
 
 ```bash
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
 
+SEEDO_GRASPMOLMO_GQA=1 \
+SEEDO_GRASPMOLMO_PROFILE_DECODER=1 \
+SEEDO_GRASPMOLMO_FP8_TEST_LAYER=all \
+SEEDO_GRASPMOLMO_FP8_COMPILE_MODE=default \
+SEEDO_GRASPMOLMO_ATTN_COMPILE_LAYERS=all \
+SEEDO_GRASPMOLMO_ATTN_COMPILE_PARTS=out \
+TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
 HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
 PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
 PYTHONNOUSERSITE=1 \
 /opt/graspmolmo_venv/bin/python server.py \
-    --config config/graspmolmo_config.yaml
+  --config config/graspmolmo_config.yaml
 ```
+
+These are the flags used by the project's optimized configuration (GQA, FP8/attention compile-related settings and decoder profiling). They do not change the GraspMolmo endpoint consumed by SeeDo. Keep this process alive throughout the experiments.
 
 Server:
 
@@ -279,18 +305,13 @@ PYTHONNOUSERSITE=1 \
 "import graspgenx; print('GraspGen-X dependencies ready')"
 ```
 
-The SeeDo environment itself does **not** need the GraspGen-X Python dependencies.  
-`GraspGenXRemoteClient` starts the project worker using:
+The SeeDo environment itself does **not** need the GraspGen-X Python dependencies. The dedicated worker uses:
 
 ```text
 /opt/graspgenx_venv/bin/python
 ```
 
-with working directory:
-
-```text
-/opt/GraspGenX
-```
+The persistent worker imports the GraspGen-X integration once, then handles successive requests over the UNIX socket; each inference still goes to the official GraspGen-X GPU server over ZMQ. The legacy subprocess-per-call path is retained only for compatibility when `SEEDO_GRASPGENX_PERSISTENT` is disabled. **There is no automatic fallback** to that path if persistent mode is enabled but the worker is unavailable.
 
 ---
 
@@ -369,65 +390,80 @@ The server uses the assets directory:
 
 ---
 
-## Start the GraspGen-X server
+## Start the GraspGen-X server + persistent worker + warm-up (recommended)
 
-Run GraspGen-X in its dedicated environment:
+From a new **host terminal**, enter `seedo_ros2_container` and start the combined launcher:
 
 ```bash
-cd /opt/GraspGenX
+docker exec -it seedo_ros2_container bash
 
-env -u PYTHONPATH \
-PYTHONNOUSERSITE=1 \
+cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspgenx/scripts
+
+SEEDO_GRASPGENX_PERSISTENT=1 \
+SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock \
+SEEDO_GRASPGENX_WARMUP=1 \
 GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx_checkpoints \
 GRASPGENX_GRIPPER_CFG_DIR=/opt/graspgenx_gripper_descriptions \
-/opt/graspgenx_venv/bin/python \
-    client-server/graspgenx_server.py \
-    --config /opt/graspgenx_checkpoints/release \
-    --assets_dir /opt/graspgenx_gripper_descriptions/gripper_descriptions/assets \
-    --default_gripper robotiq_2f_85 \
-    --host 0.0.0.0 \
-    --port 8782
+PYTHONNOUSERSITE=1 \
+./start_graspgenx_services.sh
 ```
 
-Server:
+The launcher performs the following steps, **in order**:
+
+1. Starts the GraspGen-X GPU ZMQ server at `tcp://0.0.0.0:8782` and loads the checkpoints and default `robotiq_2f_85` gripper.
+2. Starts `persistent_worker.py` in `/opt/graspgenx_venv`, listening on `/tmp/seedo_graspgenx_worker.sock`.
+3. Checks that the worker and the server can communicate.
+4. With `SEEDO_GRASPGENX_WARMUP=1`, sends one real `infer_object` request through the persistent worker, using a **synthetic 5-cm cuboid point cloud (2,048 points)** and the project's `graspmoe` / `dense` OBB configuration (200 diffusion grasps requested). Generated candidates are discarded; **no robot command is issued**.
+5. Prints `[READY]` after the checks and warm-up have succeeded.
+
+Expected startup log excerpt (timings and candidate counts can vary):
 
 ```text
-127.0.0.1:8782
+Starting GraspGenX GPU server (PID=...)
+Starting persistent worker (PID=...)
+[GRASPGENX PERSISTENT] Ready | PID=... | socket=/tmp/seedo_graspgenx_worker.sock
+[WARMUP] Running one GraspGenX infer_object through the persistent worker...
+[WARMUP] Completed in ... s | grasp candidates=... (discarded)
+[READY] GraspGenX server PID=...; worker PID=...
 ```
 
-The server process loads the GraspGen-X model.  
-The project-side worker communicates with it through the official ZMQ client.
+**Keep the launcher running** while SeeDo is active. Stop both services with `Ctrl+C` in this terminal; do not restart them between consecutive experiments. `SEEDO_GRASPGENX_WARMUP=1` controls the launcher warm-up, **not** the SeeDo process; the warm-up cost is incurred before the SeeDo end-to-end timer starts. A health check alone would not execute the GPU inference path.
 
----
+The ZMQ service uses TCP port `8782`, but SeeDo in persistent mode connects to the **UNIX socket**, not directly to the ZMQ server. The socket and SeeDo process must be accessible in the same filesystem/container namespace (as in the documented `seedo_ros2_container` setup).
 
-## GraspGen-X health check through the project bridge
+## Health and persistence checks
 
-With the GraspGen-X server already running:
+From another **host terminal**, enter the same container and use the project's client in persistent mode:
 
 ```bash
+docker exec -it seedo_ros2_container bash
+
 cd /home/ros2_ws/src/UR5e-2f-85
 
-PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller:$PYTHONPATH \
+SEEDO_GRASPGENX_PERSISTENT=1 \
+SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock \
+PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
 python3 - <<'PY'
-from ai_controller.utils.grasping.graspgenx.client import (
-    GraspGenXRemoteClient,
-)
+from ai_controller.utils.grasping.graspgenx.client import GraspGenXRemoteClient
 
 client = GraspGenXRemoteClient(
     host="127.0.0.1",
     port=8782,
     gripper_name="robotiq_2f_85",
 )
-
-print("GraspGen-X health:", client.health())
+print("GraspGen-X persistent health:", client.health())
 PY
 ```
 
-Expected result:
+Expected result: `GraspGen-X persistent health: True`.
 
-```text
-GraspGen-X health: True
+Check that the **same worker PID** remains alive across experiments:
+
+```bash
+ps -ef | grep '[p]ersistent_worker.py'
 ```
+
+A responsive health check establishes connectivity, not grasp correctness. Use the saved artifacts and Isaac Sim tests for the latter.
 
 ---
 
@@ -474,6 +510,49 @@ There is only one public GraspGen-X backend:
 ```text
 graspgenx
 ```
+
+## Persistent-worker environment in the SeeDo process
+
+**Required for the optimized path:** set these exports in the same terminal/process environment that starts the SeeDo AI Controller (or the GUI backend):
+
+```bash
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+```
+
+**Do not assume** that variables provided to the GraspGen-X launcher in Terminal 2 are automatically visible in another terminal. If the SeeDo process is launched by a script, ensure it inherits the variables, for example:
+
+```bash
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+
+bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_isaac_test.sh \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml
+```
+
+The full command, including any precomputed-plan arguments, is documented in `start_seedo_isaac_sim.md`; for the robot use `start_seedo_real_test.md`. Both launch guides also export the persistent-worker variables for the experiment configurations and GUI, even where the grasp module is not used, to keep the launch environment consistent. Those exports **do not force the grasp module to run** when the selected YAML/configuration or execution mode does not use it.
+
+### Isaac Sim versus real robot
+
+For the **currently documented Isaac validation setup**, the launch guide applies a *temporary post-planning* offset:
+
+```bash
+export SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020
+export QT_QPA_PLATFORM=offscreen
+```
+
+This `+20 mm` Isaac-only test correction is **not** the same as `graspgenx_depth_offset_m: 0.005` in the planner configuration, and it is **not part of the GraspGen-X warm-up**. It must not silently carry over to physical robot execution.
+
+For the **real robot** the launch guide explicitly clears it:
+
+```bash
+unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
+export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+```
+
+Keep the robot's normal collision, trajectory and execution safety checks active. The temporary Isaac offset does not validate a grasp as safe for the physical UR5e.
 
 ---
 
@@ -536,13 +615,13 @@ pytest -q \
   ai_controller/ai_controller/utils/grasping/graspgenx/test_graspgenx_planner.py
 ```
 
-Current expected result:
+Recorded expectation for the two original unit-test files:
 
 ```text
 5 passed
 ```
 
-These unit tests do not require a real GraspMolmo or GraspGen-X server.
+This number is historical and is **not** a verified result for every subsequent persistent-worker change. The unit tests listed above do not require a real GraspMolmo or GraspGen-X server; separately validate persistent-worker connectivity, warm-up startup and an actual Isaac/real task before a release.
 
 ---
 
@@ -582,6 +661,8 @@ at the selected step.
 
 The replay script can automatically match `input_rgb.png` against the eye-in-hand images in the rollout if `--step` is omitted.
 
+The examples below assume the GraspGen-X GPU server and persistent worker are already running; they pass the same socket environment variables as the SeeDo process. The replay does **not** execute physical robot commands.
+
 ---
 
 ## Replay using the semantic point saved during the real run
@@ -591,6 +672,8 @@ Example:
 ```bash
 cd /home/ros2_ws/src/UR5e-2f-85
 
+SEEDO_GRASPGENX_PERSISTENT=1 \
+SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock \
 PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller:$PYTHONPATH \
 python3 ai_controller/ai_controller/utils/grasping/replay_graspgenx_runtime_case.py \
     --case-dir /test_real/test_task00_23 \
@@ -631,6 +714,8 @@ Example:
 ```bash
 cd /home/ros2_ws/src/UR5e-2f-85
 
+SEEDO_GRASPGENX_PERSISTENT=1 \
+SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock \
 PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller:$PYTHONPATH \
 python3 ai_controller/ai_controller/utils/grasping/replay_graspgenx_runtime_case.py \
     --case-dir /test_real/test_task00_23 \
@@ -681,39 +766,37 @@ The old `table_surface_offset_m` parameter is no longer part of the current Gras
 
 # 7. Full GraspMolmo + GraspGen-X runtime
 
-For the real SeeDo pipeline, start both servers.
+Run both services and the AI Controller in **separate terminals**, all inside `seedo_ros2_container`:
 
-Terminal 1:
+| Terminal | Process | Interface |
+| --- | --- | --- |
+| 1 | Optimized GraspMolmo server | HTTP `127.0.0.1:8780` |
+| 2 | Combined GraspGen-X GPU server + persistent worker + warm-up | ZMQ `127.0.0.1:8782`; AF_UNIX `/tmp/seedo_graspgenx_worker.sock` |
+| 3 | SeeDo AI Controller / Isaac or real launch | `SEEDO_GRASPGENX_PERSISTENT=1`, matching socket path |
 
-```text
-GraspMolmo
-127.0.0.1:8780
-```
+Enable `grasp_planner.enabled: true` and `grasp_planner.backend: graspgenx` only in configurations intended to run this grasp pipeline. A demo-only or baseline configuration that does not invoke grasping does not use the worker just because the variables are set.
 
-Terminal 2:
+The SeeDo process stays in its normal Python environment. GraspGen-X dependencies remain isolated in `/opt/graspgenx_venv`. The persistent bridge processes sequential inference requests without repeating Python/PyTorch imports; the GPU model remains loaded in the ZMQ server across experiments.
 
-```text
-GraspGen-X
-127.0.0.1:8782
-```
+For the **full startup order**, including ZED cameras, Isaac Sim, MoveIt, robot controllers, GUI and experiment YAMLs, consult the matching project guide:
 
-Then configure:
+- `start_seedo_isaac_sim.md` — Isaac Sim 5.1.0 startup, `SEEDO_ISAAC_GRASP_Z_OFFSET_M=0.020` only for the documented simulation tests;
+- `start_seedo_real_test.md` — ZED + UR5e real setup, with `SEEDO_ISAAC_GRASP_Z_OFFSET_M` unset.
 
-```yaml
-grasp_planner:
-  enabled: true
-  backend: graspgenx
-```
+## Measured optimization (single-run evidence, not a benchmark distribution)
 
-The SeeDo process remains in its normal environment.
+Measurements from the SeeDo/Isaac validation sessions of **14 November 2026**:
 
-GraspGen-X-specific Python dependencies remain isolated in:
+| Execution | `grasp.graspgenx_inference` |
+| --- | ---: |
+| Earlier legacy subprocess baseline | ~10.246 s |
+| First persistent execution, without GPU warm-up | 1.632 s |
+| Subsequent persistent execution, same service session | 0.412 s |
+| First persistent execution after server restart **with automatic warm-up** | 0.497 s |
 
-```text
-/opt/graspgenx_venv
-```
+The new startup warm-up itself took **1.706 s** in the recorded launcher log (the inference produced and discarded 1,064 candidates). It is outside the SeeDo run timer. The first post-warm-up inference is consistent with the earlier steady-state measurement (~0.4–0.5 s), but point-cloud content, GPU load and run conditions can vary. These results **support**, but do not statistically prove, warm-up efficacy; evaluate repeated matched inputs for a controlled performance claim.
 
-The project bridge invokes the GraspGen-X worker in that environment and communicates with the ZMQ server.
+`grasp.graspgenx_inference` is a **subphase** of `grasp_planning`; do not add it again to `grasp_planning` or the end-to-end time in presentation tables. The geometry-selection time is a separate part of the grasp-planning phase.
 
 ---
 

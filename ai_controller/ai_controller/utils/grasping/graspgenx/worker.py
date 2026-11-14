@@ -8,7 +8,7 @@ import numpy as np
 from graspgenx.serving.zmq_client import GraspGenXClient
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
@@ -90,11 +90,7 @@ def main() -> None:
         default=0.01,
     )
 
-
-
-
-
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     with GraspGenXClient(
         host=args.host,

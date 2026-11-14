@@ -141,11 +141,18 @@ docker exec -it seedo_ros2_container bash
 
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
 
+SEEDO_GRASPMOLMO_GQA=1 \
+SEEDO_GRASPMOLMO_PROFILE_DECODER=1 \
+SEEDO_GRASPMOLMO_FP8_TEST_LAYER=all \
+SEEDO_GRASPMOLMO_FP8_COMPILE_MODE=default \
+SEEDO_GRASPMOLMO_ATTN_COMPILE_LAYERS=all \
+SEEDO_GRASPMOLMO_ATTN_COMPILE_PARTS=out \
+TRITON_PTXAS_PATH=/usr/local/cuda/bin/ptxas \
 HF_HOME=/home/ros2_ws/src/UR5e-2f-85/.runtime/huggingface \
 PYTHONPATH=/home/ros2_ws/src/UR5e-2f-85/ai_controller \
 PYTHONNOUSERSITE=1 \
 /opt/graspmolmo_venv/bin/python server.py \
-    --config config/graspmolmo_config.yaml
+  --config config/graspmolmo_config.yaml
 ```
 
 ---
@@ -157,19 +164,15 @@ Open a new terminal:
 ```bash
 docker exec -it seedo_ros2_container bash
 
-cd /opt/GraspGenX
+cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspgenx/scripts
 
-env -u PYTHONPATH \
-PYTHONNOUSERSITE=1 \
+SEEDO_GRASPGENX_PERSISTENT=1 \
+SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock \
+SEEDO_GRASPGENX_WARMUP=1 \
 GRASPGENX_CHECKPOINT_DIR=/opt/graspgenx_checkpoints \
 GRASPGENX_GRIPPER_CFG_DIR=/opt/graspgenx_gripper_descriptions \
-/opt/graspgenx_venv/bin/python \
-    client-server/graspgenx_server.py \
-    --config /opt/graspgenx_checkpoints/release \
-    --assets_dir /opt/graspgenx_gripper_descriptions/gripper_descriptions/assets \
-    --default_gripper robotiq_2f_85 \
-    --host 0.0.0.0 \
-    --port 8782
+PYTHONNOUSERSITE=1 \
+  ./start_graspgenx_services.sh
 ```
 
 ---
@@ -235,12 +238,18 @@ docker exec -it seedo_ros2_container bash
 # FULL INFERENCE SOLUTION
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml
 
 # PRECOMPUTED INFERENCE SOLUTION
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
   --precomputed-plan /test_real/test_task08_1/action_planning/action_plan.json \
@@ -249,6 +258,8 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
 # DEMO ONLY SOLUTION
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
 
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
@@ -257,12 +268,18 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
 # FULL INFERENCE EXPERIMENTS
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml
 
 # PRECOMPUTED INFERENCE EXPERIMENTS
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml \
   --precomputed-plan /test_real/test_task08_1/action_planning/action_plan.json
@@ -270,6 +287,8 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
 # DEMO ONLY EXPERIMENTS
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
 
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml \
@@ -278,6 +297,9 @@ bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_contr
 # GUI LAUNCH
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
 export QT_QPA_PLATFORM=offscreen
+export SEEDO_GRASPGENX_PERSISTENT=1
+export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
+
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller && \
 /opt/seedo_gui_venv/bin/python -m uvicorn \
 ai_controller.utils.gui.backend.app:app \

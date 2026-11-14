@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import socket
 import subprocess
 import tempfile
 from pathlib import Path
@@ -63,6 +65,20 @@ class GraspGenXRemoteClient:
             THIS_DIR / "worker.py"
         )
 
+        self.use_persistent_worker = (
+            os.environ.get(
+                "SEEDO_GRASPGENX_PERSISTENT",
+                "0",
+            ) == "1"
+        )
+
+        self.persistent_socket_path = (
+            os.environ.get(
+                "SEEDO_GRASPGENX_SOCKET",
+                "/tmp/seedo_graspgenx_worker.sock",
+            )
+        )
+
     def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
 
@@ -94,6 +110,12 @@ class GraspGenXRemoteClient:
         arguments: list[str],
         timeout: float,
     ) -> subprocess.CompletedProcess[str]:
+
+        if self.use_persistent_worker:
+            return self._run_persistent_worker(
+                arguments=arguments,
+                timeout=timeout,
+            )
 
         command = [
             str(self.python_executable),
@@ -131,6 +153,71 @@ class GraspGenXRemoteClient:
             )
 
         return result
+
+    def _run_persistent_worker(
+        self,
+        arguments: list[str],
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+
+        try:
+            with socket.socket(
+                socket.AF_UNIX,
+                socket.SOCK_STREAM,
+            ) as connection:
+
+                connection.settimeout(timeout)
+
+                connection.connect(
+                    self.persistent_socket_path
+                )
+
+                request = (
+                    json.dumps(arguments) + "\n"
+                ).encode("utf-8")
+
+                connection.sendall(request)
+
+                with connection.makefile("rb") as stream:
+                    raw = stream.readline(1_048_577)
+
+            if not raw or not raw.endswith(b"\n"):
+                raise ValueError(
+                    "Invalid or incomplete worker response."
+                )
+
+            response = json.loads(
+                raw.decode("utf-8")
+            )
+
+        except (OSError, ValueError) as exc:
+            raise GraspGenXRemoteUnavailable(
+                "Persistent GraspGenX worker "
+                "communication failed."
+            ) from exc
+
+        if not isinstance(response, dict):
+            raise GraspGenXRemoteUnavailable(
+                "Invalid persistent worker response."
+            )
+
+        if response.get("ok") is not True:
+            raise GraspGenXRemoteUnavailable(
+                "Persistent GraspGenX worker failed:\n"
+                + str(
+                    response.get(
+                        "error",
+                        "Unknown error",
+                    )
+                )
+            )
+
+        return subprocess.CompletedProcess(
+            args=arguments,
+            returncode=0,
+            stdout=response.get("stdout", ""),
+            stderr="",
+        )
 
     def health(
         self,
