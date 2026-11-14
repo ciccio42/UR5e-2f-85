@@ -446,6 +446,135 @@ class GraspMolmoRuntime:
                 projection_names,
             )
 
+        # ---------------------------------------------------------
+        # Experimental BF16 LM head compilation
+        # ---------------------------------------------------------
+
+        self._lm_head_compile_enabled = (
+            os.environ.get(
+                "SEEDO_GRASPMOLMO_LM_HEAD_COMPILE", "0"
+            ) == "1"
+        )
+
+        if self._lm_head_compile_enabled:
+
+            original_head = self.model.model.transformer.ff_out
+
+            if not isinstance(original_head, torch.nn.Linear):
+                raise RuntimeError(
+                    "LM head compilation requires an nn.Linear."
+                )
+
+            # Experimental LM head FP8 weight-only.
+            lm_head_fp8_enabled = (
+                os.environ.get(
+                    "SEEDO_GRASPMOLMO_LM_HEAD_FP8", "0"
+                ) == "1"
+            )
+
+            if lm_head_fp8_enabled:
+
+                from torchao.quantization import (
+                    Float8WeightOnlyConfig,
+                    quantize_,
+                )
+
+                # Keep the original BF16 head for numerical comparison.
+                head_for_compile = copy.deepcopy(original_head).eval()
+
+                quantize_(
+                    head_for_compile,
+                    Float8WeightOnlyConfig(),
+                )
+
+            else:
+                head_for_compile = original_head
+
+            compiled_head = torch.compile(
+                head_for_compile,
+                mode="default",
+                fullgraph=True,
+            )
+
+            # Use the same input shape observed during generation.
+            generator = torch.Generator(
+                device=original_head.weight.device
+            ).manual_seed(1234)
+
+            test_input = torch.randn(
+                1,
+                1,
+                original_head.in_features,
+                device=original_head.weight.device,
+                dtype=original_head.weight.dtype,
+                generator=generator,
+            )
+
+            # Compile once and compare with the original BF16 projection.
+            with torch.inference_mode():
+
+                reference = original_head(test_input)
+                candidate = compiled_head(test_input)
+
+                torch.cuda.synchronize()
+
+                if not torch.isfinite(candidate).all().item():
+                    raise RuntimeError(
+                        "Compiled LM head produced non-finite values."
+                    )
+
+                max_diff = (
+                    reference.float() - candidate.float()
+                ).abs().max().item()
+
+                difference = (
+                    reference.float() - candidate.float()
+                )
+
+                relative_rmse = (
+                    difference.square().mean().sqrt()
+                    / reference.float().square().mean().sqrt().clamp_min(1e-12)
+                ).item()
+
+                reference_token = reference.argmax(dim=-1).item()
+                candidate_token = candidate.argmax(dim=-1).item()
+
+            self.model.model.transformer.ff_out = compiled_head
+
+            print(
+                "[GraspMolmo][LM-HEAD-COMPILE] enabled: True",
+                flush=True,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD-COMPILE] mode: default",
+                flush=True,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD-COMPILE] warmup_max_abs_diff:",
+                f"{max_diff:.6f}",
+                flush=True,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD-COMPILE] warmup_top1_identical:",
+                reference_token == candidate_token,
+                flush=True,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD-COMPILE] weight_mode:",
+                "fp8_weight_only" if lm_head_fp8_enabled else "bf16",
+                flush=True,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD-COMPILE] warmup_relative_rmse:",
+                f"{relative_rmse:.6f}",
+                flush=True,
+            )
+
         self.gen_cfg = GenerationConfig(
             max_new_tokens=256,
             stop_strings="<|endoftext|>",
@@ -649,28 +778,110 @@ class GraspMolmoRuntime:
         t2 = time.perf_counter()
 
         # ---------------------------------------------------------
+        # GRASPMOLMO PROFILING - LM head
+        # ---------------------------------------------------------
+
+        lm_head_profile_enabled = (
+            os.environ.get(
+                "SEEDO_GRASPMOLMO_PROFILE_LM_HEAD", "0"
+            ) == "1"
+        )
+
+        lm_head_events = []
+        lm_head_handles = []
+        lm_head_input_shapes = []
+
+        if lm_head_profile_enabled:
+
+            lm_head = self.model.model.transformer.ff_out
+
+            original_lm_head = getattr(
+                lm_head,
+                "_orig_mod",
+                lm_head,
+            )
+
+            if not isinstance(original_lm_head, torch.nn.Linear):
+                raise RuntimeError(
+                    "LM head profiling requires an nn.Linear output projection."
+                )
+
+            print(
+                "[GraspMolmo][LM-HEAD] weight_shape:",
+                tuple(original_lm_head.weight.shape),
+                flush=True,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] weight_dtype:",
+                original_lm_head.weight.dtype,
+                flush=True,
+            )
+
+            def _lm_head_start(module, args):
+
+                if len(lm_head_input_shapes) < 2:
+                    lm_head_input_shapes.append(
+                        tuple(args[0].shape)
+                    )
+
+                start = torch.cuda.Event(enable_timing=True)
+                start.record()
+
+                lm_head_events.append([start, None])
+
+            def _lm_head_end(module, args, output):
+
+                end = torch.cuda.Event(enable_timing=True)
+                end.record()
+
+                lm_head_events[-1][1] = end
+
+            lm_head_handles.append(
+                lm_head.register_forward_pre_hook(
+                    _lm_head_start
+                )
+            )
+
+            lm_head_handles.append(
+                lm_head.register_forward_hook(
+                    _lm_head_end
+                )
+            )
+
+        # ---------------------------------------------------------
         # GRASPMOLMO PROFILING - Prefill / Decode GPU timing
         # ---------------------------------------------------------
 
+        forward_profile_enabled = (
+            os.environ.get(
+                "SEEDO_GRASPMOLMO_PROFILE_FORWARD", "0"
+            ) == "1"
+        )
+
         forward_events = []
+        pre_handle = None
+        post_handle = None
 
-        def _forward_start(module, args):
-            start = torch.cuda.Event(enable_timing=True)
-            start.record()
-            forward_events.append([start, None])
+        if forward_profile_enabled:
 
-        def _forward_end(module, args, output):
-            end = torch.cuda.Event(enable_timing=True)
-            end.record()
-            forward_events[-1][1] = end
+            def _forward_start(module, args):
+                start = torch.cuda.Event(enable_timing=True)
+                start.record()
+                forward_events.append([start, None])
 
-        pre_handle = self.model.register_forward_pre_hook(
-            _forward_start
-        )
+            def _forward_end(module, args, output):
+                end = torch.cuda.Event(enable_timing=True)
+                end.record()
+                forward_events[-1][1] = end
 
-        post_handle = self.model.register_forward_hook(
-            _forward_end
-        )
+            pre_handle = self.model.register_forward_pre_hook(
+                _forward_start
+            )
+
+            post_handle = self.model.register_forward_hook(
+                _forward_end
+            )
 
         # ---------------------------------------------------------
         # GRASPMOLMO PROFILING - Decoder components
@@ -770,15 +981,23 @@ class GraspMolmoRuntime:
                     tokenizer=self.processor.tokenizer,
                 )
         finally:
-            pre_handle.remove()
-            post_handle.remove()
+            if pre_handle is not None:
+                pre_handle.remove()
+
+            if post_handle is not None:
+                post_handle.remove()
 
             for handle in decoder_handles:
+                handle.remove()
+
+            for handle in lm_head_handles:
                 handle.remove()
 
         torch.cuda.synchronize()
 
         t3 = time.perf_counter()
+
+        forward_times = []
 
         if forward_events:
             forward_times = [
@@ -804,10 +1023,90 @@ class GraspMolmoRuntime:
                 f"{decode_time:.3f} s",
             )
 
-        print(
-            "[GraspMolmo][PROFILE] forward_gpu_total:",
-            f"{sum(forward_times):.3f} s",
-        )
+            print(
+                "[GraspMolmo][PROFILE] forward_gpu_total:",
+                f"{sum(forward_times):.3f} s",
+            )
+
+        # ---------------------------------------------------------
+        # GRASPMOLMO PROFILING - LM head results
+        # ---------------------------------------------------------
+
+        if lm_head_profile_enabled:
+
+            if not lm_head_events:
+                raise RuntimeError(
+                    "LM head profiling enabled but no calls recorded."
+                )
+
+            if any(end is None for _, end in lm_head_events):
+                raise RuntimeError(
+                    "Incomplete LM head profiling events."
+                )
+
+            lm_head_times = [
+                start.elapsed_time(end) / 1000.0
+                for start, end in lm_head_events
+            ]
+
+            lm_head_prefill = lm_head_times[0]
+            lm_head_decode = lm_head_times[1:]
+
+            decode_total = sum(lm_head_decode)
+            decode_calls = len(lm_head_decode)
+
+            mean_decode_ms = (
+                decode_total / decode_calls * 1000.0
+                if decode_calls
+                else 0.0
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] total_calls:",
+                len(lm_head_times),
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] input_shapes_first_two:",
+                lm_head_input_shapes,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] prefill_gpu:",
+                f"{lm_head_prefill:.6f} s",
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] decode_calls:",
+                decode_calls,
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] decode_gpu_total:",
+                f"{decode_total:.6f} s",
+            )
+
+            print(
+                "[GraspMolmo][LM-HEAD] decode_gpu_mean:",
+                f"{mean_decode_ms:.3f} ms/call",
+            )
+
+            if len(forward_times) > 1:
+
+                decode_forward_total = sum(
+                    forward_times[1:]
+                )
+
+                percentage = (
+                    100.0 * decode_total / decode_forward_total
+                    if decode_forward_total > 0
+                    else 0.0
+                )
+
+                print(
+                    "[GraspMolmo][LM-HEAD] decode_share:",
+                    f"{percentage:.2f}%",
+                )
 
         # ---------------------------------------------------------
         # GRASPMOLMO GQA - Optimization diagnostics
