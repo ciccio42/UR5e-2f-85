@@ -137,6 +137,19 @@ motion_layer:
     - 0.010251021036213035
 
   min_step: 0.02
+
+  # true: one MoveIt goal per logical movement segment
+  # false: Cartesian micro-actions using min_step
+  direct_motion:
+    reach: false
+    approaching: false
+    pick: false
+    lift_up: false
+    moving: false
+    placing: false
+    aligning: false
+    inserting: false
+    
   reach_hover_height: 0.18
 
   # Distance before the final grasp pose used for pregrasp.

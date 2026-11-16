@@ -895,6 +895,10 @@ class SeeDoController(AIController):
                 "nut_assembly",
                 {},
             ),
+            direct_motion=motion_config.get(
+                "direct_motion",
+                {},
+            ),
         )
 
         self.pipeline_config = config

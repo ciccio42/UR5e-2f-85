@@ -42,6 +42,7 @@ class SeeDoMotionLayer:
         grasp_depth_offset: float = 0.005,
         retreat_distance: float = 0.04,
         nut_assembly_config: dict[str, Any] | None = None,
+        direct_motion: dict[str, bool] | None = None,
     ) -> None:
         self.grasp_orientation = np.asarray(grasp_orientation, dtype=np.float64)
         if self.grasp_orientation.shape != (4,):
@@ -64,6 +65,47 @@ class SeeDoMotionLayer:
 
         # Nut assembly settings are inspected ONLY for the nut_assembly task.
         self.nut_assembly_config = dict(nut_assembly_config or {})
+
+        # Configurable direct motion for each supported primitive.
+        # Missing flags default to False for backward compatibility.
+        self._active_primitive = None
+
+        direct_motion = (
+            {} if direct_motion is None else direct_motion
+        )
+
+        if not isinstance(direct_motion, dict):
+            raise TypeError("direct_motion must be a dictionary.")
+
+        allowed_primitives = {
+            "reach",
+            "approaching",
+            "pick",
+            "lift_up",
+            "moving",
+            "placing",
+            "aligning",
+            "inserting",
+        }
+
+        unknown = set(direct_motion) - allowed_primitives
+
+        if unknown:
+            raise ValueError(
+                f"Unsupported direct_motion primitives: {sorted(unknown)}"
+            )
+
+        self.direct_motion = {}
+
+        for primitive in allowed_primitives:
+            enabled = direct_motion.get(primitive, False)
+
+            if not isinstance(enabled, bool):
+                raise TypeError(
+                    f"direct_motion.{primitive} must be a boolean."
+                )
+
+            self.direct_motion[primitive] = enabled
         self.task_type = "pick_and_place"
         self._nut_cfg: dict[str, Any] | None = None
 
@@ -1558,24 +1600,30 @@ class SeeDoMotionLayer:
             )
 
         primitive_name = primitive_step.name.strip()
-        if primitive_name == "reach":
-            actions = self._reach(primitive_step, scene_state)
-        elif primitive_name == "approaching":
-            actions = self._approaching(primitive_step, scene_state)
-        elif primitive_name == "pick":
-            actions = self._pick(primitive_step, scene_state)
-        elif primitive_name == "lift_up":
-            actions = self._lift_up(primitive_step, scene_state)
-        elif primitive_name == "moving":
-            actions = self._moving(primitive_step, scene_state)
-        elif primitive_name == "placing":
-            actions = self._placing(primitive_step, scene_state)
-        elif primitive_name == "aligning":
-            actions = self._aligning(primitive_step, scene_state)
-        elif primitive_name == "inserting":
-            actions = self._inserting(primitive_step, scene_state)
-        else:
-            raise ValueError(f"Unsupported SeeDo primitive: {primitive_name!r}.")
+
+        self._active_primitive = primitive_name
+
+        try:
+            if primitive_name == "reach":
+                actions = self._reach(primitive_step, scene_state)
+            elif primitive_name == "approaching":
+                actions = self._approaching(primitive_step, scene_state)
+            elif primitive_name == "pick":
+                actions = self._pick(primitive_step, scene_state)
+            elif primitive_name == "lift_up":
+                actions = self._lift_up(primitive_step, scene_state)
+            elif primitive_name == "moving":
+                actions = self._moving(primitive_step, scene_state)
+            elif primitive_name == "placing":
+                actions = self._placing(primitive_step, scene_state)
+            elif primitive_name == "aligning":
+                actions = self._aligning(primitive_step, scene_state)
+            elif primitive_name == "inserting":
+                actions = self._inserting(primitive_step, scene_state)
+            else:
+                raise ValueError(f"Unsupported SeeDo primitive: {primitive_name!r}.")
+        finally:
+            self._active_primitive = None
 
         self._record_translation(primitive_step=primitive_step, actions=actions)
         return actions
@@ -1592,6 +1640,7 @@ class SeeDoMotionLayer:
         return self._move_linear(
             target_position=target_position,
             target_orientation=self.grasp_orientation,
+            
         )
 
     def _approaching(
@@ -1689,10 +1738,16 @@ class SeeDoMotionLayer:
     def _nut_rotate_at_fixed_tcp(
         self,
         target_orientation,
+        direct: bool | None = None,
     ) -> list[np.ndarray]:
         """
         Rotate the TCP at fixed position using bounded angular increments.
         """
+        if direct is None:
+            direct = self.direct_motion.get(
+                self._active_primitive,
+                False,
+            )
 
         cfg = self._nut_config()
 
@@ -1719,16 +1774,18 @@ class SeeDoMotionLayer:
             * Rotation.from_quat(end_q)
         )
 
-        steps = max(
-            1,
-            int(
-                np.ceil(
-                    np.degrees(
-                        delta.magnitude()
+        steps = (
+            1
+            if direct
+            else max(
+                1,
+                int(
+                    np.ceil(
+                        np.degrees(delta.magnitude())
+                        / cfg["rotation_step_deg"]
                     )
-                    / cfg["rotation_step_deg"]
-                )
-            ),
+                ),
+            )
         )
 
         slerp = Slerp(
@@ -1786,6 +1843,15 @@ class SeeDoMotionLayer:
         Instead, split into ceil(distance / max_step_m) submoves. The
         original waypoint generator, and therefore Pick-and-Place, is unchanged.
         """
+        if self.direct_motion.get(
+            self._active_primitive,
+            False,
+        ):
+            return self._move_linear(
+                target_position=goal,
+                target_orientation=orientation,
+                direct=True,
+            )
         goal = np.asarray(goal, dtype=np.float64)
         orientation = np.asarray(orientation, dtype=np.float64)
         if max_step_m is None:
@@ -1898,6 +1964,7 @@ class SeeDoMotionLayer:
                 target_orientation=(
                     self.current_pose.orientation
                 ),
+                
             )
 
             self._nut_phase = "lifted"
@@ -1932,6 +1999,7 @@ class SeeDoMotionLayer:
         return self._move_linear(
             target_position=target_position,
             target_orientation=self.current_pose.orientation,
+            
         )
 
     def _moving(
@@ -1989,7 +2057,7 @@ class SeeDoMotionLayer:
 
             actions = (
                 self._nut_rotate_at_fixed_tcp(
-                    target_orientation
+                    target_orientation,
                 )
             )
 
@@ -2074,6 +2142,7 @@ class SeeDoMotionLayer:
                         target_orientation=(
                             self.current_pose.orientation
                         ),
+                        
                     )
                 )
 
@@ -2125,6 +2194,7 @@ class SeeDoMotionLayer:
                     target_orientation=(
                         self.current_pose.orientation
                     ),
+                    
                 )
             )
 
@@ -2158,6 +2228,7 @@ class SeeDoMotionLayer:
         return self._move_linear(
             target_position=target_position,
             target_orientation=self.current_pose.orientation,
+            
         )
 
     def _placing(
@@ -2694,16 +2765,40 @@ class SeeDoMotionLayer:
         self,
         target_position,
         target_orientation,
+        direct: bool | None = None,
     ) -> list[np.ndarray]:
+
         if self.current_pose is None:
-            raise RuntimeError("Cannot generate motion without a current pose.")
-        waypoints = build_linear_waypoints(
-            self.current_pose.position,
-            self.current_pose.orientation,
-            target_position,
-            target_orientation,
-            self.min_step,
-        )
+            raise RuntimeError(
+                "Cannot generate motion without a current pose."
+            )
+            
+        if direct is None:
+            direct = self.direct_motion.get(
+                self._active_primitive,
+                False,
+            )
+
+        if direct:
+            waypoints = [
+                GripperPose(
+                    np.asarray(
+                        target_position, dtype=np.float64
+                    ).copy(),
+                    np.asarray(
+                        target_orientation, dtype=np.float64
+                    ).copy(),
+                )
+            ]
+        else:
+            waypoints = build_linear_waypoints(
+                self.current_pose.position,
+                self.current_pose.orientation,
+                target_position,
+                target_orientation,
+                self.min_step,
+            )
+
         actions = [
             self._build_action(
                 position=waypoint.position,
@@ -2712,8 +2807,10 @@ class SeeDoMotionLayer:
             )
             for waypoint in waypoints
         ]
+
         if waypoints:
             self.current_pose = waypoints[-1]
+
         return actions
 
     @staticmethod

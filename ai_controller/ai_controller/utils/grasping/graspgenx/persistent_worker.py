@@ -13,7 +13,7 @@ from pathlib import Path
 from worker import main as worker_main
 
 
-SOCKET_PATH = Path("/tmp/seedo_graspgenx_worker.sock")
+SOCKET_PATH = Path(os.environ.get("SEEDO_GRASPGENX_SOCKET", "/tmp/seedo_graspgenx_worker.sock"))
 MAX_REQUEST_BYTES = 65536
 
 

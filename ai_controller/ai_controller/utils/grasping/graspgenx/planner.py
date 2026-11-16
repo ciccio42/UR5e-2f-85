@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 import subprocess
 import tempfile
@@ -247,14 +248,68 @@ class GraspGenXPlanner(GraspGenXInferenceCore):
             with TIMING.measure(
                 "grasp.geometry_worker"
             ):
-                process = subprocess.run(
-                    cmd,
-                    env=env,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.worker_timeout_s,
-                    check=False,
-                )
+                # Default to persistent geometry when the existing
+                # GraspGenX persistent mode is enabled. Override with
+                # SEEDO_GRASPGENX_GEOMETRY_PERSISTENT=0 for an A/B test.
+                geometry_persistent = os.environ.get(
+                    "SEEDO_GRASPGENX_GEOMETRY_PERSISTENT",
+                    os.environ.get("SEEDO_GRASPGENX_PERSISTENT", "0"),
+                ) == "1"
+
+                if geometry_persistent:
+                    geometry_socket = os.environ.get(
+                        "SEEDO_GRASPGENX_GEOMETRY_SOCKET",
+                        "/tmp/seedo_graspgenx_geometry_worker.sock",
+                    )
+                    request = {
+                        "action": "select",
+                        "input": str(inp),
+                        "output": str(out),
+                        "table_margin_mm": self.table_margin_mm,
+                        "semantic_radius_px": self.geometry_semantic_radius_px,
+                    }
+                    try:
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+                            connection.settimeout(float(self.worker_timeout_s))
+                            connection.connect(geometry_socket)
+                            connection.sendall(
+                                (json.dumps(request) + "\n").encode("utf-8")
+                            )
+                            with connection.makefile("rb") as stream:
+                                raw = stream.readline(1_048_577)
+                        if not raw or len(raw) > 1_048_576 or not raw.endswith(b"\n"):
+                            raise ValueError("Incomplete geometry-worker reply")
+                        response = json.loads(raw.decode("utf-8"))
+                        if not isinstance(response, dict):
+                            raise ValueError("Invalid geometry-worker reply")
+                    except (OSError, ValueError) as exc:
+                        raise RuntimeError(
+                            "Persistent GraspGenX geometry worker communication failed; "
+                            "no unverified grasp will be executed."
+                        ) from exc
+
+                    process = subprocess.CompletedProcess(
+                        args=cmd,
+                        returncode=0 if response.get("ok") is True else 1,
+                        stdout=response.get("stdout", ""),
+                        stderr=str(response.get("error", "")),
+                    )
+                    if response.get("ok") is True:
+                        print(
+                            "[GRASPGENX GEOMETRY] Persistent worker | "
+                            f"pid={response.get('pid')} | "
+                            f"compute={response.get('compute_s', 0.0):.4f}s",
+                            flush=True,
+                        )
+                else:
+                    process = subprocess.run(
+                        cmd,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=self.worker_timeout_s,
+                        check=False,
+                    )
 
             if process.stdout:
                 print(process.stdout, flush=True)

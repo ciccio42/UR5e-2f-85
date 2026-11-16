@@ -5,18 +5,26 @@ PY=/opt/graspgenx_venv/bin/python
 GX_ROOT=/opt/GraspGenX
 REPO=/home/ros2_ws/src/UR5e-2f-85
 PERSIST="$REPO/ai_controller/ai_controller/utils/grasping/graspgenx/persistent_worker.py"
-SOCKET=/tmp/seedo_graspgenx_worker.sock
+SOCKET="${SEEDO_GRASPGENX_SOCKET:-/tmp/seedo_graspgenx_worker.sock}"
+GEOMETRY_SOCKET="${SEEDO_GRASPGENX_GEOMETRY_SOCKET:-/tmp/seedo_graspgenx_geometry_worker.sock}"
+export SEEDO_GRASPGENX_SOCKET="$SOCKET"
+export SEEDO_GRASPGENX_GEOMETRY_SOCKET="$GEOMETRY_SOCKET"
 SERVER_PID=
 WORKER_PID=
+GEOMETRY_PID=
 
 cleanup() {
     trap - EXIT
+    if [[ -n "$GEOMETRY_PID" ]]; then
+        kill "$GEOMETRY_PID" 2>/dev/null || true
+    fi
     if [[ -n "$WORKER_PID" ]]; then
         kill "$WORKER_PID" 2>/dev/null || true
     fi
     if [[ -n "$SERVER_PID" ]]; then
         kill "$SERVER_PID" 2>/dev/null || true
     fi
+    if [[ -n "$GEOMETRY_PID" ]]; then wait "$GEOMETRY_PID" 2>/dev/null || true; fi
     if [[ -n "$WORKER_PID" ]]; then wait "$WORKER_PID" 2>/dev/null || true; fi
     if [[ -n "$SERVER_PID" ]]; then wait "$SERVER_PID" 2>/dev/null || true; fi
 }
@@ -27,7 +35,9 @@ trap 'exit 143' TERM
 for file in "$PY" "$GX_ROOT/client-server/graspgenx_server.py" "$PERSIST"; do
     [[ -f "$file" ]] || { echo "Missing: $file" >&2; exit 1; }
 done
+[[ "$SOCKET" != "$GEOMETRY_SOCKET" ]] || { echo "GPU and geometry socket paths must differ." >&2; exit 1; }
 [[ ! -e "$SOCKET" ]] || { echo "Socket already exists: $SOCKET. Stop the old worker first." >&2; exit 1; }
+[[ ! -e "$GEOMETRY_SOCKET" ]] || { echo "Socket already exists: $GEOMETRY_SOCKET. Stop the old geometry worker first." >&2; exit 1; }
 if python3 - <<'PY'
 import socket, sys
 with socket.socket() as s:
@@ -198,7 +208,38 @@ else
     echo "[WARMUP] Disabled (SEEDO_GRASPGENX_WARMUP=0)."
 fi
 
-echo "[READY] GraspGenX server PID=$SERVER_PID; worker PID=$WORKER_PID"
+# Geometry-selection worker uses the same Python interpreter and
+# runtime_worker.run() as the previous per-request subprocess.
+PYTHONPATH="$REPO/ai_controller" "$PY" -u -m \
+    ai_controller.utils.grasping.graspgenx.geometry_persistent_worker &
+GEOMETRY_PID=$!
+echo "Starting persistent geometry worker (PID=$GEOMETRY_PID)..."
+READY=0
+for ((i=0; i<120; i++)); do
+    kill -0 "$GEOMETRY_PID" 2>/dev/null || { echo "Geometry worker exited during startup." >&2; exit 1; }
+    if [[ -S "$GEOMETRY_SOCKET" ]] && python3 - "$GEOMETRY_SOCKET" <<'PY_GEOMETRY_HEALTH'
+import json, socket, sys
+try:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+        s.settimeout(0.8)
+        s.connect(sys.argv[1])
+        s.sendall(b'{"action":"health"}\n')
+        with s.makefile('rb') as reader:
+            response = json.loads(reader.readline(65536))
+    assert response.get('ok') is True and response.get('status') == 'ready'
+except (OSError, ValueError, AssertionError):
+    sys.exit(1)
+PY_GEOMETRY_HEALTH
+    then
+        READY=1
+        break
+    fi
+    sleep 0.5
+done
+[[ "$READY" -eq 1 ]] || { echo "Geometry worker failed health/readiness check." >&2; exit 1; }
+
+echo "[READY] GraspGenX server PID=$SERVER_PID; worker PID=$WORKER_PID; geometry PID=$GEOMETRY_PID"
 echo "Run SeeDo with SEEDO_GRASPGENX_PERSISTENT=1 in its own process environment."
-echo "Stop both services with Ctrl+C."
-wait -n "$SERVER_PID" "$WORKER_PID"
+echo "Optionally set SEEDO_GRASPGENX_GEOMETRY_PERSISTENT=0 for a legacy-geometry A/B test."
+echo "Stop all services with Ctrl+C."
+wait -n "$SERVER_PID" "$WORKER_PID" "$GEOMETRY_PID"
