@@ -10,6 +10,13 @@ perception_mode: prior_guided
 # - nut_assembly
 prior_guided_task: pick_and_place
 
+# Destination resolution strategy for generalized mode:
+# - ordinal_1d: original baseline, left-to-right ordering
+# - structural_2d: structural matching solution
+#
+# Ignored when perception_mode is prior_guided.
+generalized_destination_resolution: ordinal_1d
+
 grounding_dino:
   # Crop applied only to the image passed to GroundingDINO.
   # VLM discovery, SAM, SAM2, depth and camera geometry keep
@@ -141,14 +148,14 @@ motion_layer:
   # true: one MoveIt goal per logical movement segment
   # false: Cartesian micro-actions using min_step
   direct_motion:
-    reach: false
-    approaching: false
+    reach: true
+    approaching: true
     pick: false
-    lift_up: false
-    moving: false
-    placing: false
-    aligning: false
-    inserting: false
+    lift_up: true
+    moving: true
+    placing: true
+    aligning: true
+    inserting: true
     
   reach_hover_height: 0.18
 

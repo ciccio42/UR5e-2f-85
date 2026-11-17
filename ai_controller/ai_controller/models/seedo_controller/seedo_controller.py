@@ -203,14 +203,14 @@ class SeeDoController(AIController):
                 "destination_ordinal_from_left"
             )
 
-            if self.perception_mode == "generalized":
+            if self.use_structural_matching:
                 destination_ordinal_from_left = None
 
             else:
                 if raw_destination_ordinal is None:
                     raise ValueError(
-                        "Precomputed prior-guided action plan is "
-                        "missing destination_ordinal_from_left."
+                        "Precomputed action plan is missing "
+                        "destination_ordinal_from_left."
                     )
 
                 destination_ordinal_from_left = int(
@@ -429,6 +429,39 @@ class SeeDoController(AIController):
             )
 
         # ---------------------------------------------------------
+        # Generalized destination resolution strategy
+        # ---------------------------------------------------------
+
+        self.generalized_destination_resolution = str(
+            config.get(
+                "generalized_destination_resolution",
+                "structural_2d",
+            )
+        ).strip().lower()
+
+        if self.perception_mode == "generalized":
+
+            allowed_destination_resolutions = {
+                "ordinal_1d",
+                "structural_2d",
+            }
+
+            if (
+                self.generalized_destination_resolution
+                not in allowed_destination_resolutions
+            ):
+                raise ValueError(
+                    "Invalid generalized_destination_resolution: "
+                    f"{self.generalized_destination_resolution!r}. "
+                    "Expected 'ordinal_1d' or 'structural_2d'."
+                )
+
+        self.use_structural_matching = (
+            self.perception_mode == "generalized"
+            and self.generalized_destination_resolution == "structural_2d"
+        )
+
+        # ---------------------------------------------------------
         # Prior-guided task domain
         # ---------------------------------------------------------
 
@@ -554,11 +587,14 @@ class SeeDoController(AIController):
             {},
         )
 
-        self.grasp_planning_enabled = bool(
-            grasp_config.get(
-                "enabled",
-                True,
+        self.grasp_planning_enabled = (
+            bool(
+                grasp_config.get(
+                    "enabled",
+                    True,
+                )
             )
+            and self.use_structural_matching
         )
 
         post_grasp_config = config.get(
@@ -611,6 +647,9 @@ class SeeDoController(AIController):
             ),
             perception_mode=self.perception_mode,
             prior_guided_task=self.prior_guided_task,
+            generalized_destination_resolution=(
+                self.generalized_destination_resolution
+            ),
         )
 
         self.runtime_structured_scene_builder = (
@@ -699,6 +738,9 @@ class SeeDoController(AIController):
                 "gpt-4o-2024-08-06",
             ),
             perception_mode=self.perception_mode,
+            generalized_destination_resolution=(
+                self.generalized_destination_resolution
+            ),
         )
 
         self.workspace_bottom_left = tuple(
@@ -803,6 +845,9 @@ class SeeDoController(AIController):
             ),
             perception_mode=self.perception_mode,
             prior_guided_task=self.prior_guided_task,
+            generalized_destination_resolution=(
+                self.generalized_destination_resolution
+            ),
         )
 
         if self.grasp_planning_enabled:
@@ -1081,7 +1126,7 @@ class SeeDoController(AIController):
         # provides the authoritative mapping:
         #
         # ActionStep -> runtime pick object.
-        if self.perception_mode == "generalized":
+        if self.use_structural_matching:
 
             if self.replicability_result is None:
                 raise RuntimeError(
@@ -3493,7 +3538,7 @@ class SeeDoController(AIController):
                             stage=current_pipeline_stage,
                         )
 
-                if self.perception_mode == "generalized":
+                if self.use_structural_matching:
                     with TIMING.measure(
                         "runtime_structured_scene"
                     ):
@@ -5843,7 +5888,7 @@ class SeeDoController(AIController):
                     )
                 )
 
-                if self.perception_mode == "generalized":
+                if self.use_structural_matching:
 
                     if not precomputed_demo_structured_scene_path:
                         raise ValueError(
@@ -5996,10 +6041,7 @@ class SeeDoController(AIController):
             # GENERALIZED MODE ONLY
             # =========================================================
 
-            if (
-                self.perception_mode
-                == "generalized"
-            ):
+            if self.use_structural_matching:
                 current_pipeline_stage = (
                     "demo_structured_scene_builder"
                 )

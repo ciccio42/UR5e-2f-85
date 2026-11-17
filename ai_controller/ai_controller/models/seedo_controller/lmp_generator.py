@@ -13,6 +13,7 @@ from shapely.geometry import *
 from shapely.affinity import *
 
 from results import (
+    ActionStep,
     ActionPlanningResult,
     PrimitivePlan,
     PrimitiveStep,
@@ -310,6 +311,114 @@ class LMPSceneWrapper:
         return self._objects_by_id[obj_name]
 
 
+
+    def resolve_action_step(
+        self,
+        step: ActionStep,
+    ) -> tuple[str, str]:
+        """
+        Resolve an ActionStep against the runtime SceneState.
+
+        Returns:
+            (picked_object_id, destination_object_id)
+        """
+
+        def normalize(value) -> str:
+            return str(
+                value if value is not None else ""
+            ).strip().casefold()
+
+        picked_label = normalize(
+            step.picked_detector_label
+        )
+
+        destination_category = normalize(
+            step.destination_category
+        )
+
+        if not picked_label:
+            raise ValueError(
+                "ActionStep is missing picked_detector_label. "
+                "Regenerate the legacy action plan."
+            )
+
+        if not destination_category:
+            raise ValueError(
+                "ActionStep is missing destination_category."
+            )
+
+        # --------------------------------------------------
+        # Resolve the object to pick using its detector label.
+        # --------------------------------------------------
+
+        pick_candidates = [
+            obj
+            for obj in self.scene_state.objects
+            if normalize(obj.label) == picked_label
+        ]
+
+        if len(pick_candidates) != 1:
+            raise ValueError(
+                "Cannot uniquely resolve picked object: "
+                f"label={picked_label!r}, "
+                f"matches={[obj.object_id for obj in pick_candidates]}"
+            )
+
+        picked_object = pick_candidates[0]
+
+        # --------------------------------------------------
+        # Resolve the destination
+        # --------------------------------------------------
+
+        destination_candidates = [
+            obj
+            for obj in self.scene_state.objects
+            if normalize(obj.category) == destination_category
+        ]
+
+        ordinal = step.destination_ordinal_from_left
+
+        if not 1 <= ordinal <= len(destination_candidates):
+            raise ValueError(
+                "Invalid destination ordinal: "
+                f"category={destination_category!r}, "
+                f"ordinal={ordinal}, "
+                f"available={len(destination_candidates)}"
+            )
+
+        # Canonical front-view ordering: image X, not base_link X.
+        ordered_destinations = sorted(
+            destination_candidates,
+            key=lambda obj: obj.pixel_coordinates[0],
+        )
+
+        x_coordinates = [
+            obj.pixel_coordinates[0]
+            for obj in ordered_destinations
+        ]
+
+        if len(x_coordinates) != len(set(x_coordinates)):
+            raise ValueError(
+                "Ambiguous destination ordering: "
+                "multiple objects share the same image X coordinate."
+            )
+
+        destination_object = ordered_destinations[
+            ordinal - 1
+        ]
+
+        if picked_object.object_id == destination_object.object_id:
+            raise ValueError(
+                "Picked object and destination resolve "
+                "to the same SceneObject."
+            )
+
+        return (
+            picked_object.object_id,
+            destination_object.object_id,
+        )
+
+
     def _record_primitive(
         self,
         name: str,
@@ -406,6 +515,7 @@ class LMPGenerator:
         self,
         model: str = "gpt-3.5-turbo",
         perception_mode: str = "generalized",
+        generalized_destination_resolution: str = "structural_2d",
     ) -> None:
         self.model = model
         self.client = OpenAI()
@@ -422,6 +532,21 @@ class LMPGenerator:
                 "Invalid perception_mode: "
                 f"{self.perception_mode!r}"
             )
+
+        self.generalized_destination_resolution = str(
+            generalized_destination_resolution
+        ).strip().lower()
+
+        if self.perception_mode == "generalized":
+
+            if self.generalized_destination_resolution not in {
+                "ordinal_1d",
+                "structural_2d",
+            }:
+                raise ValueError(
+                    "Invalid generalized_destination_resolution: "
+                    f"{self.generalized_destination_resolution!r}"
+                )
 
     def run(
         self,
@@ -466,7 +591,51 @@ class LMPGenerator:
             f"objects = {wrapper.get_obj_names()}"
         )
 
-        if self.perception_mode == "generalized":
+        # ---------------------------------------------------------
+        # Generalized Baseline: original 1D ordinal resolution
+        # ---------------------------------------------------------
+
+        if (
+            self.perception_mode == "generalized"
+            and self.generalized_destination_resolution == "ordinal_1d"
+        ):
+
+            resolved_actions = []
+
+            for step in action_plan.steps:
+
+                picked_id, destination_id = (
+                    wrapper.resolve_action_step(step)
+                )
+
+                if task_type == TaskType.PICK_AND_PLACE:
+                    resolved_action = (
+                        f"Pick {picked_id!r} and place it "
+                        f"{step.relation} {destination_id!r}."
+                    )
+
+                elif task_type == TaskType.NUT_ASSEMBLY:
+                    resolved_action = (
+                        f"Pick {picked_id!r} and assemble it "
+                        f"onto {destination_id!r}."
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Unsupported task type: {task_type!r}"
+                    )
+
+                resolved_actions.append(resolved_action)
+
+            lmp_instruction = " and then ".join(
+                resolved_actions
+            )
+
+        # ---------------------------------------------------------
+        # Generalized Solution: original structural matching
+        # ---------------------------------------------------------
+
+        elif self.perception_mode == "generalized":
 
             if replicability_result is None:
                 raise ValueError(

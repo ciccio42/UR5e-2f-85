@@ -1844,7 +1844,7 @@ class AIControllerNode(Node):
                                 / "action_plan.json"
                             ]
 
-                            if self.controller.perception_mode == "generalized":
+                            if self.controller.use_structural_matching:
                                 required_files.append(
                                     artifacts_dir
                                     / "demo_structured_scene"

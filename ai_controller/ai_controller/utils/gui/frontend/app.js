@@ -583,7 +583,8 @@ function renderPreview(preview) {
         preview;
 
     applyPipelineMode(
-        preview.perception_mode
+        preview.perception_mode,
+        preview.generalized_destination_resolution,
     );
 
     elements.previewStatus.textContent =
@@ -608,7 +609,9 @@ function renderPreview(preview) {
         preview.execution_type;
 
     elements.previewPerception.textContent =
-        preview.perception_mode;
+        preview.perception_mode === "generalized"
+            ? `generalized (${preview.generalized_destination_resolution})`
+            : preview.perception_mode;
 
     elements.previewCommand.textContent =
         preview.shell_command;
@@ -691,9 +694,13 @@ function getPipelineStage(stageName) {
 }
 
 
-function applyPipelineMode(perceptionMode) {
+function applyPipelineMode(
+    perceptionMode,
+    destinationResolution = "structural_2d",
+) {
     const generalized =
-        perceptionMode === "generalized";
+        perceptionMode === "generalized"
+        && destinationResolution === "structural_2d";
 
     document
         .querySelectorAll(
@@ -837,9 +844,10 @@ function resetPipelineMonitor() {
     );
 
     applyPipelineMode(
-        dashboardState.preview
-            ?.perception_mode
-        ?? "generalized"
+        dashboardState.preview?.perception_mode
+            ?? "generalized",
+        dashboardState.preview?.generalized_destination_resolution
+            ?? "structural_2d",
     );
 }
 
@@ -847,11 +855,14 @@ function resetPipelineMonitor() {
 function updatePipelineLinks() {
     const generalized =
         (
-            dashboardState.preview
-                ?.perception_mode
+            dashboardState.preview?.perception_mode
             ?? "generalized"
-        )
-        === "generalized";
+        ) === "generalized"
+        &&
+        (
+            dashboardState.preview?.generalized_destination_resolution
+            ?? "structural_2d"
+        ) === "structural_2d";
 
     document
         .querySelectorAll(
@@ -1042,9 +1053,23 @@ function handlePipelineEvent(event) {
         const precomputedDemoStages = [
             "keyframe_selector",
             "visual_prompter",
-            "demo_structured_scene_builder",
-            "action_planner",
         ];
+
+        if (
+            dashboardState.preview?.perception_mode
+                === "generalized"
+            &&
+            dashboardState.preview?.generalized_destination_resolution
+                === "structural_2d"
+        ) {
+            precomputedDemoStages.push(
+                "demo_structured_scene_builder"
+            );
+        }
+
+        precomputedDemoStages.push(
+            "action_planner"
+        );
 
         for (
             const stage

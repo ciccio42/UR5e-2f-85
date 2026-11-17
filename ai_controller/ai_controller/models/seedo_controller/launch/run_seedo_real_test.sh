@@ -411,6 +411,40 @@ fi
 PERCEPTION_MODE="$(read_perception_mode "${CONFIG_PATH}")" \
     || fail "Could not read a supported top-level perception_mode from: ${CONFIG_PATH}"
 
+GENERALIZED_DESTINATION_RESOLUTION="$(
+    awk '
+        /^[[:space:]]*generalized_destination_resolution[[:space:]]*:/ {
+            line = $0
+            sub(/^[^:]*:[[:space:]]*/, "", line)
+            sub(/[[:space:]]*#.*/, "", line)
+            gsub(/[[:space:]\047\042]/, "", line)
+            print tolower(line)
+            exit
+        }
+    ' "${CONFIG_PATH}"
+)"
+
+GENERALIZED_DESTINATION_RESOLUTION="${GENERALIZED_DESTINATION_RESOLUTION:-structural_2d}"
+
+USE_STRUCTURAL_MATCHING=false
+
+if [[ "${PERCEPTION_MODE}" == "generalized" ]]; then
+
+    case "${GENERALIZED_DESTINATION_RESOLUTION}" in
+        ordinal_1d|structural_2d)
+            ;;
+        *)
+            fail "Invalid generalized_destination_resolution: ${GENERALIZED_DESTINATION_RESOLUTION}"
+            ;;
+    esac
+
+    if [[ "${GENERALIZED_DESTINATION_RESOLUTION}" == "structural_2d" ]]; then
+        USE_STRUCTURAL_MATCHING=true
+    fi
+
+else
+    GENERALIZED_DESTINATION_RESOLUTION="not_applicable"
+fi
 
 echo "[PASS] SeeDo configuration found:"
 echo "       ${CONFIG_PATH}"
@@ -511,7 +545,7 @@ if [[ -n "${PRECOMPUTED_PLAN}" ]]; then
         fail "Precomputed action plan not found: ${PRECOMPUTED_PLAN}"
     fi
 
-    if [[ "${PERCEPTION_MODE}" == "generalized" ]]; then
+    if [[ "${USE_STRUCTURAL_MATCHING}" == true ]]; then
 
         if [[ -z "${PRECOMPUTED_DEMO_SCENE}" ]]; then
             fail \
@@ -756,6 +790,7 @@ cat > "${RUN_DIR}/run_status.json" <<EOF_STATUS
     "demo_path": "${DEMO_PATH}",
     "config_path": "${CONFIG_PATH}",
     "perception_mode": "${PERCEPTION_MODE}",
+    "generalized_destination_resolution": "${GENERALIZED_DESTINATION_RESOLUTION}",
     "precomputed_mode": ${PRECOMPUTED_MODE},
     "demo_only": ${DEMO_ONLY},
     "precomputed_action_plan": "${PRECOMPUTED_PLAN}",

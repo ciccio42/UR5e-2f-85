@@ -191,6 +191,32 @@ def _read_perception_mode(
 
     return perception_mode
 
+def _read_generalized_destination_resolution(
+    config_path: Path,
+) -> str:
+    with config_path.open(
+        "r",
+        encoding="utf-8",
+    ) as file:
+        config = yaml.safe_load(file) or {}
+
+    resolution = str(
+        config.get(
+            "generalized_destination_resolution",
+            "structural_2d",
+        )
+    ).strip().lower()
+
+    if resolution not in {
+        "ordinal_1d",
+        "structural_2d",
+    }:
+        raise ValueError(
+            "Unsupported generalized_destination_resolution: "
+            f"{resolution!r}"
+        )
+
+    return resolution
 
 def _validate_file(
     path_string: str,
@@ -307,6 +333,19 @@ def build_experiment_command(
         config_path
     )
 
+    destination_resolution = (
+        _read_generalized_destination_resolution(
+            config_path
+        )
+        if perception_mode == "generalized"
+        else None
+    )
+
+    use_structural_matching = (
+        perception_mode == "generalized"
+        and destination_resolution == "structural_2d"
+    )
+
     demo_path = _resolve_demo_path(
         request
     )
@@ -334,11 +373,11 @@ def build_experiment_command(
         )
 
         if (
-            perception_mode == "generalized"
+            use_structural_matching
             and request.precomputed_demo_scene is None
         ):
             raise ValueError(
-                "Generalized precomputed execution "
+                "Generalized structural_2d precomputed execution "
                 "requires a demonstration structured scene."
             )
 
@@ -430,6 +469,7 @@ def build_experiment_command(
         "execution_type": request.execution_type,
         "config": str(config_path),
         "perception_mode": perception_mode,
+        "generalized_destination_resolution": destination_resolution,
         "demo_variant": request.demo_variant,
         "demo_path": str(demo_path),
         "launcher": str(launcher),

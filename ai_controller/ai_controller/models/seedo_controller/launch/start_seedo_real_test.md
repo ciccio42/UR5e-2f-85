@@ -252,8 +252,8 @@ export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
 
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
   --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/seedo_controller.yaml \
-  --precomputed-plan /test_real/test_task08_1/action_planning/action_plan.json \
-  --precomputed-demo-scene /test_real/test_task08_1/demo_structured_scene/demo_structured_scene.json
+  --precomputed-plan /test_real/test_task03_1/action_planning/action_plan.json \
+  --precomputed-demo-scene /test_real/test_task03_1/demo_structured_scene/demo_structured_scene.json
 
 # DEMO ONLY SOLUTION
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
@@ -272,7 +272,7 @@ export SEEDO_GRASPGENX_PERSISTENT=1
 export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
 
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
-  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml
 
 # PRECOMPUTED INFERENCE EXPERIMENTS
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
@@ -281,8 +281,8 @@ export SEEDO_GRASPGENX_PERSISTENT=1
 export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
 
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
-  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml \
-  --precomputed-plan /test_real/test_task08_1/action_planning/action_plan.json
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml \
+  --precomputed-plan /test_real/test_task03_1/action_planning/action_plan.json
 
 # DEMO ONLY EXPERIMENTS
 unset SEEDO_ISAAC_GRASP_Z_OFFSET_M
@@ -291,7 +291,7 @@ export SEEDO_GRASPGENX_PERSISTENT=1
 export SEEDO_GRASPGENX_SOCKET=/tmp/seedo_graspgenx_worker.sock
 
 bash /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/launch/run_seedo_real_test.sh \
-  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_nut_assembly.yaml \
+  --config /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/models/seedo_controller/config/experiments/baseline_prior_guided_pick_place.yaml \
   --demo-only
 
 # GUI LAUNCH

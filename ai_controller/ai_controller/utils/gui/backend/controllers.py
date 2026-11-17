@@ -44,6 +44,17 @@ SEEDO_CONFIG = (
     / "seedo_controller.yaml"
 )
 
+# SEEDO_CONFIG = (
+#     REPO_ROOT
+#     / "ai_controller"
+#     / "ai_controller"
+#     / "models"
+#     / "seedo_controller"
+#     / "config"
+#     / "experiments"
+#     / "baseline_prior_guided_pick_place.yaml"
+# )
+
 
 CONTROLLERS: dict[str, ControllerDefinition] = {
     "seedo": ControllerDefinition(

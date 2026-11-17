@@ -111,6 +111,11 @@ class ProcessManager:
 
         FRONT_CAMERA_STREAM.discard_recording()
 
+        # Initialize the ROS 2 camera subscriber before
+        # starting the experiment, so the camera is already
+        # streaming when robot execution begins.
+        FRONT_CAMERA_STREAM.start()
+
         env = os.environ.copy()
 
         # Enabled ONLY for processes launched

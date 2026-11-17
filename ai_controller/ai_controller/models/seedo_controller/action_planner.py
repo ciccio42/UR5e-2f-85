@@ -13,6 +13,7 @@ class ActionPlanner:
         demonstration_bin_order: str = "left_to_right",
         perception_mode: str = "generalized",
         prior_guided_task: str | None = None,
+        generalized_destination_resolution: str = "structural_2d",
     ) -> None:
         self.model = model
 
@@ -43,6 +44,20 @@ class ActionPlanner:
         else:
 
             self.prior_guided_task = None
+
+        self.generalized_destination_resolution = str(
+            generalized_destination_resolution
+        ).strip().lower()
+
+        if self.perception_mode == "generalized":
+            if self.generalized_destination_resolution not in {
+                "ordinal_1d",
+                "structural_2d",
+            }:
+                raise ValueError(
+                    "Invalid generalized_destination_resolution: "
+                    f"{self.generalized_destination_resolution!r}"
+                )
 
         self.demonstration_bin_order = (
             str(demonstration_bin_order)
@@ -135,6 +150,7 @@ class ActionPlanner:
             demonstration_bin_order=self.demonstration_bin_order,
             perception_mode=self.perception_mode,
             prior_guided_task=self.prior_guided_task,
+            generalized_destination_resolution=self.generalized_destination_resolution,
         )
 
         if result is None:
