@@ -198,15 +198,80 @@ class SeeDoController(AIController):
 
         action_steps_list: list[ActionStep] = []
 
-        for step in raw_steps:
+        for step_index, step in enumerate(raw_steps):
+
             raw_destination_ordinal = step.get(
                 "destination_ordinal_from_left"
             )
 
+            raw_grasp_instruction = step.get(
+                "grasp_instruction"
+            )
+
+            has_grasp_instruction = (
+                isinstance(raw_grasp_instruction, str)
+                and bool(raw_grasp_instruction.strip())
+            )
+
+            # ---------------------------------------------------------
+            # Generalized Solution: structural_2d
+            # ---------------------------------------------------------
+
             if self.use_structural_matching:
+
+                if raw_destination_ordinal is not None:
+                    raise ValueError(
+                        f"Precomputed ActionStep {step_index} is "
+                        "incompatible with structural_2d: "
+                        "destination_ordinal_from_left must be null."
+                    )
+
+                if not has_grasp_instruction:
+                    raise ValueError(
+                        f"Precomputed ActionStep {step_index} is "
+                        "incompatible with structural_2d: "
+                        "grasp_instruction is missing or empty."
+                    )
+
                 destination_ordinal_from_left = None
 
+            # ---------------------------------------------------------
+            # Generalized Baseline: ordinal_1d
+            # ---------------------------------------------------------
+
+            elif self.perception_mode == "generalized":
+
+                if raw_destination_ordinal is None:
+                    raise ValueError(
+                        f"Precomputed ActionStep {step_index} is "
+                        "incompatible with ordinal_1d: "
+                        "destination_ordinal_from_left is missing."
+                    )
+
+                if has_grasp_instruction:
+                    raise ValueError(
+                        f"Precomputed ActionStep {step_index} is "
+                        "incompatible with ordinal_1d: "
+                        "unexpected grasp_instruction."
+                    )
+
+                destination_ordinal_from_left = int(
+                    raw_destination_ordinal
+                )
+
+                if destination_ordinal_from_left < 1:
+                    raise ValueError(
+                        f"Precomputed ActionStep {step_index}: "
+                        "destination_ordinal_from_left "
+                        "must be a positive integer."
+                    )
+
+            # ---------------------------------------------------------
+            # Prior-Guided: preserve existing behavior
+            # ---------------------------------------------------------
+
             else:
+
                 if raw_destination_ordinal is None:
                     raise ValueError(
                         "Precomputed action plan is missing "
