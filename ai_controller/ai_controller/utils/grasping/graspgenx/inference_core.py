@@ -547,6 +547,14 @@ class GraspGenXInferenceCore:
             np.float32
         )
 
+        print(
+            "[GRASPGENX REQUEST] "
+            f"N={len(target_point_cloud_base)} | "
+            f"point_cloud_bytes={target_point_cloud_base.nbytes} | "
+            f"shape={target_point_cloud_base.shape}",
+            flush=True,
+        )
+
         (
             grasps_base,
             confidences,

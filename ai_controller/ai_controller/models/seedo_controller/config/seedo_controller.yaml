@@ -145,13 +145,13 @@ motion_layer:
   # false: Cartesian micro-actions using min_step
   direct_motion:
     reach: true
-    approaching: true
+    approaching: false
     pick: false
     lift_up: true
     moving: true
     placing: true
-    aligning: true
-    inserting: true
+    aligning: false
+    inserting: false
 
   reach_hover_height: 0.18
 
@@ -167,7 +167,7 @@ motion_layer:
 
   approach_z_offset: 0.0
   release_height_offset: 0.10
-  lift_height: 0.15
+  lift_height: 0.25
 
   gripper_open_position: 0.1
   gripper_closed_position: 0.8
