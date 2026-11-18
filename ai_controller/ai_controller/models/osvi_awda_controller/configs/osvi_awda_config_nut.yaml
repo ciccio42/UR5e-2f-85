@@ -34,6 +34,7 @@ projection:
   output_frame: "base_link"
 
 control:
+  direct_grasp_offset_xyz: [0.0, 0.0, 0.0]
   orientation_mode: "fixed_top_down"
   fixed_orientation_xyzw:
     - 0.9994452044624775
@@ -89,7 +90,7 @@ grasp_refinement:
   # MODIFICATI
   depth_edge_close_kernel_px: 15
   depth_edge_close_iterations: 2
-  depth_edge_min_contour_area_px: 10
+  depth_edge_min_contour_area_px: 13
 
   # ROI DEPTH
   depth_ignore_margins_px:
@@ -100,7 +101,7 @@ grasp_refinement:
 
   depth_crop_left_px: 285
   depth_crop_right_px: 500
-  depth_crop_top_px: 150
+  depth_crop_top_px: 170
 
 insert_refinement:
   enabled: true
@@ -126,7 +127,7 @@ insert_refinement:
 
   # Validazione
   max_projection_error_m: 0.005
-  max_wp5_correction_m: 0.10
+  max_wp5_correction_m: 0.15
 
 safety:
   clamp_workspace: true

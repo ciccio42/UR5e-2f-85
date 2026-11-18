@@ -183,17 +183,6 @@ class AIControllerNode(Node):
                 self.model_config_path,
                 self.task_name
             )
-
-        elif self.ai_controller_target == 'osvi_awda_nut_controller':
-            from ai_controller.models.osvi_awda_controller.osvi_awda_nut_controller import OSVIAWDAController as OSVIAWDANutController
-
-            self.task_name = 'nut_assembly'
-            self.demo_path = '/dataset/nut_assembly/nut_assembly_demo'
-
-            self.controller = OSVIAWDANutController(
-                self.model_config_path,
-                self.task_name
-            )
         elif self.ai_controller_target == 'vla_jepa_controller':
             # VLAJEPAController itself needs lerobot/transformers/scipy, which
             # require numpy>=2 - incompatible with cv_bridge's numpy<2 compiled
@@ -301,7 +290,7 @@ class AIControllerNode(Node):
             )
             self.camera_sync.registerCallback(self.synced_images_callback)
 
-            if self.ai_controller_target in ('osvi_awda_controller', 'osvi_awda_nut_controller'):
+            if self.ai_controller_target == 'osvi_awda_controller':
                 self._fetch_gripper_camera_info()
 
         self.traj_cnt = 0
@@ -1019,7 +1008,7 @@ class AIControllerNode(Node):
                         states = self._build_openvla_state(robot_state)
                     elif self.ai_controller_target == 'tinyvla_controller':
                         states = self._build_tinyvla_state(robot_state)
-                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller', 'osvi_awda_nut_controller'):
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
                         states = robot_state
                     elif self.ai_controller_target == 'vla_jepa_controller':
                         states = self._build_vla_jepa_state(robot_state)
@@ -1035,10 +1024,7 @@ class AIControllerNode(Node):
                     depth_data = None
                     front_depth_m = None
 
-                    if self.ai_controller_target in (
-                        'osvi_awda_controller',
-                        'osvi_awda_nut_controller'
-                    ):
+                    if self.ai_controller_target == 'osvi_awda_controller':
                         # GRASP REFINEMENT - invariato
                         depth_data = {
                             'image': self.latest_synced_depths.get('camera_gripper_depth'),
@@ -1047,7 +1033,14 @@ class AIControllerNode(Node):
                             'transform': self._lookup_gripper_depth_transform(),
                         }
 
-                    if self.ai_controller_target == 'osvi_awda_nut_controller':
+                    if (
+                        self.ai_controller_target == 'osvi_awda_controller'
+                        and bool(
+                            self.controller.cfg.insert_refinement.get(
+                                'enabled', False
+                            )
+                        )
+                    ):
 
                         # INSERT REFINEMENT - depth frontale completa
                         front_depth = self.latest_synced_depths.get(
@@ -1083,7 +1076,7 @@ class AIControllerNode(Node):
                                                         input_data=[images, states],
                                                         t=step,
                                                         save_path=step_save_path)
-                    elif self.ai_controller_target == 'osvi_awda_nut_controller':
+                    elif self.ai_controller_target == 'osvi_awda_controller':
                         out = self.controller.inference(
                             input_data=[
                                 images,
@@ -1104,7 +1097,7 @@ class AIControllerNode(Node):
                     if self.ai_controller_target == 'cod_controller':
                         pred_action, predicted_bb, target_obj_prediction = out
                         actions = [pred_action]
-                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller', 'osvi_awda_nut_controller', 'vla_jepa_controller'):
+                    elif self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller', 'vla_jepa_controller'):
                         actions = [np.asarray(action, dtype=np.float64) for action in out]
                     elif self.ai_controller_target in ('openvla_controller', 'tinyvla_controller'):
                         actions = out
@@ -1121,8 +1114,7 @@ class AIControllerNode(Node):
                             actions[i] = new_action
                     is_osvi = self.ai_controller_target in (
                         'osvi_controller',
-                        'osvi_awda_controller',
-                        'osvi_awda_nut_controller'
+                        'osvi_awda_controller'
                     )
 
                     # ------------------------------------------------------------
@@ -1268,7 +1260,7 @@ class AIControllerNode(Node):
                             rclpy.spin_until_future_complete(self, future)
                             self._raise_if_esc_pressed()
 
-                            if self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller', 'osvi_awda_nut_controller'):
+                            if self.ai_controller_target in ('osvi_controller', 'osvi_awda_controller'):
                                 goal_handle = future.result()
                                 if goal_handle is None or not goal_handle.accepted:
                                     self.get_logger().error('Gripper goal was rejected.')

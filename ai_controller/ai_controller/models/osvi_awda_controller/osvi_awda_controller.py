@@ -108,6 +108,7 @@ class OSVIAWDAConfig:
     grasp_refinement: dict = field(default_factory=dict)
     safety: dict = field(default_factory=dict)
     debug: dict = field(default_factory=dict)
+    insert_refinement: dict = field(default_factory=dict)
 
 
 class OSVIAWDAController(AIController):
@@ -118,7 +119,7 @@ class OSVIAWDAController(AIController):
     so each integration stage can be tested before robot motion is enabled.
     """
 
-    def __init__(self, model_config: str, task_name: str = "pick_place"):
+    def __init__(self, model_config: str, task_name: str = "nut_assembly"):
         self.task_name = task_name
         self.cfg: Optional[OSVIAWDAConfig] = None
         self.config_dir: Optional[Path] = None
@@ -148,6 +149,7 @@ class OSVIAWDAController(AIController):
         # CODController). _depth_camera_matrix/_depth_camera_info_size keep
         # their names so _scaled_depth_camera_matrix() needs no changes.
         self._current_depth_data = None
+        self._current_front_depth = None
         self._current_gripper_rgb = None
         self._depth_camera_matrix = None
         self._depth_camera_info_size = None
@@ -663,9 +665,21 @@ class OSVIAWDAController(AIController):
 
         target = coarse_action[:3].copy()
 
-        target[2]-=0.04
-        target[1]-=0.005
-        target[0]-=0.005
+        offset_xyz = np.asarray(
+            self.cfg.control.get(
+                "direct_grasp_offset_xyz",
+                [0.0, 0.0, 0.0]
+            ),
+            dtype=np.float64
+        )
+
+        if offset_xyz.shape != (3,) or not np.isfinite(offset_xyz).all():
+            raise ValueError(
+                "control.direct_grasp_offset_xyz must contain "
+                "three finite values [x, y, z]"
+            )
+
+        target += offset_xyz
 
         target = self._apply_workspace_safety(target)
 
@@ -1194,7 +1208,7 @@ class OSVIAWDAController(AIController):
 
         Pipeline:
             metric depth
-            -> horizontal ROI crop
+            -> horizontal + top ROI crop
             -> fixed-range grayscale normalization
             -> Gaussian blur
             -> Canny edge detection
@@ -1292,6 +1306,10 @@ class OSVIAWDAController(AIController):
             )
         )
 
+        crop_top = int(
+            refine_cfg.get("depth_crop_top_px", 0)
+        )
+
         # Gaussian and morphology kernels must be positive and odd.
         blur_kernel = max(
             1,
@@ -1337,9 +1355,20 @@ class OSVIAWDAController(AIController):
             )
         )
 
-        # crop_right is considered INCLUSIVE.
+        # # crop_right is considered INCLUSIVE.
+        # depth_m = depth_full_m[
+        #     :,
+        #     crop_left:crop_right + 1,
+        # ]
+
+        # Ritaglio superiore
+        crop_top = int(
+            np.clip(crop_top, 0, full_height - 1)
+        )
+
+        # Ritaglio orizzontale e verticale
         depth_m = depth_full_m[
-            :,
+            crop_top:,
             crop_left:crop_right + 1,
         ]
 
@@ -1683,13 +1712,24 @@ class OSVIAWDAController(AIController):
             )
         )
 
-        v = int(
+        # v = int(
+        #     np.clip(
+        #         round(best_centroid[1]),
+        #         0,
+        #         height - 1,
+        #     )
+        # )
+
+        v_crop = int(
             np.clip(
                 round(best_centroid[1]),
                 0,
                 height - 1,
             )
         )
+
+        # Ripristina la coordinata rispetto alla depth originale
+        v = crop_top + v_crop
 
         # Reintroduce horizontal crop offset.
         u = crop_left + u_crop
@@ -1713,6 +1753,7 @@ class OSVIAWDAController(AIController):
                 best_centroid=best_centroid,
                 best_depth=best_depth,
                 best_rect=best_rect,
+                crop_top=crop_top,
             )
         )
 
@@ -1800,6 +1841,11 @@ class OSVIAWDAController(AIController):
         # Optional payload: callers such as offline tests may provide only
         # (images, robot_state).
         self._current_depth_data = input_data[2] if len(input_data) > 2 else None
+        # A separate, full-resolution front-camera depth frame.  Keeping
+        # this at index 3 preserves the existing wrist-depth contract.
+        self._current_front_depth = input_data[3] if len(input_data) > 3 else None
+        if self._current_front_depth is None and isinstance(self._current_depth_data, dict):
+            self._current_front_depth = self._current_depth_data.get("front_image")
 
         gripper_index = int(self.cfg.grasp_refinement.get("gripper_camera_index", 3))
         self._current_gripper_rgb = (
@@ -1849,6 +1895,220 @@ class OSVIAWDAController(AIController):
             "live_frame": live_frame,
             "model_frame": model_frame,
         }
+
+    def _insert_refine_base_waypoints(self, original_base, image_waypoints, t, save_path):
+        """Refine WP3/4 X and WP5 XYZ from full front depth before primitive expansion.
+
+        Candidate contours are ranked by Euclidean distance in base_link from
+        original WP5.  Grasp refinement (wrist depth) is completely independent.
+        """
+        cfg = self.cfg.insert_refinement or {}
+        base = np.asarray(original_base, dtype=np.float64).copy()
+        if not bool(cfg.get("enabled", False)):
+            return base, {"status": "disabled"}
+
+        result = {
+            "status": "skipped", "applied": False,
+            "original_base_waypoints": base.tolist(),
+            "original_wp5_xyz": base[4, :3].tolist(),
+        }
+        out_dir = None
+        if save_path is not None:
+            out_dir = Path(save_path) / f"insert_refinement_t{t:03d}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+        def save(name, img):
+            if out_dir is not None:
+                cv2.imwrite(str(out_dir / name), img)
+
+        def save_result():
+            if out_dir is not None:
+                with (out_dir / "results.json").open("w", encoding="utf-8") as fh:
+                    json.dump(result, fh, indent=2)
+
+        depth = self._current_front_depth
+        if isinstance(depth, dict):
+            depth = depth.get("image")
+        if depth is None:
+            result["reason"] = "full-resolution front depth was not passed in input_data[3]"
+            print("[INSERT REFINEMENT] " + result["reason"])
+            save_result()
+            return base, result
+
+        try:
+            depth = np.asarray(depth, dtype=np.float64).squeeze()
+            if depth.ndim != 2:
+                raise ValueError(f"expected HxW front depth, got {depth.shape}")
+            H, W = depth.shape
+            if base.shape != (5, 4) or np.asarray(image_waypoints).shape != (5, 4):
+                raise ValueError("expected exactly five waypoints")
+
+            # Load the same front calibration as AWDA and verify source dimensions.
+            with self.projection_matrix_path.open("r", encoding="utf-8") as fh:
+                proj_yaml = yaml.safe_load(fh) or {}
+            calib = proj_yaml["camera"]
+            if (H, W) != (int(calib["image_height"]), int(calib["image_width"])):
+                raise ValueError(f"depth {W}x{H} != calibration image "
+                                 f"{calib['image_width']}x{calib['image_height']}")
+            crop = list(self.cfg.image.get("crop", [0, 0, 0, 0]))
+            top, bottom, left, right = map(int, crop)
+            cw, ch = W-left-right, H-top-bottom
+            if cw <= 1 or ch <= 1:
+                raise ValueError(f"invalid model crop {crop} for image {W}x{H}")
+
+            wp = np.asarray(image_waypoints, dtype=np.float64)[4]
+            wx = left + (wp[0]+1.0)*0.5*(cw-1)
+            wy = top + (1.0-wp[1])*0.5*(ch-1)
+            if not (0 <= wx < W and 0 <= wy < H):
+                raise ValueError(f"WP5 pixel ({wx:.1f},{wy:.1f}) outside full image")
+
+            P = self.projection_matrix_numpy.astype(np.float64)
+            wp_check = P @ np.array([wp[0]*wp[2], wp[1]*wp[2], wp[2], 1.0])
+            projection_error = float(np.linalg.norm(wp_check[:3]-base[4, :3]))
+            if projection_error > float(cfg.get("max_projection_error_m", 0.005)):
+                raise ValueError(f"projection/waypoint mismatch {projection_error:.5f} m")
+
+            def gray(lo, hi):
+                if not (0 < lo < hi):
+                    raise ValueError(f"invalid depth range {lo}, {hi}")
+                safe = depth.copy()
+                invalid = (~np.isfinite(safe)) | (safe <= 0)
+                safe[invalid] = lo
+                return ((np.clip(safe, lo, hi)-lo)/(hi-lo)*255).astype(np.uint8)
+
+            lo = float(cfg.get("min_depth_m", 0.01))
+            hi = float(cfg.get("max_depth_m", 0.50))
+            display = gray(0.01, float(cfg.get("display_max_depth_m", 1.0)))
+            save("00_depth_full_gray.png", display)
+            save("01_depth_edge_gray.png", gray(lo, hi))
+            win = max(1, int(cfg.get("blur_kernel_px", 3))) | 1
+            blurred = cv2.GaussianBlur(gray(lo, hi), (win, win), 0)
+            save("02_gaussian_blur.png", blurred)
+            edges = cv2.Canny(blurred, int(cfg.get("canny_low", 5)),
+                              int(cfg.get("canny_high", 15)))
+            save("03_canny_raw.png", edges)
+            k = max(1, int(cfg.get("close_kernel_px", 11))) | 1
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+            closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel,
+                                      iterations=max(1, int(cfg.get("close_iterations", 1))))
+            save("04_edges_closed.png", closed)
+            contours, _ = cv2.findContours(closed, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            overview = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+            candidates = []
+            window = max(1, int(cfg.get("depth_window_px", 7))) | 1
+            half = window // 2
+            for idx, contour in enumerate(contours):
+                area = float(cv2.contourArea(contour))
+                if area < float(cfg.get("min_contour_area_px", 100)):
+                    continue
+                rect = cv2.minAreaRect(contour)
+                (x, y), (rw, rh), angle = rect
+                if rw <= 1e-6 or rh <= 1e-6:
+                    continue
+                px, py = int(np.clip(round(x), 0, W-1)), int(np.clip(round(y), 0, H-1))
+                patch = depth[max(0, py-half):min(H, py+half+1),
+                              max(0, px-half):min(W, px+half+1)]
+                values = patch[np.isfinite(patch) & (patch >= lo) & (patch <= hi)]
+                if not values.size:
+                    continue
+                z = float(np.median(values))
+                u = 2.0*(x-left)/(cw-1)-1.0
+                v = 1.0-2.0*(y-top)/(ch-1)
+                point = P @ np.array([u*z, v*z, z, 1.0])
+                xyz = point[:3]
+                if not np.isfinite(xyz).all():
+                    continue
+                dist = float(np.linalg.norm(xyz - base[4, :3]))
+                candidates.append({"index": idx, "center": [px, py], "xyz": xyz.tolist(),
+                                   "depth_m": z, "distance_m": dist, "area_px": area,
+                                   "contour": contour, "rect": rect})
+                cv2.drawContours(overview, [contour], -1, (0, 255, 255), 1)
+                cv2.circle(overview, (px, py), 3, (255, 0, 255), -1)
+            save("05_all_valid_contours.png", overview)
+
+            candidates.sort(key=lambda c: c["distance_m"])
+            result.update({
+                "wp5_full_pixel": [float(wx), float(wy)],
+                "projection_consistency_error_m": projection_error,
+                "total_contours": len(contours),
+                "valid_3d_contours": len(candidates),
+                "candidates": [{k: v for k, v in c.items() if k not in ("contour", "rect")}
+                               for c in candidates],
+            })
+            if not candidates:
+                raise ValueError("no valid full-image contours with metric depth")
+            best = candidates[0]
+            refined_xyz = np.asarray(best["xyz"], dtype=np.float64)
+            change = refined_xyz - base[4, :3]
+            result.update({"selected_contour": {k: v for k, v in best.items()
+                                                 if k not in ("contour", "rect")},
+                           "correction_xyz_m": change.tolist()})
+
+            distance_view = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+            for rank, c in enumerate(candidates, 1):
+                color = (0, 255, 0) if rank == 1 else (0, 255, 255)
+                cv2.circle(distance_view, tuple(c["center"]), 5, color, -1)
+                cv2.putText(distance_view, f"{rank}:{c['distance_m']:.3f}m",
+                            (min(W-130, c["center"][0]+5), max(15, c["center"][1]-6)),
+                            cv2.FONT_HERSHEY_SIMPLEX, .4, color, 1)
+            cv2.drawMarker(distance_view, (int(round(wx)), int(round(wy))),
+                           (0, 0, 255), cv2.MARKER_CROSS, 22, 2)
+            save("06_contour_xyz_distances.png", distance_view)
+
+            final = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+            cv2.drawContours(final, [best["contour"]], -1, (0, 0, 255), 3)
+            rectangle = np.round(cv2.boxPoints(best["rect"])).astype(np.int32)
+            cv2.polylines(final, [rectangle], True, (255, 0, 255), 2)
+            cv2.drawMarker(final, (int(round(wx)), int(round(wy))),
+                           (0, 0, 255), cv2.MARKER_CROSS, 24, 2)
+            cv2.drawMarker(final, tuple(best["center"]), (0, 255, 0),
+                           cv2.MARKER_CROSS, 24, 2)
+            cv2.line(final, (int(round(wx)), int(round(wy))), tuple(best["center"]),
+                     (255, 255, 255), 2)
+            cv2.putText(final, f"WP5 delta={best['distance_m']:.3f}m",
+                        (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .6, (255, 255, 255), 2)
+            save("07_selected_contour_xyz.png", final)
+            mask = np.zeros((H, W), dtype=np.uint8)
+            cv2.drawContours(mask, [best["contour"]], -1, 255, cv2.FILLED)
+            save("08_selected_contour_mask.png", mask)
+
+            max_dist = float(cfg.get("max_wp5_correction_m", 0.10))
+            if best["distance_m"] > max_dist:
+                raise ValueError(f"WP5 correction {best['distance_m']:.4f} m > {max_dist:.4f} m")
+            # Reject values that would otherwise be silently clamped.
+            lower = np.asarray(self.cfg.safety.get("workspace_min"), dtype=float)
+            upper = np.asarray(self.cfg.safety.get("workspace_max"), dtype=float)
+            if not (lower[0] <= refined_xyz[0] <= upper[0]):
+                raise ValueError(
+                    f"Refined X outside workspace: {refined_xyz[0]:.6f}"
+                )
+
+            proposed = base.copy()
+            proposed[2, 0] = refined_xyz[0]   # WP3: X only
+            proposed[3, 0] = refined_xyz[0]   # WP4: X only
+            proposed[4, 0] = refined_xyz[0]  # WP5
+            result["proposed_base_waypoints"] = proposed.tolist()
+            apply = bool(cfg.get("apply_to_actions", False))
+            result["status"] = "applied" if apply else "dry_run"
+            result["applied"] = apply
+            result["effective_base_waypoints"] = (proposed if apply else base).tolist()
+            print(
+                f"[INSERT REFINEMENT] {result['status']}: "
+                f"refined_x={refined_xyz[0]:.6f}, "
+                f"original_x_wp3_wp4_wp5={base[2:5, 0].tolist()}, "
+                f"effective_x_wp3_wp4_wp5="
+                f"{(proposed if apply else base)[2:5, 0].tolist()}, "
+                f"distance_xyz={best['distance_m']:.4f}m"
+            )
+            save_result()
+            return (proposed if apply else base), result
+        except (ValueError, KeyError, IndexError, TypeError, cv2.error) as exc:
+            result["status"] = "rejected"
+            result["reason"] = str(exc)
+            result["effective_base_waypoints"] = base.tolist()
+            print(f"[INSERT REFINEMENT] Rejected: {exc}; keeping original waypoints")
+            save_result()
+            return base, result
 
     def post_process(self, output_data):
         """Convert projected waypoints and classify AWDA primitive transitions.
@@ -2501,6 +2761,7 @@ class OSVIAWDAController(AIController):
         depth_full_m,
         crop_left,
         crop_right,
+        crop_top,
         depth_gray_crop,
         edges_closed=None,
         best_contour=None,
@@ -2513,7 +2774,7 @@ class OSVIAWDAController(AIController):
 
         Visualization:
             - full normalized depth image;
-            - area outside horizontal ROI darkened;
+            - area outside horizontal + top ROI darkened;
             - crop boundaries;
             - final Canny/closing edges inside ROI;
             - selected contour;
@@ -2584,6 +2845,12 @@ class OSVIAWDAController(AIController):
         # DARKEN EVERYTHING OUTSIDE THE ACTIVE CROP
         # ---------------------------------------------------------
 
+        # NUOVO: oscura anche la zona sopra la ROI depth.
+        if crop_top > 0:
+            overlay[:crop_top, :] = (
+                overlay[:crop_top, :].astype(np.float32) * 0.20
+            ).astype(np.uint8)
+
         if crop_left > 0:
             overlay[
                 :,
@@ -2612,6 +2879,16 @@ class OSVIAWDAController(AIController):
         # CROP BOUNDARIES
         # ---------------------------------------------------------
 
+        # NUOVO: limite superiore della ROI attiva.
+        if crop_top > 0:
+            cv2.line(
+                overlay,
+                (crop_left, crop_top),
+                (crop_right, crop_top),
+                (255, 255, 255),
+                2,
+            )
+
         cv2.line(
             overlay,
             (crop_left, 0),
@@ -2634,8 +2911,15 @@ class OSVIAWDAController(AIController):
 
         if edges_closed is not None:
 
+            # VECCHIO: la ROI dell'overlay partiva sempre dalla prima riga.
+            # roi = overlay[
+            #     :,
+            #     crop_left:crop_right + 1,
+            # ]
+
+            # NUOVO: stessa ROI 2D utilizzata dal rilevamento.
             roi = overlay[
-                :,
+                crop_top:,
                 crop_left:crop_right + 1,
             ]
 
@@ -2668,6 +2952,12 @@ class OSVIAWDAController(AIController):
                 0,
             ] += crop_left
 
+
+            # VECCHIO: nessun offset verticale dopo il crop laterale.
+            # (il codice originale aggiornava soltanto contour_full[:, :, 0])
+            # NUOVO: offset verticale dopo il crop superiore.
+            contour_full[:, :, 1] += crop_top
+
             # Selected contour = red.
             cv2.drawContours(
                 overlay,
@@ -2693,6 +2983,7 @@ class OSVIAWDAController(AIController):
                 # Convert crop coordinates back to the ORIGINAL
                 # full depth-image coordinates.
                 box[:, 0] += crop_left
+                box[:, 1] += crop_top
 
                 box = np.round(
                     box
@@ -2720,13 +3011,24 @@ class OSVIAWDAController(AIController):
                 )
             )
 
-            v = int(
+            # VECCHIO: la coordinata V non teneva conto del crop superiore.
+            # v = int(
+            #     np.clip(
+            #         round(best_centroid[1]),
+            #         0,
+            #         height - 1,
+            #     )
+            # )
+
+            # NUOVO: torna alle coordinate dell'immagine depth originale.
+            v_crop = int(
                 np.clip(
                     round(best_centroid[1]),
                     0,
-                    height - 1,
+                    depth_gray_crop.shape[0] - 1,
                 )
             )
+            v = int(np.clip(crop_top + v_crop, 0, height - 1))
 
             u_full = int(
                 np.clip(
@@ -3203,11 +3505,14 @@ class OSVIAWDAController(AIController):
 
         self.last_image_waypoints = selected_waypoints.copy()
         self.last_base_waypoints = base_waypoints.copy()
+        refined_base_waypoints, insert_info = self._insert_refine_base_waypoints(
+            base_waypoints, selected_waypoints, t=t, save_path=save_path,
+        )
 
         coarse_actions = self.post_process(
             {
                 "image_waypoints": selected_waypoints,
-                "base_waypoints": base_waypoints,
+                "base_waypoints": refined_base_waypoints,
                 "robot_state": processed["robot_state"],
             }
         )
@@ -3245,6 +3550,8 @@ class OSVIAWDAController(AIController):
                         "all_waypoints": all_waypoints[0].detach().cpu().tolist(),
                         "selected_waypoints": selected_waypoints.tolist(),
                         "base_waypoints": base_waypoints.tolist(),
+                        "refined_base_waypoints": refined_base_waypoints.tolist(),
+                        "insert_refinement": insert_info,
                         "coarse_actions": [
                             action.tolist() for action in coarse_actions
                         ],
@@ -3333,6 +3640,12 @@ class OSVIAWDAController(AIController):
         trajectory = self._unwrap_trajectory(payload)
 
         frames = self._sample_context_frames(trajectory)
+        for i, frame in enumerate(frames):
+            print(
+                f"[DEMO DEBUG] frame={i}, "
+                f"type={type(frame)}, "
+                f"shape={getattr(frame, 'shape', None)}"
+            )
         processed = [self._preprocess_frame(frame, source="demo") for frame in frames]
         context_array = np.stack(processed, axis=0)
         self.context_tensor = (
@@ -3421,31 +3734,55 @@ class OSVIAWDAController(AIController):
         )
         return self._decode_image(frame, convert_bgr_to_rgb=convert_bgr)
 
+   
     @staticmethod
     def _decode_image(value: Any, convert_bgr_to_rgb: bool = False):
         image = value
+
         if isinstance(image, (bytes, bytearray)):
             image = np.frombuffer(image, dtype=np.uint8)
-        if isinstance(image, np.ndarray) and image.ndim == 1:
-            decoded = cv2.imdecode(image.astype(np.uint8), cv2.IMREAD_COLOR)
-            if decoded is None:
-                raise ValueError("cv2.imdecode failed for compressed image")
-            image = decoded
 
         image = np.asarray(image)
+
+        # Compressed JPEG/PNG: supports both (N,) and (N, 1)
+        if image.ndim == 1 or (
+            image.ndim == 2 and image.shape[1] == 1
+        ):
+            encoded = image.reshape(-1).astype(np.uint8)
+
+            decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+
+            if decoded is None:
+                raise ValueError(
+                    f"cv2.imdecode failed for compressed image "
+                    f"with shape {image.shape}"
+                )
+
+            image = decoded
+
+        # Standard image decoding
         if image.ndim == 2:
             image = image[:, :, None]
+
         if image.ndim != 3:
-            raise ValueError(f"Expected an image with 2 or 3 dimensions, got {image.shape}")
+            raise ValueError(
+                f"Expected an image with 2 or 3 dimensions, got {image.shape}"
+            )
+
         if image.shape[0] in (1, 3, 4) and image.shape[-1] not in (1, 3, 4):
             image = np.transpose(image, (1, 2, 0))
+
         if image.shape[-1] == 4:
             image = image[:, :, :3]
+
         if image.shape[-1] == 1:
             image = np.repeat(image, 3, axis=-1)
+
         image = image.astype(np.uint8)
+
         if convert_bgr_to_rgb:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
         return image
 
     def _chw_to_uint8(self, chw):

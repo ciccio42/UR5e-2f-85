@@ -14,8 +14,8 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-TRAIN = {1, 2, 3, 4, 6, 7, 8, 9, 11, 12, 13, 14}
-TEST = {0, 5, 10, 15}
+TRAIN = {1, 2, 3, 5, 6, 7}
+TEST = {0, 4, 8}
 METRICS = ('pick', 'total_success', 'wrong_object_correct_bin', 'wrong_bin')
 # Le varianti qui sotto sono proposte; lo script rifiuta silenziose equivalenze non certe.
 # Se i JSON usano altri nomi, aggiungerli alla metrica corrispondente.

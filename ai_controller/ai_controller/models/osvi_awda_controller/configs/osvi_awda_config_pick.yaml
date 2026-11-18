@@ -36,6 +36,7 @@ projection:
   output_frame: "base_link"
 
 control:
+  direct_grasp_offset_xyz: [-0.005, -0.005, -0.04]
   orientation_mode: "fixed_top_down"
   fixed_orientation_xyzw:
     - 0.9994452044624775
@@ -84,6 +85,11 @@ grasp_refinement:
     right: 0
   depth_crop_left_px: 285
   depth_crop_right_px: 500
+  depth_crop_top_px: 0
+
+insert_refinement:
+  enabled: false
+  apply_to_actions: false
 
 safety:
   clamp_workspace: true
