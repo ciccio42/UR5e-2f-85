@@ -141,6 +141,7 @@ docker exec -it seedo_ros2_container bash
 
 cd /home/ros2_ws/src/UR5e-2f-85/ai_controller/ai_controller/utils/grasping/graspmolmo
 
+SEEDO_GRASPMOLMO_POINT_ONLY=1 \
 SEEDO_GRASPMOLMO_GQA=1 \
 SEEDO_GRASPMOLMO_PROFILE_DECODER=0 \
 SEEDO_GRASPMOLMO_FP8_TEST_LAYER=all \

@@ -144,6 +144,10 @@ class GraspMolmoRuntime:
             "Point to the grasp that would accomplish the following task: "
         )
 
+        self.point_only = (
+            os.environ.get("SEEDO_GRASPMOLMO_POINT_ONLY", "0") == "1"
+        )
+
         self._loaded = False
 
     def load(self) -> None:
@@ -577,7 +581,11 @@ class GraspMolmoRuntime:
 
         self.gen_cfg = GenerationConfig(
             max_new_tokens=256,
-            stop_strings="<|endoftext|>",
+            stop_strings=(
+                ["</point>", "</points>", "<|endoftext|>"]
+                if self.point_only
+                else "<|endoftext|>"
+            ),
             do_sample=False,
         )
 
@@ -756,8 +764,18 @@ class GraspMolmoRuntime:
 
         t0 = time.perf_counter()
 
+        prompt = f"{self.prompt_pfx}{task}"
+
+        if self.point_only:
+            prompt += (
+                "\nOutput only a single XML <point> element "
+                "with numeric x and y attributes between 0 and 100. "
+                "Do not include explanations, descriptions, "
+                "or any additional text."
+            )
+
         inputs = self.processor.process(
-            text=f"{self.prompt_pfx}{task}",
+            text=prompt,
             images=[image],
             return_tensors="pt",
         )
