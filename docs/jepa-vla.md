@@ -4,7 +4,7 @@ export UR5e_2f_85_PATH="/home/asus-mivia/Desktop/Alex/UR5e-2f-85"
 
 export VLA_JEPA_VENV_HOST="/home/asus-mivia/Desktop/UR-Control/UR5e-2f-85/ai_controller/ai_controller/models/vla_jepa_controller/venv/vla_jepa_venv"
 
-export VLA_JEPA_CHECKPOINT_HOST="/home/asus-mivia/Desktop/Alex/Train_workspace/vla-jepa/vla_jepa_workspace/checkpoints/E1/checkpoint_B/pretrained_model"
+export VLA_JEPA_CHECKPOINT_HOST="/home/asus-mivia/Desktop/Alex/Train_workspace/vla-jepa/vla_jepa_workspace/checkpoints/joint_training/first_stage/checkpoint_A/pretrained_model"
 
 export VLA_JEPA_HF_CACHE_HOST="/home/asus-mivia/Desktop/Alex/UR5e-2f-85/ai_controller/ai_controller/models/vla_jepa_controller/huggingface"
 
@@ -138,6 +138,17 @@ cd /home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller
 ./run_server.sh
 
 
+# per WM_conditioned
+./run_server.sh \
+  --config vla_jepa_config_wm_conditioned.yaml \
+  --preflight-only
+
+
+./run_server.sh \
+  --config vla_jepa_config_wm_conditioned.yaml \
+  
+
+
 # Sesto terminale
 docker exec -it ur_robotiq_teleoperation_container bash
 
@@ -148,4 +159,20 @@ ros2 run ai_controller ai_controller_node --ros-args \
   -p move_robot:=true \
   -p ai_controller_target:=vla_jepa_controller \
   -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller/vla_jepa_config.yaml" \
-  -p task_name:=pick_place
+  -p task_name:=pick_place \
+  -p save_rollout_path:="/home/ros2_ws/src/ai_controller/saved_rollouts/vla_jepa_controller/pick_place"
+
+
+
+# per WM_conditioned
+docker exec -it ur_robotiq_teleoperation_container bash
+
+cd /home/ros2_ws
+source install/setup.bash
+
+ros2 run ai_controller ai_controller_node --ros-args \
+  -p move_robot:=true \
+  -p ai_controller_target:=vla_jepa_controller \
+  -p model_config_path:="/home/ros2_ws/src/ai_controller/ai_controller/models/vla_jepa_controller/vla_jepa_config_wm_conditioned.yaml" \
+  -p task_name:=pick_place \
+  -p save_rollout_path:="/home/ros2_ws/src/ai_controller/saved_rollouts/vla_jepa_controller/pick_place"

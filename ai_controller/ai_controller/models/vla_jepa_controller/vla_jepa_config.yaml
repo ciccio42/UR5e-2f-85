@@ -152,7 +152,7 @@ gripper_closed_position: 255.0
 #
 #
 trace_action_conversions: true
-grasp_z_offset_m: -0.03
+grasp_z_offset_m: -0.02
 
 
 # =============================================================================
@@ -256,3 +256,16 @@ tasks:
 
   "29":
     prompt: "Pick the third box and place it into the red bin"
+
+# -----------------------------------------------------------------------------
+# ORIENTAMENTO FISSO TCP (opzionale, frame base_link, ROS XYZW)
+# -----------------------------------------------------------------------------
+# Lascia commentato per usare i quaternioni predetti dalla policy.
+# Decommenta tutte e cinque le righe per sovrascrivere SOLO l'orientamento
+# di OGNI target MoveIt, in entrambe le modalita' action_head/wm_conditioned.
+# Non modifica XYZ, gripper, offset grasp o azioni di Flow Matching.
+fixed_orientation_xyzw:
+  - 0.9994452044624775
+  - 0.03161651380119412
+  - 0.0021438049655468088
+  - -0.010251021036213035

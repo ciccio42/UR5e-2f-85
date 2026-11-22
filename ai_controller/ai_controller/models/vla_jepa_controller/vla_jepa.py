@@ -164,17 +164,12 @@ class VLAJEPARuntime:
 
         # Inference-only deployment:
         # V-JEPA2 + latent world model are training-time modules.
-        config.enable_world_model = False
+        self._configure_model_config(config)
 
         # --------------------------------------------------------------
         # 2. Policy
         # --------------------------------------------------------------
-        policy_cls = get_policy_class(config.type)
-
-        policy = policy_cls.from_pretrained(
-            self.checkpoint_path,
-            config=config,
-        )
+        policy = self._load_policy(config)
 
         policy.to(self.device)
         policy.eval()
@@ -224,6 +219,18 @@ class VLAJEPARuntime:
             self.chunk_size,
             self.n_action_steps,
         )
+
+    def _configure_model_config(self, config: PreTrainedConfig) -> None:
+        """Baseline mode: preserve the original Qwen -> DiT deployment.
+
+        Subclasses may enable the World Model before constructing the policy.
+        """
+        config.enable_world_model = False
+
+    def _load_policy(self, config: PreTrainedConfig) -> torch.nn.Module:
+        """Baseline loader, kept identical for existing UR5e checkpoints."""
+        policy_cls = get_policy_class(config.type)
+        return policy_cls.from_pretrained(self.checkpoint_path, config=config)
 
     # ------------------------------------------------------------------
     # Inference

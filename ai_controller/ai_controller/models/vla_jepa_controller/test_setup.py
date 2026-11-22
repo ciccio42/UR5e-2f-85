@@ -1010,7 +1010,7 @@ def check_controller_config_and_utils(
         "gripper_closed_position": 255.0,
         "server_host": "127.0.0.1",
         "server_port": 8770,
-        "grasp_z_offset_m": -0.03,
+        "grasp_z_offset_m": -0.01,
     }
 
     for key, expected in expected_values.items():
@@ -1412,6 +1412,15 @@ def check_full_inference(
     ):
         raise RuntimeError(
             f"Invalid output quaternion norm: {quaternion_norm}"
+        )
+
+    # Optional YAML-controlled orientation override: check at output boundary.
+    if controller.fixed_orientation_xyzw is not None and not np.allclose(
+        quaternion, controller.fixed_orientation_xyzw, atol=1e-7, rtol=0.0
+    ):
+        raise RuntimeError(
+            "fixed_orientation_xyzw was not applied to the MoveIt target: "
+            f"expected={controller.fixed_orientation_xyzw}, got={quaternion}"
         )
 
     gripper = float(

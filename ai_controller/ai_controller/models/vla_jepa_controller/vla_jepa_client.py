@@ -43,6 +43,10 @@ class VLAJEPAControllerClient:
         host = cfg.get("server_host", "127.0.0.1")
         port = int(cfg.get("server_port", 8770))
         self.base_url = f"http://{host}:{port}"
+        # Unchanged 60 s baseline timeout; WM mode can allow slower first chunk.
+        self.inference_timeout_sec = float(cfg.get("inference_timeout_sec", 60.0))
+        if self.inference_timeout_sec <= 0:
+            raise ValueError("inference_timeout_sec must be positive")
         self.task_name = task_name
         self.command = None
 
@@ -109,7 +113,7 @@ class VLAJEPAControllerClient:
                 "t": int(t),
                 "save_path": str(save_path) if save_path is not None else None,
             },
-            timeout=60.0,
+            timeout=self.inference_timeout_sec,
         )
         resp.raise_for_status()
         return resp.json()["actions"]

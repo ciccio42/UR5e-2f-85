@@ -439,8 +439,29 @@ echo
 
 
 # =============================================================================
-# Optional full preflight
+# Optional full preflight (selected by checkpoint inference mode)
 # =============================================================================
+
+INFERENCE_MODE="$("${PYTHON}" - "${CONFIG_PATH}" <<'PY_INFERENCE_MODE'
+import sys
+import yaml
+from pathlib import Path
+cfg = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}
+mode = str(cfg.get("inference_mode", "action_head")).strip().lower()
+if mode not in ("action_head", "wm_conditioned"):
+    raise SystemExit(f"Invalid inference_mode: {mode}")
+print(mode)
+PY_INFERENCE_MODE
+)"
+if [[ "${INFERENCE_MODE}" == "wm_conditioned" ]]; then
+    [[ -f "${THIS_DIR}/vla_jepa_wm.py" ]] || die "Missing WM runtime: vla_jepa_wm.py"
+    [[ -f "${THIS_DIR}/vla_jepa_wm_conditioning.py" ]] || die "Missing WM conditioning helpers"
+    [[ -f "${THIS_DIR}/test_setup_wm.py" ]] || die "Missing WM preflight: test_setup_wm.py"
+    PREFLIGHT_SCRIPT="${THIS_DIR}/test_setup_wm.py"
+else
+    PREFLIGHT_SCRIPT="${THIS_DIR}/test_setup.py"
+fi
+echo "Inference mode: ${INFERENCE_MODE}"
 
 if [[ "${RUN_PREFLIGHT}" == "1" ]]; then
 
@@ -454,7 +475,7 @@ if [[ "${RUN_PREFLIGHT}" == "1" ]]; then
         HF_HUB_OFFLINE=1 \
         TRANSFORMERS_OFFLINE=1 \
         "${PYTHON}" \
-            "${THIS_DIR}/test_setup.py" \
+            "${PREFLIGHT_SCRIPT}" \
             --config "${CONFIG_PATH}" \
             --task-name "${TASK_NAME}"
 

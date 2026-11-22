@@ -83,6 +83,38 @@ def _resolve_path(
     return resolved.resolve()
 
 
+def _parse_fixed_orientation_xyzw(value) -> np.ndarray | None:
+    """Read an optional base_link -> TCP target orientation from YAML (ROS XYZW).
+
+    The quaternion must be finite and already have unit norm. Deliberately
+    do not silently normalize or re-interpret invalid orientation values.
+    """
+    if value is None:
+        return None
+
+    try:
+        quaternion = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "fixed_orientation_xyzw must contain four numeric values "
+            "in ROS [qx, qy, qz, qw] order."
+        ) from exc
+
+    if quaternion.shape != (4,) or not np.all(np.isfinite(quaternion)):
+        raise ValueError(
+            "fixed_orientation_xyzw must be a finite four-element vector "
+            "in ROS [qx, qy, qz, qw] order."
+        )
+
+    norm = float(np.linalg.norm(quaternion))
+    if not np.isclose(norm, 1.0, atol=1e-3, rtol=0.0):
+        raise ValueError(
+            f"fixed_orientation_xyzw must have unit norm, got {norm:.9f}."
+        )
+
+    return quaternion.astype(np.float32, copy=True)
+
+
 # =============================================================================
 # CONTROLLER
 # =============================================================================
@@ -180,6 +212,17 @@ class VLAJEPAController(AIController):
             )
         )
 
+        # Default preserves the already-tested UR5e Qwen -> DiT baseline.
+        # WM mode only changes the policy inference path (not robot conversion).
+        self.inference_mode = str(
+            self.cfg.get("inference_mode", "action_head")
+        ).strip().lower()
+        if self.inference_mode not in ("action_head", "wm_conditioned"):
+            raise ValueError(
+                f"Invalid inference_mode={self.inference_mode!r}. "
+                "Expected 'action_head' or 'wm_conditioned'."
+            )
+
         self.gripper_open_position = float(
             self.cfg.get(
                 "gripper_open_position",
@@ -223,6 +266,13 @@ class VLAJEPAController(AIController):
                 "grasp_z_offset_m",
                 -0.02,
             )
+        )
+
+        # Optional orientation override common to action_head and wm_conditioned.
+        # When absent/commented/null, preserve the quaternion predicted by
+        # the existing delta-action postprocessing without any modification.
+        self.fixed_orientation_xyzw = _parse_fixed_orientation_xyzw(
+            self.cfg.get("fixed_orientation_xyzw", None)
         )
 
         self.predicted_closure = False
@@ -325,7 +375,13 @@ class VLAJEPAController(AIController):
             )
         )
 
-        self._runtime = VLAJEPARuntime(
+        if self.inference_mode == "wm_conditioned":
+            from vla_jepa_wm import VLAJEPAWMRuntime
+            runtime_cls = VLAJEPAWMRuntime
+        else:
+            runtime_cls = VLAJEPARuntime
+
+        self._runtime = runtime_cls(
             checkpoint_path=checkpoint_path,
             device=device,
             postprocessor_config_filename=postprocessor_config_filename,
@@ -812,7 +868,7 @@ class VLAJEPAController(AIController):
         ):
             target_position = target_position.copy()
             target_position[2] += self.grasp_z_offset_m #scendo
-            target_position[1] += -0.01 #retrocedo
+            target_position[1] += -0.02 #retrocedo
 
             self._grasp_z_offset_applied = True
             # self.predicted_closure = True
@@ -845,6 +901,12 @@ class VLAJEPAController(AIController):
                     self.gripper_closed_position,
             )
         )
+
+        # Last step before returning the 8D MoveIt target: optionally
+        # replace ONLY the quaternion. XYZ, grasp offsets, gripper and
+        # upstream model/LeRobot action processing remain unchanged.
+        if self.fixed_orientation_xyzw is not None:
+            target_quaternion_xyzw = self.fixed_orientation_xyzw.copy()
 
         absolute_target = np.concatenate(
             (
@@ -1014,6 +1076,7 @@ class VLAJEPAController(AIController):
             f"{self._format_array(processed['reference_position'])}\n"
             f"  reference_quaternion_xyzw="
             f"{self._format_array(processed['reference_quaternion'])}\n"
+            f"  orientation_mode={'fixed' if self.fixed_orientation_xyzw is not None else 'predicted'}\n"
             f"  postprocessed_action="
             f"{self._format_array(action)}\n"
             f"  physical_delta_xyz="
