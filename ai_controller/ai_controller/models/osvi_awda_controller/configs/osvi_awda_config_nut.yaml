@@ -3,7 +3,10 @@
 # resolved relative to this YAML and must contain config.yaml plus the checkpoint.
 
 checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_nut_assembly"
-checkpoint_step: 48000 #nut assembly
+checkpoint_step: 58000 #nut assembly human
+
+#checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_mix"
+#checkpoint_step: 57000 #human training mix
 
 # Use the calibration shipped with the real-data AWDA adaptation.
 projection_matrix_path: "ur5e_zed_front_projection.yaml"
@@ -99,9 +102,10 @@ grasp_refinement:
     left: 0
     right: 0
 
-  depth_crop_left_px: 285
+  depth_crop_left_px: 295
   depth_crop_right_px: 500
-  depth_crop_top_px: 170
+  depth_crop_top_px: 170 #only nut assembly
+  #depth_crop_top_px: 280 #mix nut assembly and pick
 
 insert_refinement:
   enabled: true

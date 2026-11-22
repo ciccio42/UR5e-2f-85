@@ -4,8 +4,11 @@
 #checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_ckpt-1788896991"
 #checkpoint_step: 70000 #scripted trajectories
 
-checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_human_training"
-checkpoint_step: 68000 #human training
+#checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_human_training"
+#checkpoint_step: 68000 #human training pick
+
+checkpoint_dir: "/home/ros2_ws/src/ai_controller/checkpoint_folder/osvi-awda/osvi_mtlfd_mix"
+checkpoint_step: 57000 #human training mix
 
 # Use the calibration shipped with the real-data AWDA adaptation.
 projection_matrix_path: "ur5e_zed_front_projection.yaml"
