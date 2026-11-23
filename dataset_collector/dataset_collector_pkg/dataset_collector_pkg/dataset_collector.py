@@ -15,6 +15,11 @@ from sensor_msgs.msg import Image, JointState, Joy
 from std_srvs.srv import Trigger
 from ur5e_2f_85_teleoperation_msg.msg import TrajectoryState
 
+import shutil
+import subprocess
+
+from rclpy.qos import qos_profile_sensor_data
+
 from dataset_collector_pkg.utils import (
     EE_AA_NAME,
     EEF_POS_NAME,
@@ -59,6 +64,7 @@ class DatasetCollector(Node):
         self._active_traj_id = None
 
         self._video_writer = None
+        self._video_ffmpeg_process = None
         self._video_path = None
 
         # Human recording button edge detection.
@@ -772,6 +778,7 @@ class DatasetCollector(Node):
                 self,
                 Image,
                 rgb_topic,
+                qos_profile=qos_profile_sensor_data,
             )
 
             self.camera_subscribers_rgb.append(
@@ -798,6 +805,7 @@ class DatasetCollector(Node):
                     self,
                     Image,
                     depth_topic,
+                    qos_profile=qos_profile_sensor_data,
                 )
 
                 self.camera_subscribers_depth.append(
@@ -1981,6 +1989,8 @@ class DatasetCollector(Node):
             )
         )
 
+        # Finalize the MP4 before saving trajectory metadata.
+        self._release_video_writer()
         video_path = self._video_path
 
         try:
@@ -2044,17 +2054,9 @@ class DatasetCollector(Node):
                 f'{exc}'
             )
 
-            self._release_video_writer()
-
             self._reset_active_trajectory()
 
             return None
-
-        # ------------------------------------------------------------
-        # Close MP4
-        # ------------------------------------------------------------
-
-        self._release_video_writer()
 
         # ------------------------------------------------------------
         # Update last trajectory ID
@@ -2205,130 +2207,190 @@ class DatasetCollector(Node):
     # VIDEO
     # ================================================================
 
-    def _write_video_frame_if_enabled(
-        self,
-        obs,
-    ):
-
+    
+    def _write_video_frame_if_enabled(self, obs):
         if not self.save_video:
             return
 
-        image_key = (
-            f'{self.video_camera}_image'
-        )
-
-        frame = obs.get(
-            image_key
-        )
+        image_key = f'{self.video_camera}_image'
+        frame = obs.get(image_key)
 
         if frame is None:
-
             self.get_logger().warn(
-                f'Video frame source '
-                f'{image_key!r} '
-                f'is unavailable.'
+                f'Video frame source {image_key!r} unavailable.'
             )
-
             return
 
-        # ------------------------------------------------------------
-        # First frame -> initialize writer
-        # ------------------------------------------------------------
+        if (
+            self._video_writer is None
+            and self._video_ffmpeg_process is None
+        ):
+            self._open_video_writer(frame)
 
-        if self._video_writer is None:
+        try:
+            if self._video_ffmpeg_process is not None:
+                process = self._video_ffmpeg_process
 
-            self._open_video_writer(
-                frame
+                if process.poll() is not None:
+                    raise RuntimeError(
+                        f'FFmpeg exited with code {process.returncode}.'
+                    )
+
+                if process.stdin is None:
+                    raise RuntimeError('FFmpeg stdin unavailable.')
+
+                process.stdin.write(
+                    np.ascontiguousarray(frame).tobytes()
+                )
+
+            elif self._video_writer is not None:
+                self._video_writer.write(frame)
+
+        except (OSError, RuntimeError) as exc:
+            self.get_logger().error(
+                f'Video encoding failed: {exc}'
             )
+            self._release_video_writer()
+            self.save_video = False
 
-        # ------------------------------------------------------------
-        # Write
-        # ------------------------------------------------------------
-
-        if self._video_writer is not None:
-
-            self._video_writer.write(
-                frame
-            )
-
-    def _open_video_writer(
-        self,
-        frame,
-    ):
-
+    def _open_video_writer(self, frame):
         if self._active_traj_id is None:
             return
 
-        output_path = (
-            self._video_output_path(
-                self._active_traj_id
-            )
+        output_path = self._video_output_path(
+            self._active_traj_id
         )
-
         output_path.parent.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        height, width = (
-            frame.shape[:2]
-        )
+        height, width = frame.shape[:2]
 
-        fourcc = (
-            cv2.VideoWriter_fourcc(
-                *self.video_codec
+        # H.264: use the same FFmpeg/libx264 backend as SeeDo GUI.
+        if self.video_codec.lower() in ('avc1', 'h264'):
+            ffmpeg = shutil.which('ffmpeg')
+
+            if ffmpeg is None:
+                self.get_logger().error(
+                    'FFmpeg executable not found.'
+                )
+                self.save_video = False
+                return
+
+            command = [
+                ffmpeg,
+                '-y',
+                '-loglevel', 'error',
+                '-f', 'rawvideo',
+                '-pix_fmt', 'bgr24',
+                '-s:v', f'{width}x{height}',
+                '-r', str(self.video_fps),
+                '-i', 'pipe:0',
+                '-an',
+                '-c:v', 'libx264',
+                '-preset', 'veryfast',
+                '-crf', '18',
+                '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart',
+                str(output_path),
+            ]
+
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError as exc:
+                self.get_logger().error(
+                    f'Could not start FFmpeg: {exc}'
+                )
+                self.save_video = False
+                return
+
+            self._video_ffmpeg_process = process
+            self._video_path = output_path
+
+            self.get_logger().info(
+                f'Started H.264 FFmpeg recording: {output_path}'
             )
-        )
+            return
 
+        # Preserve legacy OpenCV recording for other codecs.
         writer = cv2.VideoWriter(
-
             str(output_path),
-
-            fourcc,
-
+            cv2.VideoWriter_fourcc(*self.video_codec),
             self.video_fps,
-
-            (
-                width,
-                height,
-            ),
+            (width, height),
         )
 
         if not writer.isOpened():
-
             writer.release()
-
             self.get_logger().error(
-                f'Could not open video writer '
-                f'for {output_path}. '
-                f'Trajectory recording will '
-                f'continue without MP4 output.'
+                f'Could not open video writer for {output_path}.'
             )
-
-            # Avoid retrying on every frame.
             self.save_video = False
-
             return
 
         self._video_writer = writer
-
-        self._video_path = (
-            output_path
-        )
-
-        self.get_logger().info(
-            f'Opened video writer: '
-            f'{output_path}'
-        )
+        self._video_path = output_path
 
     def _release_video_writer(self):
+        # Legacy OpenCV backend.
+        if self._video_writer is not None:
+            self._video_writer.release()
+            self._video_writer = None
 
-        if self._video_writer is None:
+        # H.264 FFmpeg backend.
+        process = self._video_ffmpeg_process
+
+        if process is None:
             return
 
-        self._video_writer.release()
+        self._video_ffmpeg_process = None
 
-        self._video_writer = None
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+
+            return_code = process.wait(timeout=30)
+
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.get_logger().error(
+                f'FFmpeg finalization failed: {exc}'
+            )
+
+            if process.poll() is None:
+                process.kill()
+
+            process.wait()
+            return_code = -1
+
+        video_path = self._video_path
+
+        if (
+            return_code != 0
+            or video_path is None
+            or not video_path.is_file()
+            or video_path.stat().st_size == 0
+        ):
+            self.get_logger().error(
+                f'H.264 video was not finalized correctly '
+                f'(FFmpeg exit code {return_code}).'
+            )
+
+            if video_path is not None:
+                video_path.unlink(missing_ok=True)
+
+            self._video_path = None
+            return
+
+        self.get_logger().info(
+            f'H.264 video finalized successfully: {video_path}'
+        )
+
 
     # ================================================================
     # ROBOT HOME
