@@ -1,0 +1,63 @@
+
+dataset_collector:
+  ros__parameters:
+
+    # =================================================
+    # COLLECTOR MODE
+    # =================================================
+
+    collector_mode: human
+
+    # =================================================
+    # REAL ZED CAMERAS
+    # =================================================
+
+    human_camera_names:
+      - /zed_front/zed_node
+      - /zed_left/zed_node
+      - /zed_right/zed_node
+
+    rgb_topic_suffix: /rgb/color/rect/image
+
+    human_record_depth: false
+
+    # =================================================
+    # SYNCHRONIZATION
+    # =================================================
+
+    sync_queue_size: 20
+    sync_slop_sec: 0.1
+
+    # =================================================
+    # JOYSTICK
+    # =================================================
+
+    enable_human_joystick: true
+    human_joy_topic: /joy
+    human_record_button_index: 1
+
+    # =================================================
+    # VIDEO RECORDING
+    # =================================================
+
+    save_video: true
+    video_camera: camera_front
+    video_fps: 10.0
+    video_codec: avc1
+
+    # =================================================
+    # DATASET METADATA
+    # =================================================
+
+    task_name: pick_place
+    variation_id: 0
+    traj_count_id: 0
+
+    saving_directory: /test_real/human_demos_real
+
+    # =================================================
+    # DEBUG
+    # =================================================
+
+    show_images: false
+    annotate_objects: false
