@@ -93,6 +93,7 @@ docker run -it --rm \
   -v "$(pwd)/.runtime/graspgenx_gripper_descriptions":/opt/graspgenx_gripper_descriptions \
   -v "$(pwd)/../dataset_nut_assembly/video":/dataset_nut:ro \
   -v "$(pwd)/../test_dataset":/test_dataset:ro \
+  -v "$(pwd)/../new_dataset":/new_dataset:ro \
   -v "$(pwd)/../seedo_tests":/seedo_tests \
   -v "$(pwd)/../test_isaac":/test_isaac \
   -v "$(pwd)/../test_real":/test_real \
