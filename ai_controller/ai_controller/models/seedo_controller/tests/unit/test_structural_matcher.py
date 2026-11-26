@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-
+import math
 import pytest
 
 from results import (
@@ -13,7 +13,10 @@ from results import (
 from ai_controller.models.seedo_controller.structural_matcher import (
     StructuralMatcher,
 )
-
+from ai_controller.models.seedo_controller.utils import (
+    build_spatial_relations,
+    structured_scene_to_dict,
+)
 
 def _object(
     object_id: str,
@@ -691,3 +694,165 @@ def test_run_writes_empty_artifact_for_object_count_mismatch(
     }
 
     assert result.is_valid is False
+
+def _angular_scene(
+    prefix: str,
+    angle_deg: float,
+    directions: int = 4,
+) -> StructuredScene:
+
+    angle_rad = math.radians(angle_deg)
+
+    objects = (
+        StructuredSceneObject(
+            object_id=f"{prefix}_a",
+            category="bin",
+            center=(
+                100.0 * math.cos(angle_rad),
+                100.0 * math.sin(angle_rad),
+            ),
+        ),
+        StructuredSceneObject(
+            object_id=f"{prefix}_b",
+            category="bin",
+            center=(0.0, 0.0),
+        ),
+    )
+
+    return StructuredScene(
+        objects=objects,
+        relations=build_spatial_relations(
+            objects=objects,
+            directions=directions,
+        ),
+        directions=directions,
+    )
+
+
+@pytest.mark.parametrize(
+    (
+        "demo_angle",
+        "runtime_angle",
+        "directions",
+        "tolerance",
+        "expected_valid",
+    ),
+    [
+        # Original cardinal match.
+        (180.0, 220.0, 4, 10.0, True),
+
+        # Same cardinal, different boundary regions.
+        (138.0, 222.0, 4, 10.0, True),
+
+        # Both vectors belong to the UP_LEFT boundary.
+        (222.0, 228.0, 4, 10.0, True),
+
+        # Only runtime belongs to a boundary region.
+        (210.0, 228.0, 4, 10.0, False),
+
+        # Only demo belongs to a boundary region.
+        (222.0, 240.0, 4, 10.0, False),
+
+        # Both belong to different boundary regions.
+        (222.0, 310.0, 4, 10.0, False),
+
+        # Both outside boundary regions.
+        (180.0, 270.0, 4, 10.0, False),
+
+        # Inclusive limits of the same boundary.
+        (35.0, 55.0, 4, 10.0, True),
+
+        # One vector is outside the tolerance.
+        (34.9, 55.0, 4, 10.0, False),
+
+        # Disabled tolerance preserves original behavior.
+        (222.0, 228.0, 4, 0.0, False),
+
+        # Eight-direction mode ignores boundary tolerance.
+        (180.0, 220.0, 8, 10.0, False),
+        (222.0, 228.0, 8, 10.0, True),
+    ],
+)
+def test_boundary_aware_structural_matching(
+    demo_angle,
+    runtime_angle,
+    directions,
+    tolerance,
+    expected_valid,
+):
+
+    demo_scene = _angular_scene(
+        prefix="demo",
+        angle_deg=demo_angle,
+        directions=directions,
+    )
+
+    runtime_scene = _angular_scene(
+        prefix="runtime",
+        angle_deg=runtime_angle,
+        directions=directions,
+    )
+
+    matcher = StructuralMatcher(
+        boundary_tolerance_deg=tolerance,
+    )
+
+    result = matcher.run(
+        demo_scene=demo_scene,
+        runtime_scene=runtime_scene,
+    )
+
+    assert result.is_valid == expected_valid
+
+    if expected_valid:
+
+        assert result.is_unique
+
+        matches = {
+            match.demo_object_id: match.runtime_object_id
+            for match in result.valid_mappings[0].matches
+        }
+
+        assert matches == {
+            "demo_a": "runtime_a",
+            "demo_b": "runtime_b",
+        }
+
+
+def test_boundary_metadata_serialization():
+
+    scene = _angular_scene(
+        prefix="demo",
+        angle_deg=222.0,
+        directions=4,
+    )
+
+    data = structured_scene_to_dict(
+        scene=scene,
+        tolerance_deg=10.0,
+    )
+
+    assert data["directions"] == 4
+    assert data["boundary_tolerance_deg"] == 10.0
+
+    relation = data["relations"][0]
+
+    assert relation["relation"] == "LEFT"
+    assert relation["boundary_relation"] == "UP_LEFT"
+
+
+def test_boundary_metadata_disabled():
+
+    scene = _angular_scene(
+        prefix="demo",
+        angle_deg=222.0,
+        directions=4,
+    )
+
+    data = structured_scene_to_dict(
+        scene=scene,
+        tolerance_deg=0.0,
+    )
+
+    assert "boundary_tolerance_deg" not in data
+    assert "boundary_relation" not in data["relations"][0]

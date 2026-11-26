@@ -13,10 +13,25 @@ from results import (
     StructuralObjectMatch,
 )
 
+from ai_controller.models.seedo_controller.utils import (
+    build_boundary_relation_lookup,
+    validate_boundary_tolerance,
+)
 
 class StructuralMatcher:
     """Find structure-preserving bijections between two structured scenes."""
 
+    def __init__(
+        self,
+        boundary_tolerance_deg: float = 0.0,
+    ) -> None:
+
+        self.boundary_tolerance_deg = (
+            validate_boundary_tolerance(
+                boundary_tolerance_deg
+            )
+        )
+    
     def run(
         self,
         demo_scene: StructuredScene,
@@ -57,6 +72,20 @@ class StructuralMatcher:
             runtime_scene
         )
 
+        demo_boundary_relations = (
+            build_boundary_relation_lookup(
+                scene=demo_scene,
+                tolerance_deg=self.boundary_tolerance_deg,
+            )
+        )
+
+        runtime_boundary_relations = (
+            build_boundary_relation_lookup(
+                scene=runtime_scene,
+                tolerance_deg=self.boundary_tolerance_deg,
+            )
+        )
+
         valid_mappings: list[StructuralMapping] = []
 
         for runtime_permutation in permutations(
@@ -75,6 +104,8 @@ class StructuralMatcher:
                 demo_scene=demo_scene,
                 demo_relations=demo_relations,
                 runtime_relations=runtime_relations,
+                demo_boundary_relations=demo_boundary_relations,
+                runtime_boundary_relations=runtime_boundary_relations,
                 mapping=mapping,
             ):
                 continue
@@ -175,12 +206,20 @@ class StructuralMatcher:
         demo_scene: StructuredScene,
         demo_relations: dict[tuple[str, str], str],
         runtime_relations: dict[tuple[str, str], str],
+        demo_boundary_relations: dict[
+            tuple[str, str], str | None
+        ],
+        runtime_boundary_relations: dict[
+            tuple[str, str], str | None
+        ],
         mapping: dict[str, str],
     ) -> bool:
         """Return whether one candidate bijection preserves all relations."""
 
         for subject in demo_scene.objects:
+
             for reference in demo_scene.objects:
+
                 if subject.object_id == reference.object_id:
                     continue
 
@@ -194,11 +233,47 @@ class StructuralMatcher:
                     mapping[reference.object_id],
                 )
 
+                # ---------------------------------------------
+                # 1. Original qualitative relation comparison.
+                # ---------------------------------------------
+
                 if (
                     demo_relations[demo_key]
-                    != runtime_relations[runtime_key]
+                    == runtime_relations[runtime_key]
                 ):
-                    return False
+                    continue
+
+                # ---------------------------------------------
+                # 2. Boundary-aware comparison.
+                #
+                # Both vectors must belong to the same
+                # boundary region.
+                # ---------------------------------------------
+
+                demo_boundary = (
+                    demo_boundary_relations.get(
+                        demo_key
+                    )
+                )
+
+                runtime_boundary = (
+                    runtime_boundary_relations.get(
+                        runtime_key
+                    )
+                )
+
+                if (
+                    demo_boundary is not None
+                    and runtime_boundary is not None
+                    and demo_boundary == runtime_boundary
+                ):
+                    continue
+
+                # ---------------------------------------------
+                # 3. Incompatible relation: reject mapping.
+                # ---------------------------------------------
+
+                return False
 
         return True
 

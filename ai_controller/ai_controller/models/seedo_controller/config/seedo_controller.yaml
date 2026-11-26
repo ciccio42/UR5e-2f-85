@@ -62,6 +62,16 @@ structured_scene:
   # - 8: also includes the four diagonal directions
   directions: 4
 
+  # Angular tolerance around the four cardinal boundaries.
+  # Applied only when directions is set to 4.
+  #
+  # Cardinal relations are compared first.
+  # If they differ, both vectors must belong to the
+  # same diagonal boundary region.
+  #
+  # 0.0 disables boundary-aware matching.
+  boundary_tolerance_deg: 10.0
+
 scene_perceiver:
   camera_calibration_path: /home/ros2_ws/src/UR5e-2f-85/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml
   camera_name: zed_front
@@ -148,12 +158,12 @@ motion_layer:
     approaching: true
     pick: false
     lift_up: true
-    moving: true
+    moving: false
     placing: true
     aligning: true
     inserting: true
 
-  lift_height: 0.22
+  lift_height: 0.18
 
   reach_hover_height: 0.18
 

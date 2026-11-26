@@ -1,10 +1,12 @@
 import math
+from dataclasses import asdict
 from typing import Any, Literal
 
 import yaml
 import numpy as np
 
 from results import (
+    StructuredScene,
     StructuredSceneObject,
     StructuredSceneRelation,
 )
@@ -326,6 +328,45 @@ SpatialRelation = Literal[
     "DOWN_RIGHT",
 ]
 
+def validate_boundary_tolerance(
+    tolerance_deg: float,
+) -> float:
+    """Validate the angular tolerance around cardinal boundaries."""
+
+    tolerance_deg = float(tolerance_deg)
+
+    if (
+        not math.isfinite(tolerance_deg)
+        or not 0.0 <= tolerance_deg < 45.0
+    ):
+        raise ValueError(
+            "Boundary tolerance must be in [0, 45) degrees."
+        )
+
+    return tolerance_deg
+
+def spatial_angle_deg(
+    center_a: tuple[float, float],
+    center_b: tuple[float, float],
+) -> float:
+    """Return the angle of A relative to B in image coordinates."""
+
+    a_x, a_y = center_a
+    b_x, b_y = center_b
+
+    dx = a_x - b_x
+    dy = a_y - b_y
+
+    if dx == 0.0 and dy == 0.0:
+        raise ValueError(
+            "Cannot determine a spatial relation between "
+            "objects with identical centers."
+        )
+
+    return (
+        math.degrees(math.atan2(dy, dx))
+        + 360.0
+    ) % 360.0
 
 def spatial_relation(
     center_a: tuple[float, float],
@@ -356,24 +397,10 @@ def spatial_relation(
             "Expected 4 or 8."
         )
 
-    a_x, a_y = center_a
-    b_x, b_y = center_b
-
-    dx = a_x - b_x
-    dy = a_y - b_y
-
-    if dx == 0.0 and dy == 0.0:
-        raise ValueError(
-            "Cannot determine a spatial relation between "
-            "objects with identical centers."
-        )
-
-    angle = (
-        math.degrees(
-            math.atan2(dy, dx)
-        )
-        + 360.0
-    ) % 360.0
+    angle = spatial_angle_deg(
+        center_a=center_a,
+        center_b=center_b,
+    )
 
     if directions == 4:
         if angle < 45.0 or angle >= 315.0:
@@ -410,6 +437,52 @@ def spatial_relation(
         return "UP"
 
     return "UP_RIGHT"
+
+def spatial_boundary_relation(
+    center_a: tuple[float, float],
+    center_b: tuple[float, float],
+    tolerance_deg: float = 0.0,
+) -> SpatialRelation | None:
+    """Return the shared-boundary candidate for a directed vector."""
+
+    tolerance_deg = validate_boundary_tolerance(
+        tolerance_deg
+    )
+
+    if tolerance_deg == 0.0:
+        return None
+
+    angle = spatial_angle_deg(
+        center_a=center_a,
+        center_b=center_b,
+    )
+
+    boundaries = (
+        (45.0, "DOWN_RIGHT"),
+        (135.0, "DOWN_LEFT"),
+        (225.0, "UP_LEFT"),
+        (315.0, "UP_RIGHT"),
+    )
+
+    for boundary_angle, boundary_relation in boundaries:
+
+        distance = abs(
+            (angle - boundary_angle + 180.0) % 360.0
+            - 180.0
+        )
+
+        if (
+            distance <= tolerance_deg
+            or math.isclose(
+                distance,
+                tolerance_deg,
+                rel_tol=0.0,
+                abs_tol=1e-9,
+            )
+        ):
+            return boundary_relation
+
+    return None
 
 def build_spatial_relations(
     objects: tuple[StructuredSceneObject, ...],
@@ -455,3 +528,73 @@ def build_spatial_relations(
             )
 
     return tuple(relations)
+
+def build_boundary_relation_lookup(
+    scene: StructuredScene,
+    tolerance_deg: float = 0.0,
+) -> dict[tuple[str, str], SpatialRelation | None]:
+    """Compute optional boundary relations for all directed pairs."""
+
+    tolerance_deg = validate_boundary_tolerance(
+        tolerance_deg
+    )
+
+    if scene.directions != 4 or tolerance_deg == 0.0:
+        return {}
+
+    centers = {
+        obj.object_id: obj.center
+        for obj in scene.objects
+    }
+
+    return {
+        (
+            relation.subject_object_id,
+            relation.reference_object_id,
+        ): spatial_boundary_relation(
+            center_a=centers[
+                relation.subject_object_id
+            ],
+            center_b=centers[
+                relation.reference_object_id
+            ],
+            tolerance_deg=tolerance_deg,
+        )
+        for relation in scene.relations
+    }
+
+
+def structured_scene_to_dict(
+    scene: StructuredScene,
+    tolerance_deg: float = 0.0,
+) -> dict[str, Any]:
+    """Serialize a structured scene with optional boundary metadata."""
+
+    tolerance_deg = validate_boundary_tolerance(
+        tolerance_deg
+    )
+
+    data = asdict(scene)
+
+    if scene.directions != 4 or tolerance_deg == 0.0:
+        return data
+
+    boundary_relations = build_boundary_relation_lookup(
+        scene=scene,
+        tolerance_deg=tolerance_deg,
+    )
+
+    data["boundary_tolerance_deg"] = tolerance_deg
+
+    for relation in data["relations"]:
+
+        key = (
+            relation["subject_object_id"],
+            relation["reference_object_id"],
+        )
+
+        relation["boundary_relation"] = (
+            boundary_relations[key]
+        )
+
+    return data

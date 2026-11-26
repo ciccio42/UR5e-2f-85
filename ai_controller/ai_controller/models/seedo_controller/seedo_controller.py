@@ -632,6 +632,14 @@ class SeeDoController(AIController):
         self.structured_scene_directions = (
             structured_scene_directions
         )
+
+        self.structured_scene_boundary_tolerance_deg = float(
+            structured_scene_config.get(
+                "boundary_tolerance_deg",
+                0.0,
+            )
+        )
+
         perception_config = config.get(
             "scene_perceiver",
             {},
@@ -720,10 +728,17 @@ class SeeDoController(AIController):
         self.runtime_structured_scene_builder = (
             RuntimeStructuredSceneBuilder(
                 directions=self.structured_scene_directions,
+                boundary_tolerance_deg=(
+                    self.structured_scene_boundary_tolerance_deg
+                ),
             )
         )
 
-        self.structural_matcher = StructuralMatcher()
+        self.structural_matcher = StructuralMatcher(
+            boundary_tolerance_deg=(
+                self.structured_scene_boundary_tolerance_deg
+            ),
+        )
 
         self.replicability_checker = ReplicabilityChecker()
 
@@ -896,6 +911,9 @@ class SeeDoController(AIController):
         self.demo_structured_scene_builder = (
             DemoStructuredSceneBuilder(
                 directions=self.structured_scene_directions,
+                boundary_tolerance_deg=(
+                    self.structured_scene_boundary_tolerance_deg
+                ),
             )
         )
 

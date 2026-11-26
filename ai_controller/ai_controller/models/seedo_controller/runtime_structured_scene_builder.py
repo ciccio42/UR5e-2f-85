@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
 from pathlib import Path
 
 from results import (
@@ -17,6 +16,8 @@ from ai_controller.models.seedo_controller.task_types import (
 from ai_controller.models.seedo_controller.utils import (
     DirectionMode,
     build_spatial_relations,
+    structured_scene_to_dict,
+    validate_boundary_tolerance,
 )
 
 
@@ -26,7 +27,9 @@ class RuntimeStructuredSceneBuilder:
     def __init__(
         self,
         directions: DirectionMode = 8,
+        boundary_tolerance_deg: float = 0.0,
     ) -> None:
+
         if directions not in (4, 8):
             raise ValueError(
                 f"Unsupported number of directions: {directions}. "
@@ -34,6 +37,13 @@ class RuntimeStructuredSceneBuilder:
             )
 
         self.directions = directions
+
+        self.boundary_tolerance_deg = (
+            validate_boundary_tolerance(
+                boundary_tolerance_deg
+            )
+        )
+
         self.place_categories = all_place_categories()
 
     def run(
@@ -118,7 +128,10 @@ class RuntimeStructuredSceneBuilder:
                 encoding="utf-8",
             ) as stream:
                 json.dump(
-                    asdict(structured_scene),
+                    structured_scene_to_dict(
+                        scene=structured_scene,
+                        tolerance_deg=self.boundary_tolerance_deg,
+                    ),
                     stream,
                     indent=2,
                     ensure_ascii=False,
