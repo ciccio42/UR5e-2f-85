@@ -70,7 +70,7 @@ structured_scene:
   # same diagonal boundary region.
   #
   # 0.0 disables boundary-aware matching.
-  boundary_tolerance_deg: 10.0
+  boundary_tolerance_deg: 15.0
 
 scene_perceiver:
   camera_calibration_path: /home/ros2_ws/src/UR5e-2f-85/zed_camera/zed_camera_calibration/estimated_camera_positions.yaml
