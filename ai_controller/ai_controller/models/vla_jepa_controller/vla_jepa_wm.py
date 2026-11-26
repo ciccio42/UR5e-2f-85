@@ -79,9 +79,11 @@ class VLAJEPAWMRuntime(VLAJEPARuntime):
     RAW_IMAGE_KEYS = ("observation.images.front", "observation.images.gripper")
 
     def __init__(self, checkpoint_path: str | Path, device: str = "cuda",
-                 postprocessor_config_filename: str = "policy_postprocessor.json") -> None:
+                 postprocessor_config_filename: str = "policy_postprocessor.json",
+                 log_chunk_inference_time: bool = False) -> None:
         super().__init__(checkpoint_path, device=device,
-                         postprocessor_config_filename=postprocessor_config_filename)
+                         postprocessor_config_filename=postprocessor_config_filename,
+                         log_chunk_inference_time=log_chunk_inference_time)
         self._previous_views: tuple[Tensor, Tensor] | None = None
 
     def _configure_model_config(self, config) -> None:

@@ -28,6 +28,7 @@ def check_wm_checkpoint(config_path: Path) -> None:
     section("WM PREFLIGHT - config / checkpoint / processors")
     from safetensors import safe_open
     from lerobot.configs.policies import PreTrainedConfig
+    from lerobot.policies.vla_jepa.modeling_vla_jepa import VLAJEPAPolicy  # noqa: F401
 
     runtime_cfg = yaml.safe_load(require_file(config_path, "WM YAML").read_text()) or {}
     if runtime_cfg.get("inference_mode") != "wm_conditioned":

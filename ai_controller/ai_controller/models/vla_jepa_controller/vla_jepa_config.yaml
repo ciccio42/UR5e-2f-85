@@ -152,6 +152,13 @@ gripper_closed_position: 255.0
 #
 #
 trace_action_conversions: true
+
+# Cronometra SOLO la generazione di un nuovo action chunk da 7 azioni.
+# Le azioni lette dalla queue LeRobot NON producono una nuova stampa.
+# Include il tempo GPU reale (sincronizzazione CUDA), Qwen e DiT,
+# e anche V-JEPA2 + Predictor nella modalita' wm_conditioned.
+# Non include preprocessing immagini, postprocessing UR5e o HTTP.
+log_chunk_inference_time: true
 grasp_z_offset_m: -0.02
 
 
@@ -269,3 +276,8 @@ fixed_orientation_xyzw:
   - 0.03161651380119412
   - 0.0021438049655468088
   - -0.010251021036213035
+
+
+
+# Numero di azioni da eseguire prima di generare un nuovo chunk
+num_execute_actions: 7

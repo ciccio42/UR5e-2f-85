@@ -237,6 +237,12 @@ class VLAJEPAController(AIController):
             )
         )
 
+        # Prints elapsed GPU-synchronized time only when a NEW action chunk
+        # is generated; cached action consumption does not generate timing logs.
+        self.log_chunk_inference_time = bool(
+            self.cfg.get("log_chunk_inference_time", False)
+        )
+
         self.trace_action_conversions = bool(
             self.cfg.get(
                 "trace_action_conversions",
@@ -385,9 +391,30 @@ class VLAJEPAController(AIController):
             checkpoint_path=checkpoint_path,
             device=device,
             postprocessor_config_filename=postprocessor_config_filename,
+            log_chunk_inference_time=self.log_chunk_inference_time,
         )
 
         self._runtime.load()
+
+        # Override della sola lunghezza di esecuzione della coda.
+        # La policy continua a generare chunk da 7 azioni.
+
+        num_execute_actions = int(
+            self.cfg.get("num_execute_actions", 7)
+        )
+
+        chunk_size = self._runtime.chunk_size
+
+        if not 1 <= num_execute_actions <= chunk_size:
+            raise ValueError(
+                f"num_execute_actions must be between 1 and {chunk_size}"
+            )
+
+        self._runtime.config.n_action_steps = num_execute_actions
+        self._runtime.policy.config.n_action_steps = num_execute_actions
+
+        # Ricrea la coda interna con la nuova capacità.
+        self._runtime.reset()
 
         # -----------------------------------------------------------------
         # Validazione del contratto specifico del checkpoint UR5e
@@ -868,7 +895,7 @@ class VLAJEPAController(AIController):
         ):
             target_position = target_position.copy()
             target_position[2] += self.grasp_z_offset_m #scendo
-            target_position[1] += -0.02 #retrocedo
+            target_position[1] += -0.03 #retrocedo
 
             self._grasp_z_offset_applied = True
             # self.predicted_closure = True

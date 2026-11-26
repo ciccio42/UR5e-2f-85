@@ -1,3 +1,10 @@
+# WM-conditioned VLA-JEPA inference mode. The base UR5e settings below are
+# intentionally identical to vla_jepa_config.yaml; only inference_mode changes.
+# Mount the newly trained checkpoint_A/B/pretrained_model at /opt/vla_jepa/checkpoint.
+inference_mode: wm_conditioned
+# WM/V-JEPA2 adds latency to the first request of each action chunk.
+inference_timeout_sec: 180.0
+
 # =============================================================================
 # VLA-JEPA CONTROLLER CONFIGURATION
 # =============================================================================
@@ -152,7 +159,7 @@ gripper_closed_position: 255.0
 #
 #
 trace_action_conversions: true
-grasp_z_offset_m: -0.01
+grasp_z_offset_m: -0.02
 
 
 # =============================================================================
@@ -256,3 +263,16 @@ tasks:
 
   "29":
     prompt: "Pick the third box and place it into the red bin"
+
+# -----------------------------------------------------------------------------
+# ORIENTAMENTO FISSO TCP (opzionale, frame base_link, ROS XYZW)
+# -----------------------------------------------------------------------------
+# Lascia commentato per usare i quaternioni predetti dalla policy.
+# Decommenta tutte e cinque le righe per sovrascrivere SOLO l'orientamento
+# di OGNI target MoveIt, in entrambe le modalita' action_head/wm_conditioned.
+# Non modifica XYZ, gripper, offset grasp o azioni di Flow Matching.
+fixed_orientation_xyzw:
+  - 0.9994452044624775
+  - 0.03161651380119412
+  - 0.0021438049655468088
+  - -0.010251021036213035

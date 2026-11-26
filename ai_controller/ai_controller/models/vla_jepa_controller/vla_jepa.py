@@ -38,6 +38,8 @@ vla_jepa_utils.py.
 from __future__ import annotations
 
 from contextlib import nullcontext
+from functools import wraps
+from time import perf_counter
 import logging
 from pathlib import Path
 from typing import Any
@@ -104,6 +106,7 @@ class VLAJEPARuntime:
         checkpoint_path: str | Path,
         device: str = "cuda",
         postprocessor_config_filename: str = "policy_postprocessor.json",
+        log_chunk_inference_time: bool = False,
     ) -> None:
         self.checkpoint_path = str(checkpoint_path)  # path in cui ci sono i safetensor del checkpoint
         self.device = torch.device(device)
@@ -118,6 +121,9 @@ class VLAJEPARuntime:
         self.preprocessor: Any | None = None
         self.postprocessor: Any | None = None
 
+        # Optional timing of real chunk generation, not cached-action reads.
+        self.log_chunk_inference_time = bool(log_chunk_inference_time)
+        self._generated_chunks = 0
         self._loaded = False
 
     # ------------------------------------------------------------------
@@ -173,6 +179,8 @@ class VLAJEPARuntime:
 
         policy.to(self.device)
         policy.eval()
+        if self.log_chunk_inference_time:
+            self._install_chunk_timer(policy)
 
         # --------------------------------------------------------------
         # 3. Serialized checkpoint processors
@@ -231,6 +239,41 @@ class VLAJEPARuntime:
         """Baseline loader, kept identical for existing UR5e checkpoints."""
         policy_cls = get_policy_class(config.type)
         return policy_cls.from_pretrained(self.checkpoint_path, config=config)
+
+    def _install_chunk_timer(self, policy: torch.nn.Module) -> None:
+        """Time ONLY a new seven-action chunk, for baseline and WM modes.
+
+        The inherited LeRobot select_action() calls predict_action_chunk() only
+        when its internal queue is empty; cached action reads do not reach here.
+        Synchronize the selected CUDA device so asynchronous GPU execution is
+        included in the measured wall time. No changes to sampling or actions.
+        """
+        original_predict_action_chunk = policy.predict_action_chunk
+        device = self.device
+
+        @wraps(original_predict_action_chunk)
+        def timed_predict_action_chunk(*args, **kwargs):
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            start = perf_counter()
+            chunk = original_predict_action_chunk(*args, **kwargs)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            duration = perf_counter() - start
+            self._generated_chunks += 1
+            chunk_length = int(chunk.shape[-2])
+            print(
+                f"[VLAJEPA Chunk Timing] "
+                f"chunk={self._generated_chunks} "
+                f"actions={chunk_length} "
+                f"model_forward={duration:.3f}s "
+                f"({duration * 1000:.1f}ms) "
+                f"device={device.type}",
+                flush=True,
+            )
+            return chunk
+
+        policy.predict_action_chunk = timed_predict_action_chunk
 
     # ------------------------------------------------------------------
     # Inference
@@ -403,6 +446,7 @@ class VLAJEPARuntime:
             return
 
         self.policy.reset()
+        self._generated_chunks = 0
 
         if hasattr(self.preprocessor, "reset"):
             self.preprocessor.reset()
