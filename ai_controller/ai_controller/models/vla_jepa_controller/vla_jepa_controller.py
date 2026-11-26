@@ -413,6 +413,27 @@ class VLAJEPAController(AIController):
         self._runtime.config.n_action_steps = num_execute_actions
         self._runtime.policy.config.n_action_steps = num_execute_actions
 
+        
+
+        ## Sovrascrizione inference step
+
+        num_inference_steps = int(
+            self.cfg.get(
+                "num_inference_timesteps_override",
+                self._runtime.config.num_inference_timesteps,
+            )
+        )
+
+        if num_inference_steps < 1:
+            raise ValueError("num_inference_steps must be >= 1")
+
+        self._runtime.policy.model.action_model.num_inference_timesteps = (
+            num_inference_steps
+        )
+
+        self._runtime.policy.config.num_inference_timesteps = num_inference_steps
+        self._runtime.config.num_inference_timesteps = num_inference_steps
+
         # Ricrea la coda interna con la nuova capacità.
         self._runtime.reset()
 

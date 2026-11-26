@@ -281,3 +281,7 @@ fixed_orientation_xyzw:
 
 # Numero di azioni da eseguire prima di generare un nuovo chunk
 num_execute_actions: 7
+
+
+# inference step
+num_inference_timesteps_override: 4
