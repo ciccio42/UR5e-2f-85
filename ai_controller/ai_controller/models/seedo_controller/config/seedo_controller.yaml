@@ -158,12 +158,12 @@ motion_layer:
     approaching: true
     pick: false
     lift_up: true
-    moving: false
+    moving: true
     placing: true
     aligning: true
     inserting: true
 
-  lift_height: 0.18
+  lift_height: 0.22
 
   reach_hover_height: 0.18
 
