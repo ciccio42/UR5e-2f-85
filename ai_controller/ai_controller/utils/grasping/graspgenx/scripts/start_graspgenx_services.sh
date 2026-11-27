@@ -13,6 +13,250 @@ SERVER_PID=
 WORKER_PID=
 GEOMETRY_PID=
 
+# SeeDo memory-safe GraspGenX kNN runtime patch.
+# No changes to the external GraspGenX repository.
+run_gx_server() {
+    exec "$PY" -u - "$GX_ROOT/client-server/graspgenx_server.py" "$@" <<'PY_GX_SERVER'
+import os
+import sys
+import time
+import runpy
+import resource
+from pathlib import Path
+
+import numpy as np
+import torch
+from scipy.spatial import cKDTree
+
+server_path = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(server_path.parent.parent))
+
+from graspgenx.utils import point_cloud
+
+original_knn = point_cloud.knn_points
+
+SWITCH_N = 20
+QUERY_CHUNK = 8192
+WORKERS = int(os.environ.get("SEEDO_GRASPGENX_KNN_WORKERS", "4"))
+
+
+def knn_points_kdtree(X, K, norm):
+    started = time.perf_counter()
+
+    points = np.ascontiguousarray(
+        X.detach().numpy(),
+        dtype=np.float64,
+    )
+
+    N = len(points)
+
+    if not np.isfinite(points).all():
+        raise ValueError("Non-finite GraspGenX point cloud")
+
+    tree = cKDTree(points)
+
+    all_dists = np.empty((N, K), dtype=np.float32)
+    all_idxs = np.empty((N, K), dtype=np.int64)
+
+    for start in range(0, N, QUERY_CHUNK):
+        end = min(start + QUERY_CHUNK, N)
+
+        dists, idxs = tree.query(
+            points[start:end],
+            k=K + 1,
+            p=norm,
+            eps=0.0,
+            workers=WORKERS,
+        )
+
+        # Exclude the query point by index.
+        # Preserve other points at zero distance.
+        is_self = idxs == np.arange(start, end)[:, None]
+
+        drop = np.where(
+            is_self.any(axis=1),
+            is_self.argmax(axis=1),
+            K,
+        )
+
+        keep = np.arange(K + 1)[None, :] != drop[:, None]
+
+        all_dists[start:end] = dists[keep].reshape(-1, K)
+        all_idxs[start:end] = idxs[keep].reshape(-1, K)
+
+    print(
+        f"[SEEDO KNN] KDTree | N={N} | K={K} | "
+        f"workers={WORKERS} | "
+        f"time={time.perf_counter()-started:.4f}s",
+        flush=True,
+    )
+
+    return torch.from_numpy(all_dists), torch.from_numpy(all_idxs)
+
+
+def safe_knn_points(X, K, norm):
+    if len(X) <= SWITCH_N:
+        return original_knn(X, K, norm)
+
+    supported = (
+        X.ndim == 2
+        and X.shape[1] == 3
+        and X.device.type == "cpu"
+        and X.dtype == torch.float32
+        and not X.requires_grad
+        and norm == 1
+        and 0 < K < len(X)
+    )
+
+    if not supported:
+        raise RuntimeError(
+            "[SEEDO KNN] Unsupported large-cloud kNN. "
+            "Quadratic allocation blocked."
+        )
+
+    print(
+        f"[SEEDO KNN] START | "
+        f"N={len(X)} | K={K} | PID={os.getpid()}",
+        flush=True,
+    )
+
+    return knn_points_kdtree(X, K, norm)
+
+
+point_cloud.knn_points = safe_knn_points
+
+print(
+    f"[SEEDO PATCH] Memory-safe kNN enabled | "
+    f"switch={SWITCH_N} | workers={WORKERS} | "
+    f"PID={os.getpid()}",
+    flush=True,
+)
+
+
+def self_test():
+    torch.manual_seed(42)
+    torch.set_num_threads(4)
+
+    # Compare both implementations on manageable inputs.
+    for N in (2048, 4096, 8192):
+        cloud = torch.rand(N, 3) * 0.1
+
+        # Include duplicates and isolated outliers.
+        cloud[:64] = cloud[64].clone()
+        cloud[-32:] += 0.5
+
+        t0 = time.perf_counter()
+        old_dists, _ = original_knn(cloud, 20, 1)
+        old_time = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        new_dists, new_idxs = knn_points_kdtree(cloud, 20, 1)
+        new_time = time.perf_counter() - t0
+
+        old_mask = old_dists.mean(dim=1) < 0.014
+        new_mask = new_dists.mean(dim=1) < 0.014
+
+        mismatches = int((old_mask != new_mask).sum())
+        max_diff = float((old_dists-new_dists).abs().max())
+
+        assert torch.allclose(
+            old_dists, new_dists,
+            atol=1e-7, rtol=1e-6,
+        )
+        assert mismatches == 0
+        assert not (
+            new_idxs == torch.arange(N)[:, None]
+        ).any()
+
+        reconstructed = (
+            cloud[new_idxs] - cloud[:, None, :]
+        ).abs().sum(dim=-1)
+
+        assert torch.allclose(
+            reconstructed, new_dists,
+            atol=1e-7, rtol=1e-6,
+        )
+
+        print(
+            f"[TEST PASS] N={N} | "
+            f"original={old_time:.4f}s | "
+            f"kdtree={new_time:.4f}s | "
+            f"max_diff={max_diff:.12f} | "
+            f"mask_mismatches={mismatches}",
+            flush=True,
+        )
+
+    # Stress test matching the latest failed request.
+    N = 208513
+    rng = np.random.default_rng(42)
+
+    cloud = rng.uniform(
+        -0.025, 0.025, (N, 3)
+    ).astype(np.float32)
+
+    face = rng.integers(0, 6, size=N)
+
+    cloud[np.arange(N), face // 2] = np.where(
+        face % 2 == 0, -0.025, 0.025
+    )
+
+    cloud[:, 2] += 0.06
+
+    started = time.perf_counter()
+
+    filtered, removed = point_cloud.point_cloud_outlier_removal(
+        torch.from_numpy(cloud),
+        threshold=0.014,
+    )
+
+    assert len(filtered) + len(removed) == N
+    assert len(filtered) >= 10
+
+    print(
+        f"[STRESS PASS] N={N} | "
+        f"kept={len(filtered)} | "
+        f"removed={len(removed)} | "
+        f"time={time.perf_counter()-started:.4f}s | "
+        f"peak_RSS="
+        f"{resource.getrusage(resource.RUSAGE_SELF).ru_maxrss/1024:.2f} MiB",
+        flush=True,
+    )
+
+    # Reuse the existing SeeDo warm-up for full offline inference.
+    output = "/tmp/seedo_graspgenx_oom_replay.npz"
+
+    np.savez(
+        output,
+        target_point_cloud_base=cloud,
+    )
+
+    print(f"[TEST] Replay saved: {output}", flush=True)
+    print("ALL TESTS PASSED", flush=True)
+
+
+if sys.argv[2:] == ["--self-test"]:
+    self_test()
+    sys.exit(0)
+
+sys.argv = [str(server_path), *sys.argv[2:]]
+
+runpy.run_path(
+    str(server_path),
+    run_name="__main__",
+)
+PY_GX_SERVER
+}
+
+# Offline kNN test without loading models or starting services.
+if [[ "${SEEDO_GRASPGENX_KNN_TEST:-0}" == "1" ]]; then
+    cd "$GX_ROOT"
+    export PYTHONNOUSERSITE=1
+    unset PYTHONPATH
+    umask 077
+    run_gx_server --self-test
+fi
+
+
 cleanup() {
     trap - EXIT
     if [[ -n "$GEOMETRY_PID" ]]; then
@@ -56,7 +300,7 @@ export GRASPGENX_GRIPPER_CFG_DIR=/opt/graspgenx_gripper_descriptions
 unset PYTHONPATH
 umask 077
 
-"$PY" -u client-server/graspgenx_server.py \
+run_gx_server \
     --config /opt/graspgenx_checkpoints/release \
     --assets_dir /opt/graspgenx_gripper_descriptions/gripper_descriptions/assets \
     --default_gripper robotiq_2f_85 \
